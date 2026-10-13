@@ -40,6 +40,7 @@ scripts/    Developer scripts (full local check)
 | cargo-deny | 0.20+ (`cargo install cargo-deny --locked`) | License and advisory checks |
 | Node.js | 22+ | Server |
 | Visual Studio Build Tools 2022 | "Desktop development with C++" | Windows builds |
+| Python 3 + Pillow | any recent | Regenerating app icons (`scripts/generate_icons.py`) |
 
 One-time setup after cloning:
 
