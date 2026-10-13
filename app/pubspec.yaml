@@ -1,0 +1,27 @@
+name: zelamar
+description: "Zelamar — private by design, beautiful by obsession."
+publish_to: 'none'
+
+# <semver>+<build number>. The build number becomes Android versionCode and
+# the Windows file version suffix.
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Pinned exactly: Dart and Rust halves of the bridge must match.
+  flutter_rust_bridge: 2.13.0
+  flutter_rust_bridge_hooks: 2.13.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  very_good_analysis: ^11.0.0
+
+flutter:
+  uses-material-design: true

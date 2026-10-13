@@ -1,0 +1,20 @@
+[package]
+name = "zelamar_bridge"
+description = "Thin FFI bridge exposing Zelamar Core to the Flutter app."
+version.workspace = true
+# Generated bridge code targets edition 2021; the core itself uses 2024.
+edition = "2021"
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+flutter_rust_bridge = "=2.13.0"
+zelamar-core = { path = "../../core/zelamar-core" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
