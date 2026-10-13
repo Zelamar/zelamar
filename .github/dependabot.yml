@@ -1,0 +1,32 @@
+# Monthly, grouped updates: fresh dependencies without burning CI minutes.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule: { interval: monthly }
+    groups:
+      rust: { patterns: ["*"] }
+    ignore:
+      # Bridge versions must move together with the Dart side and codegen.
+      - dependency-name: flutter_rust_bridge
+
+  - package-ecosystem: pub
+    directory: /app
+    schedule: { interval: monthly }
+    groups:
+      dart: { patterns: ["*"] }
+    ignore:
+      - dependency-name: flutter_rust_bridge
+      - dependency-name: flutter_rust_bridge_hooks
+
+  - package-ecosystem: npm
+    directory: /server
+    schedule: { interval: monthly }
+    groups:
+      server: { patterns: ["*"] }
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }
+    groups:
+      actions: { patterns: ["*"] }
