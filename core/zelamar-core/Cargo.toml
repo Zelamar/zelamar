@@ -12,14 +12,24 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+chacha20poly1305 = "0.11.0"
 ciborium = "0.2.2"
+hkdf = "0.13.0"
+hmac = "0.13.0"
 openmls = { version = "0.9.1", features = ["draft-ietf-mls-pq-ciphersuites"] }
 openmls_basic_credential = { version = "0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
+openmls_memory_storage = "0.6.0"
 openmls_rust_crypto = { version = "0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
 openmls_traits = { version = "0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
+# 0.37 matches the optional openmls_sqlite_storage dependency of openmls:
+# Cargo allows only one crate linking `sqlite3` in the graph.
+rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_bytes = "0.11.19"
+sha2 = "0.11.1"
 thiserror = "2.0.21"
+zeroize = "1.9.1"
 
 [dev-dependencies]
 proptest = "1.12.0"
+tempfile = "3.27.0"

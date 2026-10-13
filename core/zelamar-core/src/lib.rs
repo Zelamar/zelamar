@@ -11,13 +11,15 @@
 //! - [`identity`]: account keys and device certificates;
 //! - [`device`]: a device as a member of MLS chats;
 //! - [`content`]: what travels inside a message;
-//! - [`envelope`]: the transport-agnostic wire unit.
+//! - [`envelope`]: the transport-agnostic wire unit;
+//! - [`store`]: encrypted persistence of a device.
 
 pub mod content;
 pub mod device;
 pub mod envelope;
 pub mod error;
 pub mod identity;
+pub mod store;
 
 pub use error::{CoreError, Result};
 

@@ -79,6 +79,29 @@ pub enum CoreError {
     /// The referenced chat is not known to this device.
     #[error("unknown chat")]
     UnknownChat,
+
+    /// The on-device database failed.
+    #[error("storage failed: {context}")]
+    Storage {
+        /// What the core was doing.
+        context: &'static str,
+        /// The underlying error.
+        #[source]
+        source: Source,
+    },
+
+    /// The master key does not open this store: wrong key, or a different
+    /// device's file.
+    #[error("the master key does not open this store")]
+    WrongKey,
+
+    /// A device already lives in this store; open it instead of creating.
+    #[error("a device already exists in this store")]
+    AlreadyInitialized,
+
+    /// No device lives in this store yet; create one first.
+    #[error("no device exists in this store")]
+    NotInitialized,
 }
 
 impl CoreError {
@@ -91,6 +114,13 @@ impl CoreError {
 
     pub(crate) fn mls(context: &'static str, source: impl Into<Source>) -> Self {
         Self::Mls {
+            context,
+            source: source.into(),
+        }
+    }
+
+    pub(crate) fn storage(context: &'static str, source: impl Into<Source>) -> Self {
+        Self::Storage {
             context,
             source: source.into(),
         }

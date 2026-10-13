@@ -1,11 +1,17 @@
-//! A device as a participant in MLS chats (ADR-0003).
+//! A device as a participant in MLS chats (ADR-0003, ADR-0010).
 //!
 //! Every chat is an MLS group, a 1:1 chat included. A [`Device`] owns its MLS
 //! signature key, a certificate from its account, and the state of every chat
 //! it belongs to. It turns plaintext [`AppMessage`]s into opaque MLS bytes and
 //! back, and refuses any member whose device certificate does not verify.
+//!
+//! A device lives in an encrypted store on disk. Every operation is a unit of
+//! work: on success its changes are persisted in one transaction; on failure
+//! the in-memory state is rolled back to the last persisted state, so a
+//! device is never left half-way through an MLS state change.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use openmls::prelude::{tls_codec::Deserialize as _, tls_codec::Serialize as _, *};
 use openmls_basic_credential::SignatureKeyPair;
@@ -15,6 +21,7 @@ use openmls_traits::{OpenMlsProvider, random::OpenMlsRand};
 use crate::content::AppMessage;
 use crate::error::{CoreError, Result};
 use crate::identity::{AccountId, AccountKey, DeviceCertificate, DeviceId};
+use crate::store::{Batch, MasterKey, Store};
 
 /// The one ciphersuite Zelamar speaks: hybrid post-quantum key exchange
 /// (ML-KEM-768 + X25519), AES-256-GCM, SHA-384, Ed25519 signatures.
@@ -26,6 +33,10 @@ pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_MLKEM768X25519_AES256G
 /// Messages are padded to a multiple of this many bytes so their length
 /// leaks less about their content.
 const PADDING: usize = 64;
+
+const RECORD_CERTIFICATE: &str = "device.certificate";
+const RECORD_ACCOUNT_KEY: &str = "account.key";
+const RECORD_CHATS: &str = "device.chats";
 
 /// Identifier of a chat: the MLS group id (16 random bytes).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -94,37 +105,115 @@ pub struct Device {
     signer: SignatureKeyPair,
     credential: CredentialWithKey,
     certificate: DeviceCertificate,
+    /// Present on the device that created the account; secondary devices
+    /// (linked later) do not hold the account's root key.
+    account_key: Option<AccountKey>,
     chats: HashMap<ChatId, MlsGroup>,
+    store: Store,
+    /// The MLS state exactly as it is on disk.
+    persisted: HashMap<Vec<u8>, Vec<u8>>,
+    /// The chat ids exactly as they are on disk.
+    persisted_chats: HashSet<ChatId>,
 }
 
 impl Device {
-    /// Creates a device for `account`: a fresh MLS signature key, certified
-    /// by the account key.
+    /// Creates a new device for `account` in a fresh store at `path`: a new
+    /// MLS signature key, certified by the account key, persisted under
+    /// `master`.
     ///
     /// # Errors
     ///
-    /// [`CoreError::Crypto`] or [`CoreError::Mls`] if key generation or
-    /// storage fails.
-    pub fn new(account: &AccountKey) -> Result<Self> {
+    /// [`CoreError::AlreadyInitialized`] if the store already holds a device,
+    /// [`CoreError::WrongKey`] if `master` does not open an existing file,
+    /// or a crypto, MLS or storage error.
+    pub fn create(path: &Path, master: &MasterKey, account: &AccountKey) -> Result<Self> {
+        let mut store = Store::open(path, master)?;
+        if store.record(RECORD_CERTIFICATE)?.is_some() {
+            return Err(CoreError::AlreadyInitialized);
+        }
+
         let provider = OpenMlsRustCrypto::default();
         let signer = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
             .map_err(|e| CoreError::crypto("generating the device signature key", e))?;
         signer
             .store(provider.storage())
             .map_err(|e| CoreError::mls("storing the device signature key", e))?;
+        let certificate = account.certify_device(DeviceId::random()?, signer.public())?;
 
-        let device_id = DeviceId::random()?;
-        let certificate = account.certify_device(device_id, signer.public())?;
-        let credential = CredentialWithKey {
-            credential: BasicCredential::new(certificate.encode()).into(),
-            signature_key: signer.public().into(),
-        };
-        Ok(Self {
+        let account_key = AccountKey::from_secret_bytes(&account.to_secret_bytes()?)?;
+        store.apply(&Batch {
+            records: vec![
+                (RECORD_CERTIFICATE, certificate.encode()),
+                (RECORD_ACCOUNT_KEY, account.to_secret_bytes()?.to_vec()),
+            ],
+            ..Batch::default()
+        })?;
+
+        let mut device = Self {
+            credential: credential_for(&certificate, &signer),
             provider,
             signer,
-            credential,
             certificate,
+            account_key: Some(account_key),
             chats: HashMap::new(),
+            store,
+            persisted: HashMap::new(),
+            persisted_chats: HashSet::new(),
+        };
+        device.persist()?;
+        Ok(device)
+    }
+
+    /// Opens the device stored at `path`.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::WrongKey`] if `master` does not open the store,
+    /// [`CoreError::NotInitialized`] if it holds no device, or a storage or
+    /// integrity error if the file was damaged or tampered with.
+    pub fn open(path: &Path, master: &MasterKey) -> Result<Self> {
+        let store = Store::open(path, master)?;
+        let certificate = DeviceCertificate::decode(
+            &store
+                .record(RECORD_CERTIFICATE)?
+                .ok_or(CoreError::NotInitialized)?,
+        )?;
+        let account_key = store
+            .record(RECORD_ACCOUNT_KEY)?
+            .map(|bytes| AccountKey::from_secret_bytes(&bytes))
+            .transpose()?;
+        let chat_ids = decode_chat_list(&store.record(RECORD_CHATS)?.unwrap_or_default())?;
+
+        let provider = OpenMlsRustCrypto::default();
+        let persisted = store.load_mls_state()?;
+        provider
+            .storage()
+            .values
+            .write()
+            .map_err(|_| poisoned())?
+            .clone_from(&persisted);
+
+        let signer = SignatureKeyPair::read(
+            provider.storage(),
+            certificate.signature_key(),
+            CIPHERSUITE.signature_algorithm(),
+        )
+        .ok_or(CoreError::malformed(
+            "store",
+            "device signature key is missing",
+        ))?;
+        let chats = load_chats(&provider, &chat_ids)?;
+
+        Ok(Self {
+            credential: credential_for(&certificate, &signer),
+            provider,
+            signer,
+            certificate,
+            account_key,
+            chats,
+            store,
+            persisted,
+            persisted_chats: chat_ids,
         })
     }
 
@@ -140,50 +229,61 @@ impl Device {
         self.certificate.device()
     }
 
+    /// Whether this device holds its account's root key (the device that
+    /// created the account does; linked devices do not).
+    #[must_use]
+    pub const fn holds_account_key(&self) -> bool {
+        self.account_key.is_some()
+    }
+
     /// Publishes a one-time `KeyPackage`: lets others add this device to a chat
     /// while it is offline. The private part stays in this device's storage.
     ///
     /// # Errors
     ///
-    /// [`CoreError::Mls`] if the `KeyPackage` cannot be built or encoded.
-    pub fn key_package(&self) -> Result<Vec<u8>> {
-        let bundle = KeyPackage::builder()
-            .build(
-                CIPHERSUITE,
-                &self.provider,
-                &self.signer,
-                self.credential.clone(),
-            )
-            .map_err(|e| CoreError::mls("building a key package", e))?;
-        bundle
-            .key_package()
-            .tls_serialize_detached()
-            .map_err(|e| CoreError::mls("encoding a key package", e))
+    /// [`CoreError::Mls`] if the `KeyPackage` cannot be built or encoded, or a
+    /// storage error.
+    pub fn key_package(&mut self) -> Result<Vec<u8>> {
+        self.transact(|device| {
+            let bundle = KeyPackage::builder()
+                .build(
+                    CIPHERSUITE,
+                    &device.provider,
+                    &device.signer,
+                    device.credential.clone(),
+                )
+                .map_err(|e| CoreError::mls("building a key package", e))?;
+            bundle
+                .key_package()
+                .tls_serialize_detached()
+                .map_err(|e| CoreError::mls("encoding a key package", e))
+        })
     }
 
     /// Starts a new chat with this device as its only member.
     ///
     /// # Errors
     ///
-    /// [`CoreError::Crypto`] or [`CoreError::Mls`] if the group cannot be
-    /// created.
+    /// A crypto, MLS or storage error if the chat cannot be created.
     pub fn create_chat(&mut self) -> Result<ChatId> {
-        let group_id: [u8; 16] = self
-            .provider
-            .rand()
-            .random_array()
-            .map_err(|e| CoreError::crypto("drawing a chat id", e))?;
-        let group = MlsGroup::new_with_group_id(
-            &self.provider,
-            &self.signer,
-            &create_config(),
-            GroupId::from_slice(&group_id),
-            self.credential.clone(),
-        )
-        .map_err(|e| CoreError::mls("creating a chat", e))?;
-        let chat = ChatId::of(group.group_id());
-        self.chats.insert(chat.clone(), group);
-        Ok(chat)
+        self.transact(|device| {
+            let group_id: [u8; 16] = device
+                .provider
+                .rand()
+                .random_array()
+                .map_err(|e| CoreError::crypto("drawing a chat id", e))?;
+            let group = MlsGroup::new_with_group_id(
+                &device.provider,
+                &device.signer,
+                &create_config(),
+                GroupId::from_slice(&group_id),
+                device.credential.clone(),
+            )
+            .map_err(|e| CoreError::mls("creating a chat", e))?;
+            let chat = ChatId::of(group.group_id());
+            device.chats.insert(chat.clone(), group);
+            Ok(chat)
+        })
     }
 
     /// Adds the device behind `key_package` to `chat`.
@@ -194,31 +294,33 @@ impl Device {
     /// # Errors
     ///
     /// [`CoreError::UnknownChat`], [`CoreError::Unauthenticated`],
-    /// [`CoreError::Malformed`] or [`CoreError::Mls`].
+    /// [`CoreError::Malformed`], [`CoreError::Mls`] or a storage error.
     pub fn invite(&mut self, chat: &ChatId, key_package: &[u8]) -> Result<Invitation> {
-        let key_package = KeyPackageIn::tls_deserialize_exact(key_package)
-            .map_err(|_| CoreError::malformed("key package", "invalid encoding"))?
-            .validate(self.provider.crypto(), ProtocolVersion::Mls10)
-            .map_err(|e| CoreError::mls("validating a key package", e))?;
-        if key_package.ciphersuite() != CIPHERSUITE {
-            return Err(CoreError::malformed(
-                "key package",
-                "unsupported ciphersuite",
-            ));
-        }
-        let leaf = key_package.leaf_node();
-        verify_member(leaf.credential(), leaf.signature_key().as_slice())?;
+        self.transact(|device| {
+            let key_package = KeyPackageIn::tls_deserialize_exact(key_package)
+                .map_err(|_| CoreError::malformed("key package", "invalid encoding"))?
+                .validate(device.provider.crypto(), ProtocolVersion::Mls10)
+                .map_err(|e| CoreError::mls("validating a key package", e))?;
+            if key_package.ciphersuite() != CIPHERSUITE {
+                return Err(CoreError::malformed(
+                    "key package",
+                    "unsupported ciphersuite",
+                ));
+            }
+            let leaf = key_package.leaf_node();
+            verify_member(leaf.credential(), leaf.signature_key().as_slice())?;
 
-        let group = self.chats.get_mut(chat).ok_or(CoreError::UnknownChat)?;
-        let (commit, welcome, _group_info) = group
-            .add_members(&self.provider, &self.signer, &[key_package])
-            .map_err(|e| CoreError::mls("adding a member", e))?;
-        group
-            .merge_pending_commit(&self.provider)
-            .map_err(|e| CoreError::mls("applying an invitation", e))?;
-        Ok(Invitation {
-            commit: encode(&commit, "encoding a commit")?,
-            welcome: encode(&welcome, "encoding a welcome")?,
+            let group = device.chats.get_mut(chat).ok_or(CoreError::UnknownChat)?;
+            let (commit, welcome, _group_info) = group
+                .add_members(&device.provider, &device.signer, &[key_package])
+                .map_err(|e| CoreError::mls("adding a member", e))?;
+            group
+                .merge_pending_commit(&device.provider)
+                .map_err(|e| CoreError::mls("applying an invitation", e))?;
+            Ok(Invitation {
+                commit: encode(&commit, "encoding a commit")?,
+                welcome: encode(&welcome, "encoding a welcome")?,
+            })
         })
     }
 
@@ -229,40 +331,45 @@ impl Device {
     ///
     /// # Errors
     ///
-    /// [`CoreError::Malformed`], [`CoreError::Unauthenticated`] or
-    /// [`CoreError::Mls`].
+    /// [`CoreError::Malformed`], [`CoreError::Unauthenticated`],
+    /// [`CoreError::Mls`] or a storage error.
     pub fn join(&mut self, welcome: &[u8]) -> Result<ChatId> {
-        let message = MlsMessageIn::tls_deserialize_exact(welcome)
-            .map_err(|_| CoreError::malformed("welcome", "invalid encoding"))?;
-        let MlsMessageBodyIn::Welcome(welcome) = message.extract() else {
-            return Err(CoreError::malformed("welcome", "not a welcome message"));
-        };
-        let staged = StagedWelcome::new_from_welcome(&self.provider, &join_config(), welcome, None)
-            .map_err(|e| CoreError::mls("reading a welcome", e))?;
-        for member in staged.members() {
-            verify_member(&member.credential, &member.signature_key)?;
-        }
-        let group = staged
-            .into_group(&self.provider)
-            .map_err(|e| CoreError::mls("joining a chat", e))?;
-        let chat = ChatId::of(group.group_id());
-        self.chats.insert(chat.clone(), group);
-        Ok(chat)
+        self.transact(|device| {
+            let message = MlsMessageIn::tls_deserialize_exact(welcome)
+                .map_err(|_| CoreError::malformed("welcome", "invalid encoding"))?;
+            let MlsMessageBodyIn::Welcome(welcome) = message.extract() else {
+                return Err(CoreError::malformed("welcome", "not a welcome message"));
+            };
+            let staged =
+                StagedWelcome::new_from_welcome(&device.provider, &join_config(), welcome, None)
+                    .map_err(|e| CoreError::mls("reading a welcome", e))?;
+            for member in staged.members() {
+                verify_member(&member.credential, &member.signature_key)?;
+            }
+            let group = staged
+                .into_group(&device.provider)
+                .map_err(|e| CoreError::mls("joining a chat", e))?;
+            let chat = ChatId::of(group.group_id());
+            device.chats.insert(chat.clone(), group);
+            Ok(chat)
+        })
     }
 
     /// Encrypts `message` for everyone in `chat`.
     ///
     /// # Errors
     ///
-    /// [`CoreError::UnknownChat`], [`CoreError::TooLarge`] or
-    /// [`CoreError::Mls`].
+    /// [`CoreError::UnknownChat`], [`CoreError::TooLarge`],
+    /// [`CoreError::Mls`] or a storage error.
     pub fn send(&mut self, chat: &ChatId, message: &AppMessage) -> Result<Vec<u8>> {
         let plaintext = message.encode()?;
-        let group = self.chats.get_mut(chat).ok_or(CoreError::UnknownChat)?;
-        let out = group
-            .create_message(&self.provider, &self.signer, &plaintext)
-            .map_err(|e| CoreError::mls("encrypting a message", e))?;
-        encode(&out, "encoding a message")
+        self.transact(|device| {
+            let group = device.chats.get_mut(chat).ok_or(CoreError::UnknownChat)?;
+            let out = group
+                .create_message(&device.provider, &device.signer, &plaintext)
+                .map_err(|e| CoreError::mls("encrypting a message", e))?;
+            encode(&out, "encoding a message")
+        })
     }
 
     /// Decrypts and authenticates an incoming MLS message.
@@ -270,9 +377,14 @@ impl Device {
     /// # Errors
     ///
     /// [`CoreError::Malformed`], [`CoreError::UnknownChat`],
-    /// [`CoreError::Unauthenticated`] or [`CoreError::Mls`]. A message that
-    /// fails here must be dropped, never shown.
+    /// [`CoreError::Unauthenticated`], [`CoreError::Mls`] or a storage error.
+    /// A message that fails here must be dropped, never shown; the device's
+    /// state is unchanged.
     pub fn receive(&mut self, bytes: &[u8]) -> Result<Received> {
+        self.transact(|device| device.receive_inner(bytes))
+    }
+
+    fn receive_inner(&mut self, bytes: &[u8]) -> Result<Received> {
         let message = MlsMessageIn::tls_deserialize_exact(bytes)
             .map_err(|_| CoreError::malformed("MLS message", "invalid encoding"))?;
         let protocol = message
@@ -319,6 +431,78 @@ impl Device {
             )),
         }
     }
+
+    /// Runs `op` as a unit of work: persisted on success, rolled back on
+    /// failure.
+    fn transact<T>(&mut self, op: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        match op(self) {
+            Ok(value) => match self.persist() {
+                Ok(()) => Ok(value),
+                Err(error) => {
+                    self.rollback()?;
+                    Err(error)
+                }
+            },
+            Err(error) => {
+                self.rollback()?;
+                Err(error)
+            }
+        }
+    }
+
+    /// Writes every MLS storage change since the last persist, plus the chat
+    /// list if it changed, in one transaction.
+    fn persist(&mut self) -> Result<()> {
+        let mut batch = Batch::default();
+        {
+            let current = self
+                .provider
+                .storage()
+                .values
+                .read()
+                .map_err(|_| poisoned())?;
+            for (key, value) in current.iter() {
+                if self.persisted.get(key) != Some(value) {
+                    batch.mls_upserts.push((key.clone(), value.clone()));
+                }
+            }
+            for key in self.persisted.keys() {
+                if !current.contains_key(key) {
+                    batch.mls_deletes.push(key.clone());
+                }
+            }
+        }
+        let chats: HashSet<ChatId> = self.chats.keys().cloned().collect();
+        if chats != self.persisted_chats {
+            batch.records.push((RECORD_CHATS, encode_chat_list(&chats)));
+        }
+        if batch.mls_upserts.is_empty() && batch.mls_deletes.is_empty() && batch.records.is_empty()
+        {
+            return Ok(());
+        }
+
+        self.store.apply(&batch)?;
+        for (key, value) in batch.mls_upserts {
+            self.persisted.insert(key, value);
+        }
+        for key in &batch.mls_deletes {
+            self.persisted.remove(key);
+        }
+        self.persisted_chats = chats;
+        Ok(())
+    }
+
+    /// Restores the in-memory state to exactly what is on disk.
+    fn rollback(&mut self) -> Result<()> {
+        self.provider
+            .storage()
+            .values
+            .write()
+            .map_err(|_| poisoned())?
+            .clone_from(&self.persisted);
+        self.chats = load_chats(&self.provider, &self.persisted_chats)?;
+        Ok(())
+    }
 }
 
 impl std::fmt::Debug for Device {
@@ -346,6 +530,59 @@ fn join_config() -> MlsGroupJoinConfig {
         .wire_format_policy(PURE_CIPHERTEXT_WIRE_FORMAT_POLICY)
         .padding_size(PADDING)
         .build()
+}
+
+fn credential_for(certificate: &DeviceCertificate, signer: &SignatureKeyPair) -> CredentialWithKey {
+    CredentialWithKey {
+        credential: BasicCredential::new(certificate.encode()).into(),
+        signature_key: signer.public().into(),
+    }
+}
+
+fn load_chats(
+    provider: &OpenMlsRustCrypto,
+    ids: &HashSet<ChatId>,
+) -> Result<HashMap<ChatId, MlsGroup>> {
+    ids.iter()
+        .map(|chat| {
+            let group = MlsGroup::load(provider.storage(), &GroupId::from_slice(chat.as_bytes()))
+                .map_err(|e| CoreError::mls("loading a chat", e))?
+                .ok_or(CoreError::malformed("store", "a listed chat has no state"))?;
+            Ok((chat.clone(), group))
+        })
+        .collect()
+}
+
+/// Chat list record: a sequence of `u8 length || id`.
+fn encode_chat_list(chats: &HashSet<ChatId>) -> Vec<u8> {
+    let mut ids: Vec<&ChatId> = chats.iter().collect();
+    ids.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut out = Vec::new();
+    for chat in ids {
+        let len = u8::try_from(chat.0.len()).unwrap_or(u8::MAX);
+        out.push(len);
+        out.extend_from_slice(&chat.0[..usize::from(len)]);
+    }
+    out
+}
+
+fn decode_chat_list(bytes: &[u8]) -> Result<HashSet<ChatId>> {
+    let mut chats = HashSet::new();
+    let mut rest = bytes;
+    while let Some((&len, tail)) = rest.split_first() {
+        let len = usize::from(len);
+        if tail.len() < len {
+            return Err(CoreError::malformed("chat list", "truncated"));
+        }
+        let (id, tail) = tail.split_at(len);
+        chats.insert(ChatId(id.to_vec()));
+        rest = tail;
+    }
+    Ok(chats)
+}
+
+fn poisoned() -> CoreError {
+    CoreError::storage("MLS state lock", "poisoned by an earlier panic")
 }
 
 fn encode(message: &MlsMessageOut, context: &'static str) -> Result<Vec<u8>> {
@@ -378,10 +615,18 @@ fn verify_member(credential: &Credential, signature_key: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn temp_device(account: &AccountKey) -> (tempfile::TempDir, Device) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let master = MasterKey::generate().expect("master key");
+        let device =
+            Device::create(&dir.path().join("device.db"), &master, account).expect("device");
+        (dir, device)
+    }
+
     #[test]
     fn chats_use_the_post_quantum_ciphersuite() {
         let account = AccountKey::generate().expect("account");
-        let mut device = Device::new(&account).expect("device");
+        let (_dir, mut device) = temp_device(&account);
         let chat = device.create_chat().expect("chat");
         assert_eq!(device.chats[&chat].ciphersuite(), CIPHERSUITE);
     }
@@ -391,9 +636,9 @@ mod tests {
     #[test]
     fn a_borrowed_certificate_is_refused() {
         let alice_account = AccountKey::generate().expect("account");
-        let mut alice = Device::new(&alice_account).expect("device");
+        let (_a, mut alice) = temp_device(&alice_account);
         let mallory_account = AccountKey::generate().expect("account");
-        let mut mallory = Device::new(&mallory_account).expect("device");
+        let (_m, mut mallory) = temp_device(&mallory_account);
 
         mallory.credential.credential = alice.credential.credential.clone();
         let key_package = mallory.key_package().expect("key package");
@@ -410,7 +655,7 @@ mod tests {
     fn a_self_issued_certificate_for_someone_else_is_refused() {
         let alice_account = AccountKey::generate().expect("account");
         let mallory_account = AccountKey::generate().expect("account");
-        let mut mallory = Device::new(&mallory_account).expect("device");
+        let (_m, mut mallory) = temp_device(&mallory_account);
 
         // Mallory re-labels her certificate as Alice's account.
         let mut forged = mallory.certificate.encode();
@@ -418,11 +663,41 @@ mod tests {
         mallory.credential.credential = BasicCredential::new(forged).into();
         let key_package = mallory.key_package().expect("key package");
 
-        let mut alice = Device::new(&alice_account).expect("device");
+        let (_a, mut alice) = temp_device(&alice_account);
         let chat = alice.create_chat().expect("chat");
         assert!(matches!(
             alice.invite(&chat, &key_package),
             Err(CoreError::Unauthenticated(_))
         ));
+    }
+
+    #[test]
+    fn chat_list_round_trips() {
+        let chats: HashSet<ChatId> = [ChatId(vec![1; 16]), ChatId(vec![2; 16]), ChatId(vec![])]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            decode_chat_list(&encode_chat_list(&chats)).expect("decode"),
+            chats
+        );
+        assert!(decode_chat_list(&[5, 1, 2]).is_err());
+    }
+
+    #[test]
+    fn creating_twice_in_one_store_is_refused() {
+        let account = AccountKey::generate().expect("account");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("device.db");
+        let master = MasterKey::generate().expect("master key");
+        drop(Device::create(&path, &master, &account).expect("first"));
+        assert!(matches!(
+            Device::create(&path, &master, &account),
+            Err(CoreError::AlreadyInitialized)
+        ));
+        assert!(
+            Device::open(&path, &master)
+                .expect("open")
+                .holds_account_key()
+        );
     }
 }

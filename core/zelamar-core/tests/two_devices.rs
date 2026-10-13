@@ -11,17 +11,26 @@ use zelamar_core::content::{AppMessage, Body, MessageId};
 use zelamar_core::device::{Author, ChatId, Device, Received};
 use zelamar_core::envelope::{Envelope, EnvelopeId, MailboxId};
 use zelamar_core::identity::AccountKey;
+use zelamar_core::store::MasterKey;
 
 struct Person {
     account: AccountKey,
     device: Device,
+    _dir: tempfile::TempDir,
 }
 
 impl Person {
     fn new() -> Self {
         let account = AccountKey::generate().expect("account key");
-        let device = Device::new(&account).expect("device");
-        Self { account, device }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let master = MasterKey::generate().expect("master key");
+        let device =
+            Device::create(&dir.path().join("device.db"), &master, &account).expect("device");
+        Self {
+            account,
+            device,
+            _dir: dir,
+        }
     }
 
     const fn author(&self) -> Author {

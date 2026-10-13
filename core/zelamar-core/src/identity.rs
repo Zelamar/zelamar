@@ -104,6 +104,28 @@ impl AccountKey {
         self.id
     }
 
+    /// Serializes the secret key for the encrypted store. The buffer is wiped
+    /// when dropped.
+    pub(crate) fn to_secret_bytes(&self) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+        let mut out = zeroize::Zeroizing::new(Vec::new());
+        ciborium::into_writer(&self.keys, &mut *out).map_err(|e| CoreError::Encoding {
+            what: "account key",
+            source: e.into(),
+        })?;
+        Ok(out)
+    }
+
+    /// Restores a key written by [`Self::to_secret_bytes`].
+    pub(crate) fn from_secret_bytes(bytes: &[u8]) -> Result<Self> {
+        let keys: SignatureKeyPair = ciborium::from_reader(bytes)
+            .map_err(|_| CoreError::malformed("account key", "invalid encoding"))?;
+        let id =
+            AccountId(keys.public().try_into().map_err(|_| {
+                CoreError::malformed("account key", "unexpected public key length")
+            })?);
+        Ok(Self { keys, id })
+    }
+
     /// Issues a certificate binding `device_signature_key` to this account.
     ///
     /// # Errors
