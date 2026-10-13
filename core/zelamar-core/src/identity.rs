@@ -11,6 +11,7 @@ use openmls::prelude::SignatureScheme;
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_rust_crypto::RustCrypto;
 use openmls_traits::{crypto::OpenMlsCrypto, random::OpenMlsRand, signatures::Signer};
+use sha2::{Digest, Sha512};
 
 use crate::error::{CoreError, Result};
 
@@ -276,6 +277,75 @@ impl DeviceCertificate {
     }
 }
 
+/// Domain separation for safety codes.
+const SAFETY_CODE_CONTEXT: &[u8] = b"zelamar/safety-code/v0";
+
+/// SHA-512 rounds per fingerprint. Makes grinding for an account key whose
+/// code collides with a victim's expensive (same order as Signal).
+const SAFETY_CODE_ROUNDS: usize = 5200;
+
+/// A 60-digit code two people compare in person (or by QR) to confirm that
+/// no one sits between them. Both sides compute the same code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SafetyCode([u32; 12]);
+
+impl SafetyCode {
+    /// The code for the conversation between accounts `a` and `b`. The order
+    /// of the arguments does not matter.
+    #[must_use]
+    pub fn between(a: &AccountId, b: &AccountId) -> Self {
+        let ordered = if a.0 <= b.0 { [a, b] } else { [b, a] };
+        let mut groups = [0u32; 12];
+        for (half, account) in ordered.into_iter().enumerate() {
+            let digest = fingerprint(account);
+            let (chunks, _) = digest.as_chunks::<5>();
+            for (i, chunk) in chunks.iter().take(6).enumerate() {
+                let value = chunk
+                    .iter()
+                    .fold(0u64, |acc, byte| (acc << 8) | u64::from(*byte));
+                // The remainder is always below 100 000, so it fits a u32.
+                groups[half * 6 + i] = u32::try_from(value % 100_000).unwrap_or(0);
+            }
+        }
+        Self(groups)
+    }
+
+    /// The twelve five-digit groups, as shown to people.
+    #[must_use]
+    pub const fn groups(&self) -> [u32; 12] {
+        self.0
+    }
+}
+
+impl std::fmt::Display for SafetyCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (i, group) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(" ")?;
+            }
+            write!(f, "{group:05}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Iterated SHA-512 over one account key.
+fn fingerprint(account: &AccountId) -> [u8; 64] {
+    let mut digest: [u8; 64] = Sha512::new()
+        .chain_update(SAFETY_CODE_CONTEXT)
+        .chain_update(account.0)
+        .finalize()
+        .into();
+    for _ in 0..SAFETY_CODE_ROUNDS {
+        digest = Sha512::new()
+            .chain_update(digest)
+            .chain_update(account.0)
+            .finalize()
+            .into();
+    }
+    digest
+}
+
 fn push_with_u16_len(out: &mut Vec<u8>, data: &[u8]) {
     let len = u16::try_from(data.len()).unwrap_or(u16::MAX);
     out.extend_from_slice(&len.to_be_bytes());
@@ -409,6 +479,42 @@ mod tests {
             DeviceCertificate::decode(&bytes),
             Err(CoreError::Malformed { .. })
         ));
+    }
+
+    #[test]
+    fn safety_codes_agree_on_both_sides() {
+        let alice = AccountKey::generate().expect("account key").id();
+        let bob = AccountKey::generate().expect("account key").id();
+        assert_eq!(
+            SafetyCode::between(&alice, &bob),
+            SafetyCode::between(&bob, &alice)
+        );
+    }
+
+    #[test]
+    fn safety_codes_differ_between_pairs_and_have_sixty_digits() {
+        let alice = AccountKey::generate().expect("account key").id();
+        let bob = AccountKey::generate().expect("account key").id();
+        let mallory = AccountKey::generate().expect("account key").id();
+        let genuine = SafetyCode::between(&alice, &bob);
+        assert_ne!(genuine, SafetyCode::between(&alice, &mallory));
+
+        let shown = genuine.to_string();
+        let groups: Vec<&str> = shown.split(' ').collect();
+        assert_eq!(groups.len(), 12);
+        assert!(
+            groups
+                .iter()
+                .all(|g| g.len() == 5 && g.bytes().all(|b| b.is_ascii_digit()))
+        );
+    }
+
+    #[test]
+    fn safety_codes_are_stable() {
+        let a = AccountId([1; 32]);
+        let b = AccountId([2; 32]);
+        assert_eq!(SafetyCode::between(&a, &b), SafetyCode::between(&a, &b));
+        assert_ne!(SafetyCode::between(&a, &b).groups(), [0; 12]);
     }
 
     #[test]

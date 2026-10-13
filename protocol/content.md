@@ -10,16 +10,22 @@ The plaintext of every MLS application message is one CBOR map:
 | `v` | uint | content version, `0` |
 | `i` | bytes(16) | message id chosen by the author |
 | `t` | uint | sent at: UTC milliseconds since the Unix epoch, author's clock |
-| `b` | map | body, externally tagged by kind |
+| `k` | text | body kind, at most 32 bytes |
+| `c` | map | the kind's fields |
 
-Body kinds in version 0:
+## Kinds in version 0
 
-| Kind | Fields |
-|---|---|
-| `text` | `text`: UTF-8 string, at most 32 768 bytes |
+| `k` | Fields of `c` | Meaning |
+|---|---|---|
+| `text` | `text`: string (≤ 32 768 bytes) | A message |
+| `reply` | `to`: bytes(16), `text`: string | A message answering `to` |
+| `edit` | `target`: bytes(16), `text`: string | New text for one of the author's own messages |
+| `react` | `target`: bytes(16), `reaction`: string (1–32 bytes) or null | Sets, or with null clears, the author's reaction |
+| `delete` | `target`: bytes(16) | Deletes one of the author's own messages for everyone |
+| `receipt` | `status`: `"delivered"` or `"read"`, `messages`: array of bytes(16), 1–256 items | Acknowledges messages |
 
-Planned kinds (later slices): `reply`, `edit`, `reaction`, `delete`,
-`receipt`.
+Receivers MUST check, against their own history, that an `edit` or
+`delete` targets a message by the same author.
 
 ## Rules
 
@@ -27,6 +33,9 @@ Planned kinds (later slices): `reply`, `edit`, `reaction`, `delete`,
    before decoding.
 2. A receiver MUST reject a version above the one it implements, and report
    it instead of misreading it.
-3. Unknown map keys are ignored, which leaves room for evolution.
-4. Display time is always `t` converted to the viewer's time zone, never
+3. An unknown `k` is surfaced to the user as "update Zelamar to see this
+   message", never as an error that breaks the chat. It is never re-sent.
+4. Unknown keys inside `c` are ignored, which leaves room for evolution.
+   Fields that do not match the kind make the message malformed.
+5. Display time is always `t` converted to the viewer's time zone, never
    the receive time. (The prototype got this wrong.)

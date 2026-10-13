@@ -41,3 +41,20 @@ A member is accepted only if **all** of the following hold:
 These checks run on invite (the newcomer's `KeyPackage`), on join (every
 member in the Welcome) and on every incoming commit (each added member).
 A failure aborts the operation. It is never downgraded to a warning.
+
+## Safety code
+
+Two people confirm that no one sits between them by comparing a 60-digit
+code, shown as twelve groups of five digits (QR comes later).
+
+For each of the two account ids, the fingerprint is:
+
+```text
+d0 = SHA-512("zelamar/safety-code/v0" || account id)
+d(n+1) = SHA-512(d(n) || account id), 5200 rounds
+```
+
+Each fingerprint gives six groups: bytes `5k..5k+5` of the final digest
+(k = 0..5) are read as a big-endian integer modulo 100 000. The code lists
+the six groups of the lexicographically smaller account id first, then the
+six groups of the other, so both sides compute the same code.
