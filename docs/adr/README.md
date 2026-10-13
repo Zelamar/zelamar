@@ -14,5 +14,6 @@ decision gets a new ADR that supersedes the old one.
 | [0006](0006-quality-gates-and-workflow.md) | Quality gates and workflow on GitHub Free | Accepted |
 | [0007](0007-rust-in-flutter-via-native-assets.md) | Build Rust into Flutter via Native Assets | Accepted |
 | [0008](0008-design-system-in-code.md) | Design system lives in code | Accepted |
+| [0009](0009-core-identity-ciphersuite-and-encodings.md) | Core: device certificates, post-quantum ciphersuite, encodings | Accepted |
 
 New ADRs copy [`template.md`](template.md) and take the next number.

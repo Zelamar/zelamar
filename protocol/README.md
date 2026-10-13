@@ -5,16 +5,17 @@ talk to each other and to the delivery service. The specification is the
 contract between the Rust core and the TypeScript server; neither side may
 diverge from it.
 
-**Status:** protocol version `0` (pre-release). The first draft lands in
-Phase 2 together with the core implementation.
+**Status:** protocol version `0` (pre-release, may change without
+migration). Drafted in Phase 2 together with the core implementation.
 
 ## Planned documents
 
 | Document | Content |
 |---|---|
-| `envelope.md` | Envelope layout: opaque outer header (mailbox id, envelope id, size class) plus inner MLS message |
+| [`envelope.md`](envelope.md) ✅ | Envelope layout: opaque outer header (mailbox id, envelope id) plus inner MLS message |
 | `delivery.md` | Delivery service API: mailboxes, sealed-sender tokens, acknowledgements, ordering of MLS commits |
-| `identity.md` | Account and device keys, device linking, safety codes |
+| [`identity.md`](identity.md) ✅ | Account and device keys, device certificates (linking and safety codes to come) |
+| [`content.md`](content.md) ✅ | What travels inside an MLS application message |
 | `directory.md` | `@username` registry, KeyPackage publication and retrieval |
 | `attachments.md` | Client-side encrypted files: upload, reference, expiry |
 

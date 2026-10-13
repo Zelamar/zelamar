@@ -6,6 +6,20 @@
 //!
 //! The crate is intentionally free of any FFI or UI concerns: the Flutter app
 //! talks to it through a thin bridge crate (`app/rust`).
+//!
+//! Modules:
+//! - [`identity`]: account keys and device certificates;
+//! - [`device`]: a device as a member of MLS chats;
+//! - [`content`]: what travels inside a message;
+//! - [`envelope`]: the transport-agnostic wire unit.
+
+pub mod content;
+pub mod device;
+pub mod envelope;
+pub mod error;
+pub mod identity;
+
+pub use error::{CoreError, Result};
 
 /// Semantic version of this core build.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

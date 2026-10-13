@@ -10,3 +10,16 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+ciborium = "0.2.2"
+openmls = { version = "0.9.1", features = ["draft-ietf-mls-pq-ciphersuites"] }
+openmls_basic_credential = { version = "0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
+openmls_rust_crypto = { version = "0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
+openmls_traits = { version = "0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_bytes = "0.11.19"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+proptest = "1.12.0"
