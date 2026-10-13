@@ -9,7 +9,17 @@ abstract final class ZFonts {
 
   /// UI sans: everything else.
   static const String ui = 'Geist';
+
+  /// Monospace: keys, fingerprints, bytes on the wire.
+  static const String mono = 'GeistMono';
 }
+
+/// Monospace text: fingerprints and bytes, never prose.
+TextStyle zelamarMono({
+  double size = 12,
+  int weight = 400,
+  double height = 1.5,
+}) => _style(ZFonts.mono, size, weight, height: height);
 
 /// Builds a text style for one of the bundled variable fonts.
 ///

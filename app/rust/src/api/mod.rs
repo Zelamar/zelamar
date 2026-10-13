@@ -3,4 +3,5 @@
 //! `app/lib/src/rust/api/`.
 
 pub mod diagnostics;
+pub mod lab;
 pub mod lifecycle;

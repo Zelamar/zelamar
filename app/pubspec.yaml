@@ -15,7 +15,6 @@ dependencies:
   # Pinned exactly: Dart and Rust halves of the bridge must match.
   flutter_rust_bridge: 2.13.0
   flutter_rust_bridge_hooks: 2.13.0
-
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -35,6 +34,9 @@ flutter:
     - family: Geist
       fonts:
         - asset: assets/fonts/Geist-Variable.ttf
+    - family: GeistMono
+      fonts:
+        - asset: assets/fonts/GeistMono-Variable.ttf
 
   assets:
     - assets/fonts/licenses/
