@@ -16,6 +16,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
 
 use chacha20poly1305::XChaCha20Poly1305;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
@@ -166,8 +167,11 @@ pub(crate) struct Batch {
 }
 
 /// The encrypted SQLite store of one device.
+///
+/// The connection sits behind a mutex so a `Device` can be shared across
+/// threads (the Flutter bridge requires `Send + Sync`).
 pub(crate) struct Store {
-    conn: Connection,
+    conn: Mutex<Connection>,
     cipher: StoreCipher,
 }
 
@@ -185,7 +189,7 @@ impl Store {
         )
         .map_err(|e| CoreError::storage("configuring the store", e))?;
         let store = Self {
-            conn,
+            conn: Mutex::new(conn),
             cipher: StoreCipher::new(master)?,
         };
         store.migrate()?;
@@ -193,14 +197,19 @@ impl Store {
         Ok(store)
     }
 
+    fn conn(&self) -> Result<MutexGuard<'_, Connection>> {
+        self.conn
+            .lock()
+            .map_err(|_| CoreError::storage("store connection", "poisoned by an earlier panic"))
+    }
+
     fn migrate(&self) -> Result<()> {
-        let version: i64 = self
-            .conn
+        let conn = self.conn()?;
+        let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|e| CoreError::storage("reading the schema version", e))?;
         match version {
-            0 => self
-                .conn
+            0 => conn
                 .execute_batch(
                     "BEGIN;
                      CREATE TABLE mls_state (slot BLOB PRIMARY KEY NOT NULL, sealed BLOB NOT NULL) WITHOUT ROWID;
@@ -227,7 +236,7 @@ impl Store {
             };
         }
         let sealed = self.cipher.seal(&slot, CANARY)?;
-        self.conn
+        self.conn()?
             .execute(
                 "INSERT INTO records (slot, sealed) VALUES (?1, ?2)",
                 params![slot.as_slice(), sealed],
@@ -241,7 +250,7 @@ impl Store {
             "records" => "SELECT sealed FROM records WHERE slot = ?1",
             _ => "SELECT sealed FROM mls_state WHERE slot = ?1",
         };
-        self.conn
+        self.conn()?
             .query_row(sql, params![slot.as_slice()], |row| row.get(0))
             .optional()
             .map_err(|e| CoreError::storage("reading a row", e))
@@ -255,20 +264,12 @@ impl Store {
             .transpose()
     }
 
-    /// Loads the complete MLS state.
+    /// Loads the complete MLS state. Rows are read under the lock and
+    /// decrypted after it is released.
     pub(crate) fn load_mls_state(&self) -> Result<HashMap<Vec<u8>, Vec<u8>>> {
-        let mut statement = self
-            .conn
-            .prepare("SELECT slot, sealed FROM mls_state")
-            .map_err(|e| CoreError::storage("reading the MLS state", e))?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
-            })
-            .map_err(|e| CoreError::storage("reading the MLS state", e))?;
-        let mut state = HashMap::new();
-        for row in rows {
-            let (slot, sealed) = row.map_err(|e| CoreError::storage("reading the MLS state", e))?;
+        let rows = self.read_all_mls_rows()?;
+        let mut state = HashMap::with_capacity(rows.len());
+        for (slot, sealed) in rows {
             let slot: [u8; 32] = slot
                 .try_into()
                 .map_err(|_| CoreError::malformed("stored MLS entry", "bad slot"))?;
@@ -283,40 +284,69 @@ impl Store {
         Ok(state)
     }
 
-    /// Applies a batch in a single transaction: all of it or nothing.
-    pub(crate) fn apply(&mut self, batch: &Batch) -> Result<()> {
-        let tx = self
-            .conn
-            .transaction()
-            .map_err(|e| CoreError::storage("starting a transaction", e))?;
+    fn read_all_mls_rows(&self) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        let conn = self.conn()?;
+        let mut statement = conn
+            .prepare("SELECT slot, sealed FROM mls_state")
+            .map_err(|e| CoreError::storage("reading the MLS state", e))?;
+        let rows: rusqlite::Result<Vec<_>> = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .and_then(Iterator::collect);
+        drop(statement);
+        drop(conn);
+        rows.map_err(|e| CoreError::storage("reading the MLS state", e))
+    }
+
+    /// Applies a batch in a single transaction: all of it or nothing. Values
+    /// are sealed before the lock is taken.
+    pub(crate) fn apply(&self, batch: &Batch) -> Result<()> {
+        let mut upserts = Vec::with_capacity(batch.mls_upserts.len());
         for (key, value) in &batch.mls_upserts {
             let slot = self.cipher.slot(NS_MLS, key)?;
             let sealed = self.cipher.seal(&slot, &encode_entry(key, value)?)?;
+            upserts.push((slot, sealed));
+        }
+        let deletes = batch
+            .mls_deletes
+            .iter()
+            .map(|key| self.cipher.slot(NS_MLS, key))
+            .collect::<Result<Vec<_>>>()?;
+        let mut records = Vec::with_capacity(batch.records.len());
+        for (name, value) in &batch.records {
+            let slot = self.cipher.slot(NS_RECORD, name.as_bytes())?;
+            records.push((slot, self.cipher.seal(&slot, value)?));
+        }
+
+        let mut conn = self.conn()?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| CoreError::storage("starting a transaction", e))?;
+        for (slot, sealed) in &upserts {
             tx.execute(
                 "INSERT OR REPLACE INTO mls_state (slot, sealed) VALUES (?1, ?2)",
                 params![slot.as_slice(), sealed],
             )
             .map_err(|e| CoreError::storage("writing MLS state", e))?;
         }
-        for key in &batch.mls_deletes {
-            let slot = self.cipher.slot(NS_MLS, key)?;
+        for slot in &deletes {
             tx.execute(
                 "DELETE FROM mls_state WHERE slot = ?1",
                 params![slot.as_slice()],
             )
             .map_err(|e| CoreError::storage("deleting MLS state", e))?;
         }
-        for (name, value) in &batch.records {
-            let slot = self.cipher.slot(NS_RECORD, name.as_bytes())?;
-            let sealed = self.cipher.seal(&slot, value)?;
+        for (slot, sealed) in &records {
             tx.execute(
                 "INSERT OR REPLACE INTO records (slot, sealed) VALUES (?1, ?2)",
                 params![slot.as_slice(), sealed],
             )
             .map_err(|e| CoreError::storage("writing a record", e))?;
         }
-        tx.commit()
-            .map_err(|e| CoreError::storage("committing a transaction", e))
+        let committed = tx
+            .commit()
+            .map_err(|e| CoreError::storage("committing a transaction", e));
+        drop(conn);
+        committed
     }
 }
 
@@ -361,7 +391,7 @@ mod tests {
     #[test]
     fn records_and_mls_state_round_trip() {
         let master = MasterKey::generate().expect("key");
-        let (dir, mut store) = temp_store(&master);
+        let (dir, store) = temp_store(&master);
         let batch = Batch {
             mls_upserts: vec![
                 (b"k1".to_vec(), b"v1".to_vec()),
@@ -409,7 +439,7 @@ mod tests {
     #[test]
     fn swapped_rows_are_detected() {
         let master = MasterKey::generate().expect("key");
-        let (_dir, mut store) = temp_store(&master);
+        let (_dir, store) = temp_store(&master);
         store
             .apply(&Batch {
                 mls_upserts: vec![
@@ -426,7 +456,8 @@ mod tests {
             .expect("read")
             .expect("row");
         store
-            .conn
+            .conn()
+            .expect("connection")
             .execute(
                 "UPDATE mls_state SET sealed = ?1 WHERE slot = ?2",
                 params![sealed_a, slot_b.as_slice()],

@@ -127,7 +127,7 @@ impl Device {
     /// [`CoreError::WrongKey`] if `master` does not open an existing file,
     /// or a crypto, MLS or storage error.
     pub fn create(path: &Path, master: &MasterKey, account: &AccountKey) -> Result<Self> {
-        let mut store = Store::open(path, master)?;
+        let store = Store::open(path, master)?;
         if store.record(RECORD_CERTIFICATE)?.is_some() {
             return Err(CoreError::AlreadyInitialized);
         }
@@ -621,6 +621,13 @@ mod tests {
         let device =
             Device::create(&dir.path().join("device.db"), &master, account).expect("device");
         (dir, device)
+    }
+
+    /// The Flutter bridge shares devices across threads.
+    #[test]
+    fn device_is_send_and_sync() {
+        const fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Device>();
     }
 
     #[test]
