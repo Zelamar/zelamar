@@ -2,6 +2,8 @@ name: App (Flutter)
 
 on:
   pull_request:
+    # ready_for_review: a draft PR turning ready runs the expensive jobs once.
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "app/**"
       - "core/**"
@@ -66,6 +68,8 @@ jobs:
   windows:
     name: Windows · integration test · release build
     needs: analyze-test
+    # Expensive (Windows minutes bill 2×): skipped while a PR is a draft.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -96,6 +100,8 @@ jobs:
   android:
     name: Android · emulator integration test
     needs: analyze-test
+    # Expensive (~10 min): skipped while a PR is a draft.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

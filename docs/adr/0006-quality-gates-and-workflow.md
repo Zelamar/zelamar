@@ -33,6 +33,9 @@
   are committed. `scripts/check.sh` runs the full local suite.
 - Workflows run only when their area changes (path filters), cancel superseded
   runs, and run expensive jobs (Windows, emulator) only after cheap ones pass.
+- Work in progress lives in **draft** PRs: the expensive Windows and Android
+  emulator jobs are skipped on drafts and run once the PR is marked ready for
+  review. A PR is merged only after that full run is green.
 - Commit messages follow Conventional Commits.
 
 ## Consequences
