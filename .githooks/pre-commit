@@ -1,0 +1,26 @@
+#!/bin/sh
+# Fast local gate: formatting of staged areas only. CI runs the full suite.
+# Enable once per clone:  git config core.hooksPath .githooks
+
+root=$(git rev-parse --show-toplevel) || exit 1
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+
+fail() {
+  echo "pre-commit: $1 — run the formatter and stage again." >&2
+  exit 1
+}
+
+if echo "$staged" | grep -qE '\.rs$'; then
+  (cd "$root" && cargo fmt --all -- --check >/dev/null) || fail "Rust formatting"
+fi
+
+if echo "$staged" | grep -qE '^app/.*\.dart$'; then
+  (cd "$root/app" && dart format --output=none --set-exit-if-changed \
+    lib test integration_test test_driver hook >/dev/null) || fail "Dart formatting"
+fi
+
+if echo "$staged" | grep -qE '^server/'; then
+  (cd "$root/server" && npx --no-install prettier --check . >/dev/null) || fail "Server formatting"
+fi
+
+exit 0

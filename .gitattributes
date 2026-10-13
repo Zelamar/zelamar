@@ -1,0 +1,27 @@
+# Normalize every text file to LF in the repository and in working trees,
+# so Windows, Linux and macOS contributors see byte-identical files.
+* text=auto eol=lf
+
+# Windows-only scripts must keep CRLF to run correctly.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Binary assets: never touch line endings, never diff as text.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.ttf  binary
+*.otf  binary
+*.woff binary
+*.woff2 binary
+*.jar  binary
+*.keystore binary
+*.jks  binary
+
+# Generated code: collapse in diffs and exclude from language statistics.
+app/lib/src/rust/** linguist-generated=true
+app/rust/src/frb_generated.rs linguist-generated=true
+server/worker-configuration.d.ts linguist-generated=true

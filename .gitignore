@@ -1,0 +1,29 @@
+# Rust
+/target/
+
+# Node / Cloudflare Workers
+node_modules/
+.wrangler/
+.dev.vars
+.dev.vars.*
+
+# Secrets — never commit
+.env
+.env.*
+*.pem
+*.p12
+*.keystore
+*.jks
+key.properties
+
+# Test and build output
+coverage/
+screenshots/
+
+# Editors and OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+*.log
