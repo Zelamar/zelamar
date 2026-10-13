@@ -25,3 +25,16 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  # Bundled variable fonts (SIL OFL 1.1, licenses in assets/fonts/licenses/).
+  # Never fetched at runtime: a font CDN request would leak usage metadata.
+  fonts:
+    - family: CormorantGaramond
+      fonts:
+        - asset: assets/fonts/CormorantGaramond-Variable.ttf
+    - family: Geist
+      fonts:
+        - asset: assets/fonts/Geist-Variable.ttf
+
+  assets:
+    - assets/fonts/licenses/

@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:zelamar/src/design/emblem.dart';
+import 'package:zelamar/src/design/theme.dart';
+import 'package:zelamar/src/design/tokens.dart';
 import 'package:zelamar/src/rust/api/diagnostics.dart';
 
-/// Phase 0 smoke-test screen: proves the Flutter UI talks to the Rust core.
+/// Phase 0 smoke-test screen, dressed in the Ivory design system: proves
+/// the Flutter UI talks to the Rust core.
 ///
 /// Replaced by real onboarding in Phase 4.
 class HelloScreen extends StatelessWidget {
@@ -12,33 +16,28 @@ class HelloScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final textTheme = theme.textTheme;
-    final muted = theme.colorScheme.onSurfaceVariant;
+    final colors = context.colors;
+    final text = context.text;
 
     return Scaffold(
       body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              'Zelamar',
-              style: textTheme.displayMedium?.copyWith(
-                fontWeight: FontWeight.w300,
-                letterSpacing: 2,
-              ),
-            ),
-            const SizedBox(height: 24),
+            const SunsetZEmblem(),
+            const SizedBox(height: ZSpace.xl),
+            Text('Zelamar', style: text.displaySmall),
+            const SizedBox(height: ZSpace.lg),
             Text(
               greeting,
               key: const Key('hello.greeting'),
-              style: textTheme.titleLarge,
+              style: text.titleLarge,
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: ZSpace.sm),
             Text(
               'Core ${coreInfo.version} · Protocol ${coreInfo.protocolVersion}',
               key: const Key('hello.coreInfo'),
-              style: textTheme.bodySmall?.copyWith(color: muted),
+              style: text.bodySmall?.copyWith(color: colors.textTertiary),
             ),
           ],
         ),
