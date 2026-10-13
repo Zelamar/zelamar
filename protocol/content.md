@@ -25,7 +25,10 @@ The plaintext of every MLS application message is one CBOR map:
 | `receipt` | `status`: `"delivered"` or `"read"`, `messages`: array of bytes(16), 1–256 items | Acknowledges messages |
 
 Receivers MUST check, against their own history, that an `edit` or
-`delete` targets a message by the same author.
+`delete` targets a message by the same author (same account); otherwise
+they ignore it. A `receipt` only ever updates the receiver's own messages.
+A message id is unique within a chat: a `text`, `reply` or unknown kind
+whose `i` is already in the receiver's history MUST be rejected.
 
 ## Rules
 

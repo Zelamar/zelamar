@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 
 use zelamar_core::CoreError;
 use zelamar_core::content::{AppMessage, MessageId};
-use zelamar_core::device::{ChatId, Device, Received};
+use zelamar_core::device::{ChatId, Device, Outgoing, Received};
+use zelamar_core::history::{HistoryEntry, SendStatus, StoredContent};
 use zelamar_core::identity::AccountKey;
 use zelamar_core::store::MasterKey;
 
@@ -71,7 +72,9 @@ fn connect(alice: &mut Person, bob: &mut Person) -> ChatId {
     let chat = alice.device().create_chat().expect("chat");
     let key_package = bob.device().key_package().expect("key package");
     let invitation = alice.device().invite(&chat, &key_package).expect("invite");
-    bob.device().join(&invitation.welcome).expect("join");
+    bob.device()
+        .join(&invitation.welcome.payload)
+        .expect("join");
     chat
 }
 
@@ -99,7 +102,8 @@ fn a_conversation_continues_across_restarts() {
     let wire = alice
         .device()
         .send(&chat, &text(1, "before"))
-        .expect("send");
+        .expect("send")
+        .payload;
     assert_eq!(
         expect_text(bob.device().receive(&wire).expect("receive")),
         "before"
@@ -111,7 +115,8 @@ fn a_conversation_continues_across_restarts() {
     let wire = bob
         .device()
         .send(&chat, &text(2, "after restart"))
-        .expect("send");
+        .expect("send")
+        .payload;
     let received = alice.device().receive(&wire).expect("receive");
     match &received {
         Received::Message { author, .. } => assert_eq!(author.account, bob.account.id()),
@@ -122,7 +127,8 @@ fn a_conversation_continues_across_restarts() {
     let wire = alice
         .device()
         .send(&chat, &text(3, "and back"))
-        .expect("send");
+        .expect("send")
+        .payload;
     assert_eq!(
         expect_text(bob.device().receive(&wire).expect("receive")),
         "and back"
@@ -139,7 +145,12 @@ fn a_key_package_survives_a_restart_of_its_owner() {
     bob.restart();
 
     let invitation = alice.device().invite(&chat, &key_package).expect("invite");
-    assert_eq!(bob.device().join(&invitation.welcome).expect("join"), chat);
+    assert_eq!(
+        bob.device()
+            .join(&invitation.welcome.payload)
+            .expect("join"),
+        chat
+    );
 }
 
 #[test]
@@ -147,7 +158,11 @@ fn nothing_readable_is_left_on_disk() {
     let (mut alice, mut bob) = (Person::new(), Person::new());
     let chat = connect(&mut alice, &mut bob);
     let secret = "the pier, near the old lighthouse";
-    let wire = alice.device().send(&chat, &text(1, secret)).expect("send");
+    let wire = alice
+        .device()
+        .send(&chat, &text(1, secret))
+        .expect("send")
+        .payload;
     bob.device().receive(&wire).expect("receive");
 
     for person in [&alice, &bob] {
@@ -182,7 +197,11 @@ fn a_rejected_message_changes_nothing_even_after_restart() {
     let (mut alice, mut bob) = (Person::new(), Person::new());
     let chat = connect(&mut alice, &mut bob);
 
-    let mut forged = alice.device().send(&chat, &text(1, "real")).expect("send");
+    let mut forged = alice
+        .device()
+        .send(&chat, &text(1, "real"))
+        .expect("send")
+        .payload;
     let genuine = forged.clone();
     let last = forged.len() - 1;
     forged[last] ^= 1;
@@ -192,6 +211,95 @@ fn a_rejected_message_changes_nothing_even_after_restart() {
     assert_eq!(
         expect_text(bob.device().receive(&genuine).expect("receive")),
         "real"
+    );
+}
+
+#[test]
+fn the_outbox_keeps_messages_until_confirmed_even_across_restarts() {
+    let (mut alice, mut bob) = (Person::new(), Person::new());
+    let chat = alice.device().create_chat().expect("chat");
+    let key_package = bob.device().key_package().expect("key package");
+    let invitation = alice.device().invite(&chat, &key_package).expect("invite");
+    // Alone in the chat, Alice has no one to tell about the commit: only the
+    // welcome waits to go out.
+    assert_eq!(
+        alice.device().outbox().expect("outbox"),
+        vec![invitation.welcome.clone()]
+    );
+    bob.device()
+        .join(&invitation.welcome.payload)
+        .expect("join");
+    alice
+        .device()
+        .confirm_sent(invitation.welcome.id)
+        .expect("confirm");
+
+    let written_offline = alice
+        .device()
+        .send(&chat, &text(1, "written offline"))
+        .expect("send");
+    alice.restart();
+    assert_eq!(
+        alice.device().outbox().expect("outbox"),
+        vec![written_offline.clone()]
+    );
+    let status = |person: &mut Person| {
+        person.device().history(&chat, None, 1).expect("history")[0]
+            .message
+            .status
+    };
+    assert_eq!(status(&mut alice), SendStatus::Queued);
+
+    alice
+        .device()
+        .confirm_sent(written_offline.id)
+        .expect("confirm");
+    alice
+        .device()
+        .confirm_sent(written_offline.id)
+        .expect("confirming twice is harmless");
+    alice.restart();
+    assert_eq!(
+        alice.device().outbox().expect("outbox"),
+        Vec::<Outgoing>::new()
+    );
+    assert_eq!(status(&mut alice), SendStatus::Sent);
+}
+
+#[test]
+fn history_survives_a_restart_and_pages_newest_first() {
+    let (mut alice, mut bob) = (Person::new(), Person::new());
+    let chat = connect(&mut alice, &mut bob);
+    for n in 1..=5 {
+        let wire = alice
+            .device()
+            .send(&chat, &text(n, &format!("message {n}")))
+            .expect("send")
+            .payload;
+        bob.device().receive(&wire).expect("receive");
+    }
+    bob.restart();
+
+    let numbers = |page: &[HistoryEntry]| -> Vec<u8> {
+        page.iter().map(|entry| entry.message.id.0[0]).collect()
+    };
+    let first = bob.device().history(&chat, None, 2).expect("history");
+    assert_eq!(numbers(&first), [5, 4]);
+    let second = bob
+        .device()
+        .history(&chat, first.last().map(|entry| entry.seq), 2)
+        .expect("history");
+    assert_eq!(numbers(&second), [3, 2]);
+    let last = bob
+        .device()
+        .history(&chat, second.last().map(|entry| entry.seq), 2)
+        .expect("history");
+    assert_eq!(numbers(&last), [1]);
+    assert_eq!(
+        last[0].message.content,
+        StoredContent::Text {
+            text: "message 1".into()
+        }
     );
 }
 

@@ -31,7 +31,7 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::error::{CoreError, Result};
 
 /// Schema version written to `PRAGMA user_version`.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const NONCE_LEN: usize = 24;
 const KDF_SALT: &[u8] = b"zelamar/store/v0";
 const CANARY: &[u8] = b"zelamar/store-canary/v0";
@@ -45,6 +45,9 @@ const CANARY_SLOT: [u8; 32] = [0; 32];
 /// Namespaces of slots, so equal names in different tables never collide.
 const NS_MLS: &[u8] = b"mls";
 const NS_RECORD: &[u8] = b"record";
+const NS_CHAT: &[u8] = b"chat";
+const NS_MESSAGE: &[u8] = b"message";
+const NS_OUTBOX: &[u8] = b"outbox";
 
 /// The 256-bit key that opens a device's store. The app keeps it in the
 /// operating system's secure storage (Android Keystore, Windows DPAPI,
@@ -164,7 +167,27 @@ pub(crate) struct Batch {
     pub(crate) mls_deletes: Vec<Vec<u8>>,
     /// Named records written.
     pub(crate) records: Vec<(&'static str, Vec<u8>)>,
+    /// History records written: `(chat id, message id, record)`.
+    pub(crate) messages: Vec<(Vec<u8>, [u8; 16], Vec<u8>)>,
+    /// Outbox items queued: `(envelope id, item)`.
+    pub(crate) outbox_inserts: Vec<([u8; 16], Vec<u8>)>,
+    /// Outbox items confirmed and removed.
+    pub(crate) outbox_deletes: Vec<[u8; 16]>,
 }
+
+impl Batch {
+    pub(crate) const fn is_empty(&self) -> bool {
+        self.mls_upserts.is_empty()
+            && self.mls_deletes.is_empty()
+            && self.records.is_empty()
+            && self.messages.is_empty()
+            && self.outbox_inserts.is_empty()
+            && self.outbox_deletes.is_empty()
+    }
+}
+
+/// One page of a chat's history, newest first: `(seq, record)`.
+pub(crate) type HistoryPage = Vec<(i64, Zeroizing<Vec<u8>>)>;
 
 /// The encrypted SQLite store of one device.
 ///
@@ -208,22 +231,44 @@ impl Store {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|e| CoreError::storage("reading the schema version", e))?;
-        match version {
-            0 => conn
-                .execute_batch(
-                    "BEGIN;
-                     CREATE TABLE mls_state (slot BLOB PRIMARY KEY NOT NULL, sealed BLOB NOT NULL) WITHOUT ROWID;
-                     CREATE TABLE records (slot BLOB PRIMARY KEY NOT NULL, sealed BLOB NOT NULL) WITHOUT ROWID;
-                     PRAGMA user_version = 1;
-                     COMMIT;",
-                )
-                .map_err(|e| CoreError::storage("creating the schema", e)),
-            SCHEMA_VERSION => Ok(()),
-            other => Err(CoreError::UnsupportedVersion {
+        if version > SCHEMA_VERSION {
+            return Err(CoreError::UnsupportedVersion {
                 what: "store schema",
-                version: u16::try_from(other).unwrap_or(u16::MAX),
-            }),
+                version: u16::try_from(version).unwrap_or(u16::MAX),
+            });
         }
+        // Each step moves the schema one version forward, atomically.
+        let steps = [
+            "BEGIN;
+             CREATE TABLE mls_state (slot BLOB PRIMARY KEY NOT NULL, sealed BLOB NOT NULL) WITHOUT ROWID;
+             CREATE TABLE records (slot BLOB PRIMARY KEY NOT NULL, sealed BLOB NOT NULL) WITHOUT ROWID;
+             PRAGMA user_version = 1;
+             COMMIT;",
+            "BEGIN;
+             CREATE TABLE messages (
+                 chat BLOB NOT NULL,
+                 seq INTEGER NOT NULL,
+                 slot BLOB NOT NULL UNIQUE,
+                 sealed BLOB NOT NULL,
+                 PRIMARY KEY (chat, seq)
+             ) WITHOUT ROWID;
+             CREATE TABLE outbox (
+                 seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                 slot BLOB NOT NULL UNIQUE,
+                 sealed BLOB NOT NULL
+             );
+             PRAGMA user_version = 2;
+             COMMIT;",
+        ];
+        for step in steps
+            .iter()
+            .skip(usize::try_from(version).unwrap_or(usize::MAX))
+        {
+            conn.execute_batch(step)
+                .map_err(|e| CoreError::storage("migrating the schema", e))?;
+        }
+        drop(conn);
+        Ok(())
     }
 
     /// Writes the canary on first use; afterwards, proves the master key.
@@ -248,6 +293,8 @@ impl Store {
     fn read_sealed(&self, table: &'static str, slot: &[u8; 32]) -> Result<Option<Vec<u8>>> {
         let sql = match table {
             "records" => "SELECT sealed FROM records WHERE slot = ?1",
+            "messages" => "SELECT sealed FROM messages WHERE slot = ?1",
+            "outbox" => "SELECT sealed FROM outbox WHERE slot = ?1",
             _ => "SELECT sealed FROM mls_state WHERE slot = ?1",
         };
         self.conn()?
@@ -262,6 +309,91 @@ impl Store {
         self.read_sealed("records", &slot)?
             .map(|sealed| self.cipher.open(&slot, &sealed))
             .transpose()
+    }
+
+    /// Reads one history record.
+    pub(crate) fn message(&self, chat: &[u8], id: &[u8; 16]) -> Result<Option<Zeroizing<Vec<u8>>>> {
+        let slot = self.message_slot(chat, id)?;
+        self.read_sealed("messages", &slot)?
+            .map(|sealed| self.cipher.open(&slot, &sealed))
+            .transpose()
+    }
+
+    /// Reads up to `limit` history records of `chat`, newest first, strictly
+    /// before `before` (a `seq` from an earlier page) when given.
+    pub(crate) fn messages(
+        &self,
+        chat: &[u8],
+        before: Option<i64>,
+        limit: u32,
+    ) -> Result<HistoryPage> {
+        let chat_slot = self.cipher.slot(NS_CHAT, chat)?;
+        let rows: Vec<(i64, Vec<u8>, Vec<u8>)> = {
+            let conn = self.conn()?;
+            let mut statement = conn
+                .prepare(
+                    "SELECT seq, slot, sealed FROM messages
+                     WHERE chat = ?1 AND seq < ?2
+                     ORDER BY seq DESC LIMIT ?3",
+                )
+                .map_err(|e| CoreError::storage("reading history", e))?;
+            let rows = statement
+                .query_map(
+                    params![chat_slot.as_slice(), before.unwrap_or(i64::MAX), limit],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .and_then(Iterator::collect);
+            drop(statement);
+            drop(conn);
+            rows.map_err(|e| CoreError::storage("reading history", e))?
+        };
+        rows.into_iter()
+            .map(|(seq, slot, sealed)| {
+                let slot: [u8; 32] = slot
+                    .try_into()
+                    .map_err(|_| CoreError::malformed("history row", "bad slot"))?;
+                Ok((seq, self.cipher.open(&slot, &sealed)?))
+            })
+            .collect()
+    }
+
+    /// Every queued outbox item, oldest first.
+    pub(crate) fn outbox(&self) -> Result<Vec<Zeroizing<Vec<u8>>>> {
+        let rows: Vec<(Vec<u8>, Vec<u8>)> = {
+            let conn = self.conn()?;
+            let mut statement = conn
+                .prepare("SELECT slot, sealed FROM outbox ORDER BY seq")
+                .map_err(|e| CoreError::storage("reading the outbox", e))?;
+            let rows = statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .and_then(Iterator::collect);
+            drop(statement);
+            drop(conn);
+            rows.map_err(|e| CoreError::storage("reading the outbox", e))?
+        };
+        rows.into_iter()
+            .map(|(slot, sealed)| {
+                let slot: [u8; 32] = slot
+                    .try_into()
+                    .map_err(|_| CoreError::malformed("outbox row", "bad slot"))?;
+                self.cipher.open(&slot, &sealed)
+            })
+            .collect()
+    }
+
+    /// Reads one queued outbox item.
+    pub(crate) fn outbox_item(&self, id: &[u8; 16]) -> Result<Option<Zeroizing<Vec<u8>>>> {
+        let slot = self.cipher.slot(NS_OUTBOX, id)?;
+        self.read_sealed("outbox", &slot)?
+            .map(|sealed| self.cipher.open(&slot, &sealed))
+            .transpose()
+    }
+
+    fn message_slot(&self, chat: &[u8], id: &[u8; 16]) -> Result<[u8; 32]> {
+        let mut name = Vec::with_capacity(chat.len() + 16);
+        name.extend_from_slice(chat);
+        name.extend_from_slice(id);
+        self.cipher.slot(NS_MESSAGE, &name)
     }
 
     /// Loads the complete MLS state. Rows are read under the lock and
@@ -316,6 +448,22 @@ impl Store {
             let slot = self.cipher.slot(NS_RECORD, name.as_bytes())?;
             records.push((slot, self.cipher.seal(&slot, value)?));
         }
+        let mut messages = Vec::with_capacity(batch.messages.len());
+        for (chat, id, record) in &batch.messages {
+            let slot = self.message_slot(chat, id)?;
+            let chat_slot = self.cipher.slot(NS_CHAT, chat)?;
+            messages.push((chat_slot, slot, self.cipher.seal(&slot, record)?));
+        }
+        let mut outbox_inserts = Vec::with_capacity(batch.outbox_inserts.len());
+        for (id, item) in &batch.outbox_inserts {
+            let slot = self.cipher.slot(NS_OUTBOX, id)?;
+            outbox_inserts.push((slot, self.cipher.seal(&slot, item)?));
+        }
+        let outbox_deletes = batch
+            .outbox_deletes
+            .iter()
+            .map(|id| self.cipher.slot(NS_OUTBOX, id))
+            .collect::<Result<Vec<_>>>()?;
 
         let mut conn = self.conn()?;
         let tx = conn
@@ -341,6 +489,29 @@ impl Store {
                 params![slot.as_slice(), sealed],
             )
             .map_err(|e| CoreError::storage("writing a record", e))?;
+        }
+        for (chat_slot, slot, sealed) in &messages {
+            tx.execute(
+                "INSERT INTO messages (chat, seq, slot, sealed)
+                 VALUES (?1, (SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE chat = ?1), ?2, ?3)
+                 ON CONFLICT (slot) DO UPDATE SET sealed = excluded.sealed",
+                params![chat_slot.as_slice(), slot.as_slice(), sealed],
+            )
+            .map_err(|e| CoreError::storage("writing history", e))?;
+        }
+        for (slot, sealed) in &outbox_inserts {
+            tx.execute(
+                "INSERT INTO outbox (slot, sealed) VALUES (?1, ?2)",
+                params![slot.as_slice(), sealed],
+            )
+            .map_err(|e| CoreError::storage("queueing in the outbox", e))?;
+        }
+        for slot in &outbox_deletes {
+            tx.execute(
+                "DELETE FROM outbox WHERE slot = ?1",
+                params![slot.as_slice()],
+            )
+            .map_err(|e| CoreError::storage("removing from the outbox", e))?;
         }
         let committed = tx
             .commit()
@@ -397,8 +568,8 @@ mod tests {
                 (b"k1".to_vec(), b"v1".to_vec()),
                 (b"k2".to_vec(), b"v2".to_vec()),
             ],
-            mls_deletes: vec![],
             records: vec![("chats", b"abc".to_vec())],
+            ..Batch::default()
         };
         store.apply(&batch).expect("apply");
         store
@@ -466,6 +637,124 @@ mod tests {
         assert!(matches!(
             store.load_mls_state(),
             Err(CoreError::Unauthenticated(_))
+        ));
+    }
+
+    fn ids(page: &HistoryPage) -> Vec<(i64, Vec<u8>)> {
+        page.iter()
+            .map(|(seq, record)| (*seq, record.to_vec()))
+            .collect()
+    }
+
+    #[test]
+    fn history_keeps_arrival_order_when_records_change() {
+        let master = MasterKey::generate().expect("key");
+        let (_dir, store) = temp_store(&master);
+        let message =
+            |chat: &[u8], id: u8, record: &[u8]| (chat.to_vec(), [id; 16], record.to_vec());
+        store
+            .apply(&Batch {
+                messages: vec![
+                    message(b"chat", 1, b"first"),
+                    message(b"chat", 2, b"second"),
+                    message(b"other", 1, b"elsewhere"),
+                ],
+                ..Batch::default()
+            })
+            .expect("insert");
+        store
+            .apply(&Batch {
+                messages: vec![message(b"chat", 1, b"first, edited")],
+                ..Batch::default()
+            })
+            .expect("update");
+
+        let page = store.messages(b"chat", None, 10).expect("page");
+        assert_eq!(
+            ids(&page),
+            [(2, b"second".to_vec()), (1, b"first, edited".to_vec())]
+        );
+        assert_eq!(
+            ids(&store.messages(b"chat", Some(2), 10).expect("older")),
+            [(1, b"first, edited".to_vec())]
+        );
+        assert_eq!(
+            ids(&store.messages(b"other", None, 10).expect("other")),
+            [(1, b"elsewhere".to_vec())]
+        );
+        assert_eq!(
+            store
+                .message(b"chat", &[2; 16])
+                .expect("read")
+                .as_deref()
+                .map(Vec::as_slice),
+            Some(b"second".as_slice())
+        );
+    }
+
+    #[test]
+    fn the_outbox_is_first_in_first_out() {
+        let master = MasterKey::generate().expect("key");
+        let (_dir, store) = temp_store(&master);
+        store
+            .apply(&Batch {
+                outbox_inserts: vec![([2; 16], b"two".to_vec()), ([1; 16], b"one".to_vec())],
+                ..Batch::default()
+            })
+            .expect("queue");
+        store
+            .apply(&Batch {
+                outbox_inserts: vec![([3; 16], b"three".to_vec())],
+                outbox_deletes: vec![[2; 16]],
+                ..Batch::default()
+            })
+            .expect("confirm");
+        let items: Vec<Vec<u8>> = store
+            .outbox()
+            .expect("outbox")
+            .iter()
+            .map(|item| item.to_vec())
+            .collect();
+        assert_eq!(items, [b"one".to_vec(), b"three".to_vec()]);
+        assert!(store.outbox_item(&[2; 16]).expect("read").is_none());
+    }
+
+    #[test]
+    fn a_version_1_store_is_migrated_in_place() {
+        let master = MasterKey::generate().expect("key");
+        let (dir, store) = temp_store(&master);
+        store
+            .apply(&Batch {
+                records: vec![("kept", b"yes".to_vec())],
+                ..Batch::default()
+            })
+            .expect("apply");
+        store
+            .conn()
+            .expect("connection")
+            .execute_batch("DROP TABLE messages; DROP TABLE outbox; PRAGMA user_version = 1;")
+            .expect("downgrade");
+        drop(store);
+
+        let store = Store::open(&dir.path().join("device.db"), &master).expect("migrate");
+        assert!(store.record("kept").expect("record").is_some());
+        assert_eq!(store.outbox().expect("outbox").len(), 0);
+        assert_eq!(store.messages(b"chat", None, 1).expect("history").len(), 0);
+    }
+
+    #[test]
+    fn a_store_from_a_newer_zelamar_is_refused() {
+        let master = MasterKey::generate().expect("key");
+        let (dir, store) = temp_store(&master);
+        store
+            .conn()
+            .expect("connection")
+            .execute_batch("PRAGMA user_version = 99;")
+            .expect("bump");
+        drop(store);
+        assert!(matches!(
+            Store::open(&dir.path().join("device.db"), &master),
+            Err(CoreError::UnsupportedVersion { .. })
         ));
     }
 

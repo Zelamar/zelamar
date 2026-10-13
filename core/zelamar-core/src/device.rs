@@ -1,25 +1,31 @@
-//! A device as a participant in MLS chats (ADR-0003, ADR-0010).
+//! A device as a participant in MLS chats (ADR-0003, ADR-0010, ADR-0011).
 //!
 //! Every chat is an MLS group, a 1:1 chat included. A [`Device`] owns its MLS
-//! signature key, a certificate from its account, and the state of every chat
-//! it belongs to. It turns plaintext [`AppMessage`]s into opaque MLS bytes and
-//! back, and refuses any member whose device certificate does not verify.
+//! signature key, a certificate from its account, the mailbox it receives
+//! at, and the state and history of every chat it belongs to. It turns
+//! plaintext [`AppMessage`]s into opaque MLS bytes addressed to the other
+//! members' mailboxes, and back. It refuses any member whose device
+//! certificate does not verify or who publishes no mailbox.
 //!
 //! A device lives in an encrypted store on disk. Every operation is a unit of
-//! work: on success its changes are persisted in one transaction; on failure
-//! the in-memory state is rolled back to the last persisted state, so a
-//! device is never left half-way through an MLS state change.
+//! work: on success its changes (MLS state, history, outbox) are persisted in
+//! one transaction; on failure the in-memory state is rolled back to the last
+//! persisted state, so a device is never left half-way through a change.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use openmls::prelude::{tls_codec::Deserialize as _, tls_codec::Serialize as _, *};
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_traits::{OpenMlsProvider, random::OpenMlsRand};
+use serde::{Deserialize, Serialize};
 
-use crate::content::AppMessage;
+use crate::content::{AppMessage, MessageId};
+use crate::envelope::{EnvelopeId, MailboxId};
 use crate::error::{CoreError, Result};
+use crate::history::{self, HistoryEntry, HistoryReader, SendStatus, StoredMessage};
 use crate::identity::{AccountId, AccountKey, DeviceCertificate, DeviceId};
 use crate::store::{Batch, MasterKey, Store};
 
@@ -34,13 +40,17 @@ pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_MLKEM768X25519_AES256G
 /// leaks less about their content.
 const PADDING: usize = 64;
 
+/// Leaf-node extension carrying a device's mailbox id (private-use range).
+const MAILBOX_EXTENSION: u16 = 0xF5A1;
+
 const RECORD_CERTIFICATE: &str = "device.certificate";
 const RECORD_ACCOUNT_KEY: &str = "account.key";
+const RECORD_MAILBOX: &str = "device.mailbox";
 const RECORD_CHATS: &str = "device.chats";
 
 /// Identifier of a chat: the MLS group id (16 random bytes).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ChatId(Vec<u8>);
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ChatId(#[serde(with = "serde_bytes")] Vec<u8>);
 
 impl ChatId {
     /// The raw id bytes.
@@ -55,7 +65,7 @@ impl ChatId {
 }
 
 /// Who sent a message: an authenticated account and one of its devices.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Author {
     /// The account, as proven by its device certificate.
     pub account: AccountId,
@@ -63,14 +73,27 @@ pub struct Author {
     pub device: DeviceId,
 }
 
+/// One ciphertext on its way out: the same `payload` goes to every mailbox
+/// in `recipients`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Outgoing {
+    /// Deduplication id, and the handle for [`Device::confirm_sent`].
+    pub id: EnvelopeId,
+    /// The other members' devices; never this one.
+    pub recipients: Vec<MailboxId>,
+    /// The MLS message.
+    #[serde(with = "serde_bytes")]
+    pub payload: Vec<u8>,
+}
+
 /// Result of an invitation: the commit for existing members and the welcome
-/// for the newcomer.
+/// for the newcomer. Both are already queued in the outbox.
 #[derive(Debug, Clone)]
 pub struct Invitation {
-    /// Goes to everyone already in the chat.
-    pub commit: Vec<u8>,
+    /// Goes to everyone already in the chat (no one, in a new chat).
+    pub commit: Outgoing,
     /// Goes to the invited device only.
-    pub welcome: Vec<u8>,
+    pub welcome: Outgoing,
 }
 
 /// What an incoming MLS message turned out to be.
@@ -108,12 +131,48 @@ pub struct Device {
     /// Present on the device that created the account; secondary devices
     /// (linked later) do not hold the account's root key.
     account_key: Option<AccountKey>,
+    /// Where this device receives mail; published in every chat it is in.
+    mailbox: MailboxId,
     chats: HashMap<ChatId, MlsGroup>,
     store: Store,
     /// The MLS state exactly as it is on disk.
     persisted: HashMap<Vec<u8>, Vec<u8>>,
     /// The chat ids exactly as they are on disk.
     persisted_chats: HashSet<ChatId>,
+    /// History and outbox writes of the operation in progress.
+    pending: Pending,
+}
+
+/// Writes of the operation in progress, joined into its transaction.
+#[derive(Default)]
+struct Pending {
+    messages: Vec<(ChatId, StoredMessage)>,
+    outbox: Vec<(EnvelopeId, Vec<u8>)>,
+    confirmed: Vec<EnvelopeId>,
+}
+
+/// An outbox item: what to send, and the history record it advances.
+#[derive(Serialize, Deserialize)]
+struct Queued {
+    outgoing: Outgoing,
+    /// The message whose status becomes `Sent` once delivered.
+    message: Option<(ChatId, MessageId)>,
+}
+
+impl Queued {
+    fn encode(&self) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        ciborium::into_writer(self, &mut out).map_err(|e| CoreError::Encoding {
+            what: "outbox item",
+            source: e.into(),
+        })?;
+        Ok(out)
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self> {
+        ciborium::from_reader(bytes)
+            .map_err(|_| CoreError::malformed("outbox item", "invalid encoding"))
+    }
 }
 
 impl Device {
@@ -141,10 +200,12 @@ impl Device {
         let certificate = account.certify_device(DeviceId::random()?, signer.public())?;
 
         let account_key = AccountKey::from_secret_bytes(&account.to_secret_bytes()?)?;
+        let mailbox = MailboxId::random()?;
         store.apply(&Batch {
             records: vec![
                 (RECORD_CERTIFICATE, certificate.encode()),
                 (RECORD_ACCOUNT_KEY, account.to_secret_bytes()?.to_vec()),
+                (RECORD_MAILBOX, mailbox.0.to_vec()),
             ],
             ..Batch::default()
         })?;
@@ -155,10 +216,12 @@ impl Device {
             signer,
             certificate,
             account_key: Some(account_key),
+            mailbox,
             chats: HashMap::new(),
             store,
             persisted: HashMap::new(),
             persisted_chats: HashSet::new(),
+            pending: Pending::default(),
         };
         device.persist()?;
         Ok(device)
@@ -182,6 +245,14 @@ impl Device {
             .record(RECORD_ACCOUNT_KEY)?
             .map(|bytes| AccountKey::from_secret_bytes(&bytes))
             .transpose()?;
+        let mailbox = MailboxId(
+            store
+                .record(RECORD_MAILBOX)?
+                .ok_or(CoreError::malformed("store", "device mailbox is missing"))?
+                .as_slice()
+                .try_into()
+                .map_err(|_| CoreError::malformed("store", "device mailbox is malformed"))?,
+        );
         let chat_ids = decode_chat_list(&store.record(RECORD_CHATS)?.unwrap_or_default())?;
 
         let provider = OpenMlsRustCrypto::default();
@@ -210,10 +281,12 @@ impl Device {
             signer,
             certificate,
             account_key,
+            mailbox,
             chats,
             store,
             persisted,
             persisted_chats: chat_ids,
+            pending: Pending::default(),
         })
     }
 
@@ -236,6 +309,91 @@ impl Device {
         self.account_key.is_some()
     }
 
+    /// The mailbox this device receives at.
+    #[must_use]
+    pub const fn mailbox(&self) -> MailboxId {
+        self.mailbox
+    }
+
+    /// Every chat this device takes part in, in a stable order.
+    #[must_use]
+    pub fn chats(&self) -> Vec<ChatId> {
+        let mut chats: Vec<ChatId> = self.chats.keys().cloned().collect();
+        chats.sort();
+        chats
+    }
+
+    /// A page of `chat`'s history, newest first: up to `limit` messages
+    /// older than `before` (the smallest [`HistoryEntry::seq`] of the
+    /// previous page), or the newest ones when `before` is `None`.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::UnknownChat`], or a storage or integrity error.
+    pub fn history(
+        &self,
+        chat: &ChatId,
+        before: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<HistoryEntry>> {
+        if !self.chats.contains_key(chat) {
+            return Err(CoreError::UnknownChat);
+        }
+        self.store
+            .messages(chat.as_bytes(), before, limit)?
+            .into_iter()
+            .map(|(seq, bytes)| {
+                Ok(HistoryEntry {
+                    seq,
+                    message: StoredMessage::decode(&bytes)?,
+                })
+            })
+            .collect()
+    }
+
+    /// Everything waiting to be sent, oldest first. A transport delivers each
+    /// item, then calls [`Device::confirm_sent`]; until then the item stays
+    /// queued, across restarts.
+    ///
+    /// # Errors
+    ///
+    /// A storage or integrity error.
+    pub fn outbox(&self) -> Result<Vec<Outgoing>> {
+        self.store
+            .outbox()?
+            .iter()
+            .map(|bytes| Queued::decode(bytes).map(|item| item.outgoing))
+            .collect()
+    }
+
+    /// Removes a delivered item from the outbox and marks its message as
+    /// sent. Confirming an unknown or already confirmed id does nothing.
+    ///
+    /// # Errors
+    ///
+    /// A storage or integrity error.
+    pub fn confirm_sent(&mut self, id: EnvelopeId) -> Result<()> {
+        self.transact(|device| {
+            let Some(bytes) = device.store.outbox_item(&id.0)? else {
+                return Ok(());
+            };
+            let item = Queued::decode(&bytes)?;
+            device.pending.confirmed.push(id);
+            if let Some((chat, message)) = item.message {
+                let reader = ChatHistory {
+                    store: &device.store,
+                    chat: &chat,
+                    pending: &device.pending.messages,
+                };
+                if let Some(mut record) = reader.load(message)? {
+                    record.status = SendStatus::Sent;
+                    device.pending.messages.push((chat, record));
+                }
+            }
+            Ok(())
+        })
+    }
+
     /// Publishes a one-time `KeyPackage`: lets others add this device to a chat
     /// while it is offline. The private part stays in this device's storage.
     ///
@@ -246,6 +404,8 @@ impl Device {
     pub fn key_package(&mut self) -> Result<Vec<u8>> {
         self.transact(|device| {
             let bundle = KeyPackage::builder()
+                .leaf_node_capabilities(capabilities())
+                .leaf_node_extensions(mailbox_extension(device.mailbox)?)
                 .build(
                     CIPHERSUITE,
                     &device.provider,
@@ -275,7 +435,7 @@ impl Device {
             let group = MlsGroup::new_with_group_id(
                 &device.provider,
                 &device.signer,
-                &create_config(),
+                &create_config(device.mailbox)?,
                 GroupId::from_slice(&group_id),
                 device.credential.clone(),
             )
@@ -286,10 +446,11 @@ impl Device {
         })
     }
 
-    /// Adds the device behind `key_package` to `chat`.
+    /// Adds the device behind `key_package` to `chat`, and queues the commit
+    /// and the welcome in the outbox.
     ///
-    /// The newcomer's device certificate is verified first; an unverifiable
-    /// identity never enters a chat.
+    /// The newcomer's device certificate and mailbox are verified first; an
+    /// unverifiable or unreachable device never enters a chat.
     ///
     /// # Errors
     ///
@@ -307,26 +468,37 @@ impl Device {
                     "unsupported ciphersuite",
                 ));
             }
-            let leaf = key_package.leaf_node();
-            verify_member(leaf.credential(), leaf.signature_key().as_slice())?;
+            let newcomer = verify_leaf(key_package.leaf_node())?;
 
             let group = device.chats.get_mut(chat).ok_or(CoreError::UnknownChat)?;
+            let existing = recipients(group)?;
             let (commit, welcome, _group_info) = group
                 .add_members(&device.provider, &device.signer, &[key_package])
                 .map_err(|e| CoreError::mls("adding a member", e))?;
             group
                 .merge_pending_commit(&device.provider)
                 .map_err(|e| CoreError::mls("applying an invitation", e))?;
-            Ok(Invitation {
-                commit: encode(&commit, "encoding a commit")?,
-                welcome: encode(&welcome, "encoding a welcome")?,
-            })
+            let invitation = Invitation {
+                commit: Outgoing {
+                    id: EnvelopeId::random()?,
+                    recipients: existing,
+                    payload: encode(&commit, "encoding a commit")?,
+                },
+                welcome: Outgoing {
+                    id: EnvelopeId::random()?,
+                    recipients: vec![newcomer],
+                    payload: encode(&welcome, "encoding a welcome")?,
+                },
+            };
+            device.queue(&invitation.commit, None)?;
+            device.queue(&invitation.welcome, None)?;
+            Ok(invitation)
         })
     }
 
     /// Joins a chat from a welcome addressed to this device.
     ///
-    /// Every existing member's device certificate is verified before the
+    /// Every member's device certificate and mailbox are verified before the
     /// chat is accepted.
     ///
     /// # Errors
@@ -343,36 +515,53 @@ impl Device {
             let staged =
                 StagedWelcome::new_from_welcome(&device.provider, &join_config(), welcome, None)
                     .map_err(|e| CoreError::mls("reading a welcome", e))?;
-            for member in staged.members() {
-                verify_member(&member.credential, &member.signature_key)?;
-            }
             let group = staged
                 .into_group(&device.provider)
                 .map_err(|e| CoreError::mls("joining a chat", e))?;
+            // A refusal rolls the stored group back with everything else.
+            verify_roster(&group)?;
             let chat = ChatId::of(group.group_id());
             device.chats.insert(chat.clone(), group);
             Ok(chat)
         })
     }
 
-    /// Encrypts `message` for everyone in `chat`.
+    /// Encrypts `message` for everyone else in `chat`, records it in history
+    /// and queues it in the outbox, all in one transaction.
     ///
     /// # Errors
     ///
     /// [`CoreError::UnknownChat`], [`CoreError::TooLarge`],
+    /// [`CoreError::Malformed`] (a message id already used in this chat),
     /// [`CoreError::Mls`] or a storage error.
-    pub fn send(&mut self, chat: &ChatId, message: &AppMessage) -> Result<Vec<u8>> {
+    pub fn send(&mut self, chat: &ChatId, message: &AppMessage) -> Result<Outgoing> {
         let plaintext = message.encode()?;
         self.transact(|device| {
             let group = device.chats.get_mut(chat).ok_or(CoreError::UnknownChat)?;
+            let others = recipients(group)?;
             let out = group
                 .create_message(&device.provider, &device.signer, &plaintext)
                 .map_err(|e| CoreError::mls("encrypting a message", e))?;
-            encode(&out, "encoding a message")
+            let outgoing = Outgoing {
+                id: EnvelopeId::random()?,
+                recipients: others,
+                payload: encode(&out, "encoding a message")?,
+            };
+            // Alone in a chat, there is no one to deliver to: already "sent".
+            let status = if outgoing.recipients.is_empty() {
+                SendStatus::Sent
+            } else {
+                SendStatus::Queued
+            };
+            device.fold(chat, device.author(), message, status)?;
+            let tracked = history::inserts(&message.body).then(|| (chat.clone(), message.id));
+            device.queue(&outgoing, tracked)?;
+            Ok(outgoing)
         })
     }
 
-    /// Decrypts and authenticates an incoming MLS message.
+    /// Decrypts and authenticates an incoming MLS message, and folds it into
+    /// the chat's history.
     ///
     /// # Errors
     ///
@@ -401,19 +590,29 @@ impl Device {
             ProcessedMessageContent::ApplicationMessage(application) => {
                 let certificate = certificate_of(&sender)?;
                 let message = AppMessage::decode(&application.into_bytes())?;
+                let author = Author {
+                    account: certificate.account(),
+                    device: certificate.device(),
+                };
+                self.fold(&chat, author, &message, SendStatus::Sent)?;
                 Ok(Received::Message {
                     chat,
-                    author: Author {
-                        account: certificate.account(),
-                        device: certificate.device(),
-                    },
+                    author,
                     message,
                 })
             }
             ProcessedMessageContent::StagedCommitMessage(staged) => {
+                // Every leaf a commit brings in must be a verified, reachable
+                // device: added members, updated leaves and the committer's
+                // own new leaf.
                 for added in staged.add_proposals() {
-                    let leaf = added.add_proposal().key_package().leaf_node();
-                    verify_member(leaf.credential(), leaf.signature_key().as_slice())?;
+                    verify_leaf(added.add_proposal().key_package().leaf_node())?;
+                }
+                for updated in staged.update_proposals() {
+                    verify_leaf(updated.update_proposal().leaf_node())?;
+                }
+                if let Some(leaf) = staged.update_path_leaf_node() {
+                    verify_leaf(leaf)?;
                 }
                 group
                     .merge_staged_commit(&self.provider, *staged)
@@ -430,6 +629,55 @@ impl Device {
                 "standalone proposals are not used by Zelamar",
             )),
         }
+    }
+
+    const fn author(&self) -> Author {
+        Author {
+            account: self.account(),
+            device: self.id(),
+        }
+    }
+
+    /// Folds `message` into the history of `chat`, as part of the operation
+    /// in progress. New records start with `status`.
+    fn fold(
+        &mut self,
+        chat: &ChatId,
+        author: Author,
+        message: &AppMessage,
+        status: SendStatus,
+    ) -> Result<()> {
+        let records = history::apply(
+            &ChatHistory {
+                store: &self.store,
+                chat,
+                pending: &self.pending.messages,
+            },
+            author,
+            author.account == self.account(),
+            message,
+            now_ms(),
+            status,
+        )?;
+        self.pending
+            .messages
+            .extend(records.into_iter().map(|record| (chat.clone(), record)));
+        Ok(())
+    }
+
+    /// Queues `outgoing` in the outbox, as part of the operation in progress.
+    /// With no recipients there is nothing to deliver, so nothing is queued.
+    fn queue(&mut self, outgoing: &Outgoing, message: Option<(ChatId, MessageId)>) -> Result<()> {
+        if outgoing.recipients.is_empty() {
+            return Ok(());
+        }
+        let item = Queued {
+            outgoing: outgoing.clone(),
+            message,
+        }
+        .encode()?;
+        self.pending.outbox.push((outgoing.id, item));
+        Ok(())
     }
 
     /// Runs `op` as a unit of work: persisted on success, rolled back on
@@ -450,8 +698,9 @@ impl Device {
         }
     }
 
-    /// Writes every MLS storage change since the last persist, plus the chat
-    /// list if it changed, in one transaction.
+    /// Writes every MLS storage change since the last persist, the chat list
+    /// if it changed, and the pending history and outbox writes, in one
+    /// transaction.
     fn persist(&mut self) -> Result<()> {
         let mut batch = Batch::default();
         {
@@ -476,8 +725,19 @@ impl Device {
         if chats != self.persisted_chats {
             batch.records.push((RECORD_CHATS, encode_chat_list(&chats)));
         }
-        if batch.mls_upserts.is_empty() && batch.mls_deletes.is_empty() && batch.records.is_empty()
-        {
+        let pending = std::mem::take(&mut self.pending);
+        for (chat, record) in &pending.messages {
+            batch
+                .messages
+                .push((chat.0.clone(), record.id.0, record.encode()?));
+        }
+        batch.outbox_inserts = pending
+            .outbox
+            .into_iter()
+            .map(|(id, item)| (id.0, item))
+            .collect();
+        batch.outbox_deletes = pending.confirmed.iter().map(|id| id.0).collect();
+        if batch.is_empty() {
             return Ok(());
         }
 
@@ -501,7 +761,33 @@ impl Device {
             .map_err(|_| poisoned())?
             .clone_from(&self.persisted);
         self.chats = load_chats(&self.provider, &self.persisted_chats)?;
+        self.pending = Pending::default();
         Ok(())
+    }
+}
+
+/// History of one chat as the operation in progress sees it: its own pending
+/// writes first, then the store.
+struct ChatHistory<'a> {
+    store: &'a Store,
+    chat: &'a ChatId,
+    pending: &'a [(ChatId, StoredMessage)],
+}
+
+impl HistoryReader for ChatHistory<'_> {
+    fn load(&self, id: MessageId) -> Result<Option<StoredMessage>> {
+        let latest = self
+            .pending
+            .iter()
+            .rev()
+            .find(|(chat, record)| chat == self.chat && record.id == id);
+        if let Some((_, record)) = latest {
+            return Ok(Some(record.clone()));
+        }
+        self.store
+            .message(self.chat.as_bytes(), &id.0)?
+            .map(|bytes| StoredMessage::decode(&bytes))
+            .transpose()
     }
 }
 
@@ -515,13 +801,16 @@ impl std::fmt::Debug for Device {
     }
 }
 
-fn create_config() -> MlsGroupCreateConfig {
-    MlsGroupCreateConfig::builder()
+fn create_config(mailbox: MailboxId) -> Result<MlsGroupCreateConfig> {
+    Ok(MlsGroupCreateConfig::builder()
         .ciphersuite(CIPHERSUITE)
+        .capabilities(capabilities())
+        .with_leaf_node_extensions(mailbox_extension(mailbox)?)
+        .map_err(|e| CoreError::mls("publishing the mailbox", e))?
         .use_ratchet_tree_extension(true)
         .wire_format_policy(PURE_CIPHERTEXT_WIRE_FORMAT_POLICY)
         .padding_size(PADDING)
-        .build()
+        .build())
 }
 
 fn join_config() -> MlsGroupJoinConfig {
@@ -530,6 +819,32 @@ fn join_config() -> MlsGroupJoinConfig {
         .wire_format_policy(PURE_CIPHERTEXT_WIRE_FORMAT_POLICY)
         .padding_size(PADDING)
         .build()
+}
+
+/// What every Zelamar leaf supports: the one ciphersuite, basic
+/// credentials, and the mailbox extension.
+fn capabilities() -> Capabilities {
+    Capabilities::new(
+        None,
+        Some(&[CIPHERSUITE]),
+        Some(&[ExtensionType::Unknown(MAILBOX_EXTENSION)]),
+        None,
+        Some(&[CredentialType::Basic]),
+    )
+}
+
+fn mailbox_extension(mailbox: MailboxId) -> Result<Extensions<LeafNode>> {
+    Extensions::single(Extension::Unknown(
+        MAILBOX_EXTENSION,
+        UnknownExtension(mailbox.0.to_vec()),
+    ))
+    .map_err(|e| CoreError::mls("publishing the mailbox", e))
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 fn credential_for(certificate: &DeviceCertificate, signer: &SignatureKeyPair) -> CredentialWithKey {
@@ -596,6 +911,57 @@ fn certificate_of(credential: &Credential) -> Result<DeviceCertificate> {
     let basic = BasicCredential::try_from(credential.clone())
         .map_err(|_| CoreError::Unauthenticated("member credential is not a Zelamar credential"))?;
     DeviceCertificate::decode(basic.identity())
+}
+
+/// The mailbox a member publishes in its leaf.
+fn mailbox_of(leaf: &LeafNode) -> Result<MailboxId> {
+    let extension = leaf
+        .extensions()
+        .unknown(MAILBOX_EXTENSION)
+        .ok_or(CoreError::malformed("member", "publishes no mailbox"))?;
+    extension
+        .0
+        .as_slice()
+        .try_into()
+        .map(MailboxId)
+        .map_err(|_| CoreError::malformed("member", "mailbox is not 32 bytes"))
+}
+
+/// Accepts a member leaf only if its certificate verifies, certifies the
+/// leaf's signature key, and the leaf publishes a mailbox. Returns that
+/// mailbox.
+fn verify_leaf(leaf: &LeafNode) -> Result<MailboxId> {
+    verify_member(leaf.credential(), leaf.signature_key().as_slice())?;
+    mailbox_of(leaf)
+}
+
+/// Verifies every member of `group`, this device included.
+fn verify_roster(group: &MlsGroup) -> Result<()> {
+    for member in group.members() {
+        verify_leaf(leaf_at(group, member.index)?)?;
+    }
+    Ok(())
+}
+
+/// The mailboxes of every member of `group` except this device, sorted and
+/// without duplicates.
+fn recipients(group: &MlsGroup) -> Result<Vec<MailboxId>> {
+    let own = group.own_leaf_index();
+    let mut mailboxes = group
+        .members()
+        .filter(|member| member.index != own)
+        .map(|member| mailbox_of(leaf_at(group, member.index)?))
+        .collect::<Result<Vec<_>>>()?;
+    mailboxes.sort_unstable();
+    mailboxes.dedup();
+    Ok(mailboxes)
+}
+
+fn leaf_at(group: &MlsGroup, index: LeafNodeIndex) -> Result<&LeafNode> {
+    group
+        .public_group()
+        .leaf(index)
+        .ok_or(CoreError::malformed("chat", "a member has no leaf"))
 }
 
 /// Accepts a member only if its certificate verifies **and** certifies the
@@ -676,6 +1042,43 @@ mod tests {
             alice.invite(&chat, &key_package),
             Err(CoreError::Unauthenticated(_))
         ));
+    }
+
+    /// An unreachable device is a broken member: a key package without a
+    /// mailbox is refused, and the refusal leaves nothing behind.
+    #[test]
+    fn a_key_package_without_a_mailbox_is_refused() {
+        let (_m, mallory) = temp_device(&AccountKey::generate().expect("account"));
+        let bundle = KeyPackage::builder()
+            .build(
+                CIPHERSUITE,
+                &mallory.provider,
+                &mallory.signer,
+                mallory.credential.clone(),
+            )
+            .expect("key package");
+        let key_package = bundle
+            .key_package()
+            .tls_serialize_detached()
+            .expect("encode");
+
+        let (_a, mut alice) = temp_device(&AccountKey::generate().expect("account"));
+        let chat = alice.create_chat().expect("chat");
+        assert!(matches!(
+            alice.invite(&chat, &key_package),
+            Err(CoreError::Malformed { .. })
+        ));
+        assert_eq!(alice.outbox().expect("outbox"), Vec::<Outgoing>::new());
+        assert_eq!(alice.chats[&chat].members().count(), 1);
+    }
+
+    #[test]
+    fn every_chat_publishes_this_devices_mailbox() {
+        let (_a, mut alice) = temp_device(&AccountKey::generate().expect("account"));
+        let chat = alice.create_chat().expect("chat");
+        let leaf = alice.chats[&chat].own_leaf_node().expect("own leaf");
+        assert_eq!(mailbox_of(leaf).expect("mailbox"), alice.mailbox());
+        assert_eq!(alice.chats(), vec![chat]);
     }
 
     #[test]

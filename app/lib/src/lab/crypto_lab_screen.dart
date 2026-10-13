@@ -157,7 +157,7 @@ class _Header extends StatelessWidget {
         Text('Crypto Lab', style: text.headlineSmall?.copyWith(fontSize: 28)),
         const SizedBox(height: ZSpace.xxs),
         Text(
-          'Two devices, one real Zelamar core. Nothing leaves this computer.',
+          'Two devices, one real Zelamar core. Nothing leaves this device.',
           style: text.bodySmall,
         ),
       ],

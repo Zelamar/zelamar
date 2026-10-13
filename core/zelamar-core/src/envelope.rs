@@ -14,6 +14,7 @@
 
 use openmls_rust_crypto::RustCrypto;
 use openmls_traits::random::OpenMlsRand;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, Result};
 use crate::identity::Reader;
@@ -27,8 +28,8 @@ pub const MAX_PAYLOAD: usize = 1 << 20;
 
 /// Unique id of an envelope. Lets receivers drop duplicates that arrive via
 /// more than one transport.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct EnvelopeId(pub [u8; 16]);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EnvelopeId(#[serde(with = "serde_bytes")] pub [u8; 16]);
 
 impl EnvelopeId {
     /// Draws a fresh random envelope id.
@@ -46,8 +47,22 @@ impl EnvelopeId {
 
 /// Opaque address of a recipient device's mailbox. Not derived from the
 /// device's identity, so it can rotate without breaking anything.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct MailboxId(pub [u8; 32]);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct MailboxId(#[serde(with = "serde_bytes")] pub [u8; 32]);
+
+impl MailboxId {
+    /// Draws a fresh random mailbox id.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Crypto`] if the system random generator fails.
+    pub fn random() -> Result<Self> {
+        RustCrypto::default()
+            .random_array()
+            .map(Self)
+            .map_err(|e| CoreError::crypto("drawing a mailbox id", e))
+    }
+}
 
 /// One sealed message in transit.
 #[derive(Debug, Clone, PartialEq, Eq)]

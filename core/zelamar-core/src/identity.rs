@@ -11,6 +11,7 @@ use openmls::prelude::SignatureScheme;
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_rust_crypto::RustCrypto;
 use openmls_traits::{crypto::OpenMlsCrypto, random::OpenMlsRand, signatures::Signer};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha512};
 
 use crate::error::{CoreError, Result};
@@ -29,8 +30,8 @@ const ED25519_PUBLIC_KEY_LEN: usize = 32;
 const ED25519_SIGNATURE_LEN: usize = 64;
 
 /// Public identity of an account: its Ed25519 public key.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct AccountId([u8; ED25519_PUBLIC_KEY_LEN]);
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct AccountId(#[serde(with = "serde_bytes")] [u8; ED25519_PUBLIC_KEY_LEN]);
 
 impl AccountId {
     /// The raw public key bytes.
@@ -47,8 +48,8 @@ impl std::fmt::Debug for AccountId {
 }
 
 /// Random identifier of one device of an account.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DeviceId([u8; 16]);
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DeviceId(#[serde(with = "serde_bytes")] [u8; 16]);
 
 impl DeviceId {
     /// Draws a fresh random device id.

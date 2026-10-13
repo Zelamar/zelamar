@@ -11,7 +11,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use zelamar_core::content::{AppMessage, Body, MessageId};
 use zelamar_core::device::{ChatId, Device, Received};
-use zelamar_core::envelope::{Envelope, EnvelopeId, MailboxId};
+use zelamar_core::envelope::{Envelope, EnvelopeId};
 use zelamar_core::identity::{AccountId, AccountKey};
 use zelamar_core::store::MasterKey;
 use zelamar_core::CoreError;
@@ -77,7 +77,6 @@ struct Member {
     path: PathBuf,
     master: MasterKey,
     account: AccountId,
-    mailbox: MailboxId,
     device: Device,
 }
 
@@ -92,7 +91,6 @@ impl Member {
             path,
             master,
             account: account.id(),
-            mailbox: MailboxId([0; 32]),
             device,
         })
     }
@@ -132,9 +130,8 @@ impl CryptoLab {
         let chat = alice.device.create_chat()?;
         let key_package = bob.device.key_package()?;
         let invitation = alice.device.invite(&chat, &key_package)?;
-        bob.device.join(&invitation.welcome)?;
-        alice.mailbox = MailboxId(random_bytes()?);
-        bob.mailbox = MailboxId(random_bytes()?);
+        bob.device.join(&invitation.welcome.payload)?;
+        alice.device.confirm_sent(invitation.welcome.id)?;
         Ok(Self { alice, bob, chat })
     }
 
@@ -148,7 +145,9 @@ impl CryptoLab {
         ]
     }
 
-    /// Sends `text` from one side to the other through a real envelope.
+    /// Sends `text` from one side to the other through a real envelope. The
+    /// lab plays the transport: it delivers to the address the sender's
+    /// device chose, then confirms delivery so the outbox empties.
     pub fn send(&mut self, from: LabSide, text: String) -> Result<LabExchange, LabError> {
         let started = Instant::now();
         let message = AppMessage::text(MessageId(random_bytes()?), now_ms(), text.clone());
@@ -157,14 +156,21 @@ impl CryptoLab {
             LabSide::Bob => (&mut self.bob, &mut self.alice),
         };
 
-        let payload = sender.device.send(&self.chat, &message)?;
+        let outgoing = sender.device.send(&self.chat, &message)?;
+        let to = receiver.device.mailbox();
+        if outgoing.recipients != [to] {
+            return Err(LabError {
+                message: "the message was not addressed to the receiver".to_owned(),
+            });
+        }
         let wire = Envelope {
-            id: EnvelopeId::random()?,
-            to: receiver.mailbox,
-            payload,
+            id: outgoing.id,
+            to,
+            payload: outgoing.payload,
         }
         .encode()?;
         let received = receiver.device.receive(&Envelope::decode(&wire)?.payload)?;
+        sender.device.confirm_sent(outgoing.id)?;
 
         let (delivered_text, author_verified) = match received {
             Received::Message {
@@ -284,6 +290,25 @@ mod tests {
         lab.restart().expect("restart");
         let after = lab.send(LabSide::Bob, "after".into()).expect("send");
         assert_eq!(after.delivered_text, "after");
+    }
+
+    #[test]
+    fn everything_sent_is_delivered_confirmed_and_kept() {
+        let (_dir, mut lab) = lab();
+        lab.send(LabSide::Alice, "one".into()).expect("send");
+        lab.send(LabSide::Bob, "two".into()).expect("send");
+        lab.restart().expect("restart");
+        for member in [&lab.alice, &lab.bob] {
+            assert_eq!(member.device.outbox().expect("outbox").len(), 0);
+            assert_eq!(
+                member
+                    .device
+                    .history(&lab.chat, None, 10)
+                    .expect("history")
+                    .len(),
+                2
+            );
+        }
     }
 
     #[test]

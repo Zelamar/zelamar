@@ -16,5 +16,6 @@ decision gets a new ADR that supersedes the old one.
 | [0008](0008-design-system-in-code.md) | Design system lives in code | Accepted |
 | [0009](0009-core-identity-ciphersuite-and-encodings.md) | Core: device certificates, post-quantum ciphersuite, encodings | Accepted |
 | [0010](0010-encrypted-device-store.md) | Encrypted device store: SQLite + per-row AEAD over MLS state diffs | Accepted |
+| [0011](0011-addressing-outbox-and-history.md) | Device addressing in the MLS tree, durable outbox, encrypted history | Accepted |
 
 New ADRs copy [`template.md`](template.md) and take the next number.
