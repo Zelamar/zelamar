@@ -7,8 +7,8 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `chat_key`, `claim_with`, `failure`, `find_chat`, `master`, `message_view`, `notice`, `now_ms`, `preview`, `store_path`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
+// These functions are ignored because they are not marked as `pub`: `chat_key`, `claim_with`, `failure`, `find_chat`, `master`, `message_id`, `notice`, `now_ms`, `preview`, `send_body`, `shorten`, `store_path`, `title`, `view`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
 
 /// A fresh random master key for a new session. Keep it in the platform's
 /// secure storage; it opens the session's store.
@@ -67,6 +67,16 @@ abstract class Session implements RustOpaqueInterface {
   /// Nobody is told.
   Future<void> deleteChat({required String chat});
 
+  /// Deletes one of the user's own messages, for everyone.
+  Future<void> deleteMessage({required String chat, required String target});
+
+  /// Replaces the text of one of the user's own messages, for everyone.
+  Future<void> editText({
+    required String chat,
+    required String target,
+    required String text,
+  });
+
   /// How to read this device's mailbox.
   MailboxLink mailbox();
 
@@ -102,12 +112,26 @@ abstract class Session implements RustOpaqueInterface {
   /// Everything waiting to go out, oldest first.
   Future<List<PendingSend>> pendingSends();
 
+  /// Sets the user's reaction to a message, or with `None` removes it.
+  Future<void> react({
+    required String chat,
+    required String target,
+    String? reaction,
+  });
+
   /// Registers this device (mailbox and key packages) under the claimed
   /// username.
   Future<HttpCall> register();
 
   /// Reads the answer to [`Session::register`]: key packages stored.
   Future<int> registered({required int status, required List<int> body});
+
+  /// Writes `text` into `chat` as an answer to message `to`.
+  Future<void> replyText({
+    required String chat,
+    required String to,
+    required String text,
+  });
 
   /// Writes `text` into `chat`. It goes out with the next
   /// [`Session::pending_sends`].
@@ -340,6 +364,15 @@ class MessageView {
   /// Meaningful for outgoing messages only.
   final MessageStatus status;
 
+  /// The message this one answers.
+  final Quote? replyTo;
+
+  /// Reactions, most chosen first.
+  final List<Reaction> reactions;
+
+  /// The user's own text, still there: it can be edited and deleted.
+  final bool editable;
+
   const MessageView({
     required this.id,
     required this.seq,
@@ -350,6 +383,9 @@ class MessageView {
     required this.edited,
     required this.sentAtMs,
     required this.status,
+    this.replyTo,
+    required this.reactions,
+    required this.editable,
   });
 
   @override
@@ -362,7 +398,10 @@ class MessageView {
       unsupported.hashCode ^
       edited.hashCode ^
       sentAtMs.hashCode ^
-      status.hashCode;
+      status.hashCode ^
+      replyTo.hashCode ^
+      reactions.hashCode ^
+      editable.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -377,7 +416,10 @@ class MessageView {
           unsupported == other.unsupported &&
           edited == other.edited &&
           sentAtMs == other.sentAtMs &&
-          status == other.status;
+          status == other.status &&
+          replyTo == other.replyTo &&
+          reactions == other.reactions &&
+          editable == other.editable;
 }
 
 /// What a notification about a new message says.
@@ -420,6 +462,59 @@ class PendingSend {
           runtimeType == other.runtimeType &&
           id == other.id &&
           call == other.call;
+}
+
+/// The message a reply answers, as a short quote.
+class Quote {
+  /// Its id, base64url.
+  final String id;
+
+  /// Its text, shortened; or a placeholder when it is deleted or missing.
+  final String text;
+
+  /// Whether the user wrote it.
+  final bool outgoing;
+
+  const Quote({required this.id, required this.text, required this.outgoing});
+
+  @override
+  int get hashCode => id.hashCode ^ text.hashCode ^ outgoing.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Quote &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          text == other.text &&
+          outgoing == other.outgoing;
+}
+
+/// One reaction and how many people chose it.
+class Reaction {
+  final String emoji;
+  final int count;
+
+  /// Whether one of them is the user's own.
+  final bool mine;
+
+  const Reaction({
+    required this.emoji,
+    required this.count,
+    required this.mine,
+  });
+
+  @override
+  int get hashCode => emoji.hashCode ^ count.hashCode ^ mine.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Reaction &&
+          runtimeType == other.runtimeType &&
+          emoji == other.emoji &&
+          count == other.count &&
+          mine == other.mine;
 }
 
 /// A failure, with a stable code the app turns into words.

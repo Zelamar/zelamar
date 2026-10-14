@@ -89,6 +89,18 @@ abstract class Messenger extends ChangeNotifier {
   /// Sends [text] into [chat].
   Future<void> sendText(String chat, String text);
 
+  /// Sends [text] into [chat] as an answer to message [to].
+  Future<void> replyText(String chat, String to, String text);
+
+  /// Replaces the text of one of the user's own messages, for everyone.
+  Future<void> editText(String chat, String target, String text);
+
+  /// Deletes one of the user's own messages, for everyone.
+  Future<void> deleteMessage(String chat, String target);
+
+  /// Sets the user's reaction to a message; `null` removes it.
+  Future<void> react(String chat, String target, String? reaction);
+
   /// Marks [chat] as read. People who wrote there learn it only if the
   /// user has written in the chat too.
   Future<void> markRead(String chat);

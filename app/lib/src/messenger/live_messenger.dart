@@ -162,6 +162,42 @@ class LiveMessenger extends Messenger {
   });
 
   @override
+  Future<void> replyText(String chat, String to, String text) => _changeChat(
+    chat,
+    (session) => session.replyText(chat: chat, to: to, text: text),
+  );
+
+  @override
+  Future<void> editText(String chat, String target, String text) => _changeChat(
+    chat,
+    (session) => session.editText(chat: chat, target: target, text: text),
+  );
+
+  @override
+  Future<void> deleteMessage(String chat, String target) => _changeChat(
+    chat,
+    (session) => session.deleteMessage(chat: chat, target: target),
+  );
+
+  @override
+  Future<void> react(String chat, String target, String? reaction) =>
+      _changeChat(
+        chat,
+        (session) =>
+            session.react(chat: chat, target: target, reaction: reaction),
+      );
+
+  /// Runs a change to [chat] in the core, then shows it and sends it.
+  Future<void> _changeChat(
+    String chat,
+    Future<void> Function(Session session) change,
+  ) => _guard(() async {
+    await change(_ready);
+    await _refreshChats(chat);
+    unawaited(_flush());
+  });
+
+  @override
   Future<void> acceptChat(String chat) => _guard(() async {
     await _ready.acceptChat(chat: chat);
     await _refreshChats(chat);

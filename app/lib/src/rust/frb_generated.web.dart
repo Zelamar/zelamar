@@ -97,6 +97,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Notice dco_decode_box_autoadd_notice(dynamic raw);
 
   @protected
+  Quote dco_decode_box_autoadd_quote(dynamic raw);
+
+  @protected
   ChatPreview dco_decode_chat_preview(dynamic raw);
 
   @protected
@@ -154,6 +157,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  List<Reaction> dco_decode_list_reaction(dynamic raw);
+
+  @protected
   MailboxLink dco_decode_mailbox_link(dynamic raw);
 
   @protected
@@ -178,10 +184,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Notice? dco_decode_opt_box_autoadd_notice(dynamic raw);
 
   @protected
+  Quote? dco_decode_opt_box_autoadd_quote(dynamic raw);
+
+  @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw);
 
   @protected
   PendingSend dco_decode_pending_send(dynamic raw);
+
+  @protected
+  Quote dco_decode_quote(dynamic raw);
+
+  @protected
+  Reaction dco_decode_reaction(dynamic raw);
 
   @protected
   SessionError dco_decode_session_error(dynamic raw);
@@ -268,6 +283,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Notice sse_decode_box_autoadd_notice(SseDeserializer deserializer);
 
   @protected
+  Quote sse_decode_box_autoadd_quote(SseDeserializer deserializer);
+
+  @protected
   ChatPreview sse_decode_chat_preview(SseDeserializer deserializer);
 
   @protected
@@ -327,6 +345,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
+  List<Reaction> sse_decode_list_reaction(SseDeserializer deserializer);
+
+  @protected
   MailboxLink sse_decode_mailbox_link(SseDeserializer deserializer);
 
   @protected
@@ -353,10 +374,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Notice? sse_decode_opt_box_autoadd_notice(SseDeserializer deserializer);
 
   @protected
+  Quote? sse_decode_opt_box_autoadd_quote(SseDeserializer deserializer);
+
+  @protected
   Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
   PendingSend sse_decode_pending_send(SseDeserializer deserializer);
+
+  @protected
+  Quote sse_decode_quote(SseDeserializer deserializer);
+
+  @protected
+  Reaction sse_decode_reaction(SseDeserializer deserializer);
 
   @protected
   SessionError sse_decode_session_error(SseDeserializer deserializer);
@@ -457,6 +487,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_box_autoadd_notice(Notice self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_quote(Quote self, SseSerializer serializer);
+
+  @protected
   void sse_encode_chat_preview(ChatPreview self, SseSerializer serializer);
 
   @protected
@@ -535,6 +568,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_reaction(List<Reaction> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_mailbox_link(MailboxLink self, SseSerializer serializer);
 
   @protected
@@ -568,6 +604,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_quote(Quote? self, SseSerializer serializer);
+
+  @protected
   void sse_encode_opt_list_prim_u_8_strict(
     Uint8List? self,
     SseSerializer serializer,
@@ -575,6 +614,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_pending_send(PendingSend self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_quote(Quote self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_reaction(Reaction self, SseSerializer serializer);
 
   @protected
   void sse_encode_session_error(SessionError self, SseSerializer serializer);

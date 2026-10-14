@@ -571,6 +571,21 @@ impl Device {
             .collect()
     }
 
+    /// One message of `chat`'s history, if it is there.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::UnknownChat`], or a storage or integrity error.
+    pub fn message(&self, chat: &ChatId, id: MessageId) -> Result<Option<StoredMessage>> {
+        if !self.chats.contains_key(chat) {
+            return Err(CoreError::UnknownChat);
+        }
+        self.store
+            .message(chat.as_bytes(), &id.0)?
+            .map(|bytes| StoredMessage::decode(&bytes))
+            .transpose()
+    }
+
     /// Everything waiting to be sent, oldest first. A transport delivers each
     /// item, then calls [`Device::confirm_sent`]; until then the item stays
     /// queued, across restarts.

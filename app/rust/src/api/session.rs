@@ -156,6 +156,26 @@ pub enum MessageStatus {
     Read,
 }
 
+/// The message a reply answers, as a short quote.
+#[derive(Debug, Clone)]
+pub struct Quote {
+    /// Its id, base64url.
+    pub id: String,
+    /// Its text, shortened; or a placeholder when it is deleted or missing.
+    pub text: String,
+    /// Whether the user wrote it.
+    pub outgoing: bool,
+}
+
+/// One reaction and how many people chose it.
+#[derive(Debug, Clone)]
+pub struct Reaction {
+    pub emoji: String,
+    pub count: u32,
+    /// Whether one of them is the user's own.
+    pub mine: bool,
+}
+
 /// One message as the chat screen shows it.
 #[derive(Debug, Clone)]
 pub struct MessageView {
@@ -176,7 +196,16 @@ pub struct MessageView {
     pub sent_at_ms: i64,
     /// Meaningful for outgoing messages only.
     pub status: MessageStatus,
+    /// The message this one answers.
+    pub reply_to: Option<Quote>,
+    /// Reactions, most chosen first.
+    pub reactions: Vec<Reaction>,
+    /// The user's own text, still there: it can be edited and deleted.
+    pub editable: bool,
 }
+
+/// Longest quote in a reply, in characters.
+const QUOTE_CHARS: usize = 120;
 
 /// One chat as the chat list shows it.
 #[derive(Debug, Clone)]
@@ -304,8 +333,51 @@ impl Session {
     /// Writes `text` into `chat`. It goes out with the next
     /// [`Session::pending_sends`].
     pub fn send_text(&mut self, chat: String, text: String) -> Result<(), SessionError> {
-        let chat = self.find_chat(&chat)?;
-        let message = AppMessage::text(MessageId::random()?, now_ms(), text);
+        self.send_body(&chat, Body::Text { text })
+    }
+
+    /// Writes `text` into `chat` as an answer to message `to`.
+    pub fn reply_text(
+        &mut self,
+        chat: String,
+        to: String,
+        text: String,
+    ) -> Result<(), SessionError> {
+        let to = message_id(&to)?;
+        self.send_body(&chat, Body::Reply { to, text })
+    }
+
+    /// Replaces the text of one of the user's own messages, for everyone.
+    pub fn edit_text(
+        &mut self,
+        chat: String,
+        target: String,
+        text: String,
+    ) -> Result<(), SessionError> {
+        let target = message_id(&target)?;
+        self.send_body(&chat, Body::Edit { target, text })
+    }
+
+    /// Deletes one of the user's own messages, for everyone.
+    pub fn delete_message(&mut self, chat: String, target: String) -> Result<(), SessionError> {
+        let target = message_id(&target)?;
+        self.send_body(&chat, Body::Delete { target })
+    }
+
+    /// Sets the user's reaction to a message, or with `None` removes it.
+    pub fn react(
+        &mut self,
+        chat: String,
+        target: String,
+        reaction: Option<String>,
+    ) -> Result<(), SessionError> {
+        let target = message_id(&target)?;
+        self.send_body(&chat, Body::React { target, reaction })
+    }
+
+    fn send_body(&mut self, chat: &str, body: Body) -> Result<(), SessionError> {
+        let chat = self.find_chat(chat)?;
+        let message = AppMessage::new(MessageId::random()?, now_ms(), body);
         self.device.send(&chat, &message)?;
         Ok(())
     }
@@ -444,12 +516,11 @@ impl Session {
 
     /// Every chat, most recently active first.
     pub fn chats(&self) -> Result<Vec<ChatPreview>, SessionError> {
-        Ok(self
-            .device
+        self.device
             .chat_list()?
-            .into_iter()
-            .map(|summary| preview(&summary))
-            .collect())
+            .iter()
+            .map(|summary| self.preview(summary))
+            .collect()
     }
 
     /// Up to `limit` messages of `chat`, newest first, older than `before`
@@ -461,12 +532,11 @@ impl Session {
         limit: u32,
     ) -> Result<Vec<MessageView>, SessionError> {
         let chat = self.find_chat(&chat)?;
-        Ok(self
-            .device
+        self.device
             .history(&chat, before, limit)?
             .iter()
-            .map(message_view)
-            .collect())
+            .map(|entry| self.view(&chat, entry))
+            .collect()
     }
 
     /// The notification for a new text from `account`, if it is one.
@@ -482,11 +552,97 @@ impl Session {
             .find(|contact| contact.account == account)
             .and_then(|contact| contact.username)
             .map_or_else(|| "Someone new".to_owned(), |name| format!("@{name}"));
-        let mut body: String = text.chars().take(NOTICE_CHARS).collect();
-        if text.chars().count() > NOTICE_CHARS {
-            body.push('…');
+        Some(Notice {
+            title,
+            body: shorten(text, NOTICE_CHARS),
+        })
+    }
+
+    fn preview(&self, summary: &ChatSummary) -> Result<ChatPreview, SessionError> {
+        Ok(ChatPreview {
+            id: chat_key(&summary.chat),
+            title: title(summary),
+            verified: !summary.members.is_empty() && summary.members.iter().all(|m| m.verified),
+            last: summary
+                .last
+                .as_ref()
+                .map(|entry| self.view(&summary.chat, entry))
+                .transpose()?,
+            unread: summary.unread,
+            request: summary.request,
+        })
+    }
+
+    /// One message as the chat screen shows it, with its quote and
+    /// reactions.
+    fn view(&self, chat: &ChatId, entry: &HistoryEntry) -> Result<MessageView, SessionError> {
+        let message = &entry.message;
+        let (text, unsupported, answers) = match &message.content {
+            StoredContent::Text { text } => (text.clone(), false, None),
+            StoredContent::Reply { text, to } => (text.clone(), false, Some(*to)),
+            StoredContent::Unknown { .. } => (String::new(), true, None),
+        };
+        let reply_to = answers
+            .map(|to| {
+                let quoted = self.device.message(chat, to)?;
+                Ok::<_, SessionError>(Quote {
+                    id: URL_SAFE_NO_PAD.encode(to.0),
+                    text: match &quoted {
+                        None => "Message unavailable".to_owned(),
+                        Some(quoted) if quoted.deleted => "Message deleted".to_owned(),
+                        Some(quoted) => match &quoted.content {
+                            StoredContent::Text { text } | StoredContent::Reply { text, .. } => {
+                                shorten(text, QUOTE_CHARS)
+                            }
+                            StoredContent::Unknown { .. } => "Message unavailable".to_owned(),
+                        },
+                    },
+                    outgoing: quoted.is_some_and(|quoted| quoted.outgoing),
+                })
+            })
+            .transpose()?;
+        let own = self.device.account();
+        let mut reactions: Vec<Reaction> = Vec::new();
+        for (account, emoji) in &message.reactions {
+            match reactions.iter_mut().find(|r| &r.emoji == emoji) {
+                Some(reaction) => {
+                    reaction.count += 1;
+                    reaction.mine |= *account == own;
+                }
+                None => reactions.push(Reaction {
+                    emoji: emoji.clone(),
+                    count: 1,
+                    mine: *account == own,
+                }),
+            }
         }
-        Some(Notice { title, body })
+        reactions.sort_by_key(|reaction| std::cmp::Reverse(reaction.count));
+        let status = if !message.read_by.is_empty() {
+            MessageStatus::Read
+        } else if !message.delivered_to.is_empty() {
+            MessageStatus::Delivered
+        } else if message.status == SendStatus::Sent {
+            MessageStatus::Sent
+        } else {
+            MessageStatus::Queued
+        };
+        Ok(MessageView {
+            id: URL_SAFE_NO_PAD.encode(message.id.0),
+            seq: entry.seq,
+            outgoing: message.outgoing,
+            text,
+            deleted: message.deleted,
+            unsupported,
+            edited: message.edited_at_ms.is_some(),
+            sent_at_ms: i64::try_from(message.sent_at_ms).unwrap_or(i64::MAX),
+            status,
+            reply_to,
+            reactions,
+            editable: message.outgoing
+                && message.author.account == own
+                && !message.deleted
+                && !unsupported,
+        })
     }
 
     fn find_chat(&self, key: &str) -> Result<ChatId, SessionError> {
@@ -519,62 +675,45 @@ fn now_ms() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
-fn preview(summary: &ChatSummary) -> ChatPreview {
-    let title = if summary.members.is_empty() {
-        "Just you".to_owned()
-    } else {
-        summary
-            .members
-            .iter()
-            .map(|member| match &member.username {
-                Some(name) => format!("@{name}"),
-                None => {
-                    let hex: String = member.account.as_bytes()[..4]
-                        .iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect();
-                    format!("Unknown {hex}")
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    ChatPreview {
-        id: chat_key(&summary.chat),
-        title,
-        verified: !summary.members.is_empty() && summary.members.iter().all(|m| m.verified),
-        last: summary.last.as_ref().map(message_view),
-        unread: summary.unread,
-        request: summary.request,
+/// `@bob`, `@alice, @bob`, or a short fingerprint for an unknown account.
+fn title(summary: &ChatSummary) -> String {
+    if summary.members.is_empty() {
+        return "Just you".to_owned();
     }
+    summary
+        .members
+        .iter()
+        .map(|member| match &member.username {
+            Some(name) => format!("@{name}"),
+            None => {
+                let hex: String = member.account.as_bytes()[..4]
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
+                format!("Unknown {hex}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
-fn message_view(entry: &HistoryEntry) -> MessageView {
-    let message = &entry.message;
-    let (text, unsupported) = match &message.content {
-        StoredContent::Text { text } | StoredContent::Reply { text, .. } => (text.clone(), false),
-        StoredContent::Unknown { .. } => (String::new(), true),
-    };
-    let status = if !message.read_by.is_empty() {
-        MessageStatus::Read
-    } else if !message.delivered_to.is_empty() {
-        MessageStatus::Delivered
-    } else if message.status == SendStatus::Sent {
-        MessageStatus::Sent
-    } else {
-        MessageStatus::Queued
-    };
-    MessageView {
-        id: URL_SAFE_NO_PAD.encode(message.id.0),
-        seq: entry.seq,
-        outgoing: message.outgoing,
-        text,
-        deleted: message.deleted,
-        unsupported,
-        edited: message.edited_at_ms.is_some(),
-        sent_at_ms: i64::try_from(message.sent_at_ms).unwrap_or(i64::MAX),
-        status,
+/// `text` cut to `limit` characters, with an ellipsis when cut.
+fn shorten(text: &str, limit: usize) -> String {
+    let mut out: String = text.chars().take(limit).collect();
+    if text.chars().count() > limit {
+        out.push('…');
     }
+    out
+}
+
+/// A message id from its base64url form.
+fn message_id(text: &str) -> Result<MessageId, SessionError> {
+    URL_SAFE_NO_PAD
+        .decode(text)
+        .ok()
+        .and_then(|bytes| <[u8; 16]>::try_from(bytes).ok())
+        .map(MessageId)
+        .ok_or_else(|| failure("malformed", "not a message id"))
 }
 
 #[cfg(test)]
@@ -764,6 +903,74 @@ mod tests {
         assert_eq!(alice.chats().expect("chats")[0].title, "@bob");
         alice.delete_chat(chat).expect("delete");
         assert!(alice.chats().expect("chats").is_empty());
+    }
+
+    #[test]
+    fn replies_reactions_edits_and_deletions_reach_the_other_side() {
+        let dir = tempfile::tempdir().expect("dir");
+        let mut stub = Stub::default();
+        let mut alice = person(&mut stub, &dir, "alice");
+        let mut bob = person(&mut stub, &dir, "bob");
+        let (status, body) = stub.call(&lookup_call("bob".into()).expect("lookup"));
+        let chat = alice.start_chat("bob".into(), status, body).expect("chat");
+        alice
+            .send_text(chat.clone(), "Dinner?".into())
+            .expect("send");
+        flush(&mut stub, &mut alice);
+        read(&mut stub, &mut bob);
+
+        let question = bob.messages(chat.clone(), None, 10).expect("history")[0].clone();
+        assert!(!question.editable, "Alice's words are not Bob's to edit");
+        bob.reply_text(chat.clone(), question.id.clone(), "Yes!".into())
+            .expect("reply");
+        bob.react(chat.clone(), question.id.clone(), Some("❤️".into()))
+            .expect("react");
+        // An edit of someone else's message changes nothing anywhere.
+        bob.edit_text(chat.clone(), question.id.clone(), "Forged".into())
+            .expect("send");
+        flush(&mut stub, &mut bob);
+        read(&mut stub, &mut alice);
+
+        let seen = alice.messages(chat.clone(), None, 10).expect("history");
+        let answer = &seen[0];
+        assert_eq!(answer.text, "Yes!");
+        let quote = answer.reply_to.clone().expect("a quote");
+        assert_eq!((quote.text.as_str(), quote.outgoing), ("Dinner?", true));
+        let original = seen.iter().find(|m| m.id == question.id).expect("original");
+        assert_eq!(original.text, "Dinner?");
+        assert!(original.editable);
+        assert_eq!(
+            original
+                .reactions
+                .iter()
+                .map(|r| (r.emoji.as_str(), r.count, r.mine))
+                .collect::<Vec<_>>(),
+            vec![("❤️", 1, false)]
+        );
+
+        alice
+            .edit_text(chat.clone(), question.id.clone(), "Dinner at eight?".into())
+            .expect("edit");
+        alice
+            .delete_message(chat.clone(), question.id.clone())
+            .expect("delete");
+        flush(&mut stub, &mut alice);
+        read(&mut stub, &mut bob);
+        let after = bob.messages(chat, None, 10).expect("history");
+        let gone = after
+            .iter()
+            .find(|m| m.id == question.id)
+            .expect("original");
+        assert!(gone.deleted);
+        assert_eq!(gone.text, "");
+        assert_eq!(
+            after[0].reply_to.clone().expect("quote").text,
+            "Message deleted"
+        );
+        assert_eq!(
+            message_id("not an id").expect_err("refused").code,
+            "malformed"
+        );
     }
 
     #[test]

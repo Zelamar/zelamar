@@ -138,6 +138,67 @@ class FakeMessenger extends Messenger {
   /// Chats marked read, in order.
   final read = <String>[];
 
+  /// Replaces one message of [chat] through [change].
+  void _update(
+    String chat,
+    String id,
+    MessageView Function(MessageView) change,
+  ) {
+    conversations[chat] = [
+      for (final message in conversations[chat] ?? const <MessageView>[])
+        if (message.id == id) change(message) else message,
+    ];
+    _changes.add(chat);
+    notifyListeners();
+  }
+
+  @override
+  Future<void> replyText(String chat, String to, String text) async {
+    sent.add('$chat: ↩ $text');
+    final quoted = conversations[chat]!.firstWhere((m) => m.id == to);
+    final message = view(
+      ++_seq + 1000,
+      text,
+      outgoing: true,
+      status: MessageStatus.queued,
+      replyTo: Quote(id: to, text: quoted.text, outgoing: quoted.outgoing),
+    );
+    conversations[chat] = [message, ...?conversations[chat]];
+    _changes.add(chat);
+    notifyListeners();
+  }
+
+  @override
+  Future<void> editText(String chat, String target, String text) async {
+    sent.add('$chat: ✎ $text');
+    _update(chat, target, (m) => copyView(m, text: text, edited: true));
+  }
+
+  @override
+  Future<void> deleteMessage(String chat, String target) async {
+    sent.add('$chat: ✕ $target');
+    _update(
+      chat,
+      target,
+      (m) => copyView(m, text: '', deleted: true, editable: false),
+    );
+  }
+
+  @override
+  Future<void> react(String chat, String target, String? reaction) async {
+    sent.add('$chat: ${reaction ?? '∅'} $target');
+    _update(
+      chat,
+      target,
+      (m) => copyView(
+        m,
+        reactions: [
+          if (reaction != null) Reaction(emoji: reaction, count: 1, mine: true),
+        ],
+      ),
+    );
+  }
+
   @override
   Future<void> acceptChat(String chat) async {
     final preview = _chats[chat]!;
@@ -188,6 +249,8 @@ MessageView view(
   int? sentAtMs,
   bool deleted = false,
   bool edited = false,
+  Quote? replyTo,
+  List<Reaction> reactions = const [],
 }) => MessageView(
   id: 'm$seq',
   seq: seq,
@@ -198,4 +261,30 @@ MessageView view(
   edited: edited,
   sentAtMs: sentAtMs ?? DateTime.now().millisecondsSinceEpoch,
   status: status,
+  replyTo: replyTo,
+  reactions: reactions,
+  editable: outgoing && !deleted,
+);
+
+/// [message] with some fields replaced.
+MessageView copyView(
+  MessageView message, {
+  String? text,
+  bool? edited,
+  bool? deleted,
+  bool? editable,
+  List<Reaction>? reactions,
+}) => MessageView(
+  id: message.id,
+  seq: message.seq,
+  outgoing: message.outgoing,
+  text: text ?? message.text,
+  deleted: deleted ?? message.deleted,
+  unsupported: message.unsupported,
+  edited: edited ?? message.edited,
+  sentAtMs: message.sentAtMs,
+  status: message.status,
+  replyTo: message.replyTo,
+  reactions: reactions ?? message.reactions,
+  editable: editable ?? message.editable,
 );

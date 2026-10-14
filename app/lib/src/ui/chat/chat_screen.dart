@@ -27,6 +27,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   static const _page = 60;
 
   List<MessageView> _messages = const [];
+  final _input = TextEditingController();
+
+  /// The message the next one answers, if any.
+  MessageView? _replying;
+
+  /// The user's own message being edited, if any.
+  MessageView? _editing;
   bool _loadingOlder = false;
   bool _complete = false;
   StreamSubscription<String?>? _changes;
@@ -47,6 +54,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     unawaited(_changes?.cancel());
+    _input.dispose();
     super.dispose();
   }
 
@@ -170,8 +178,26 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _send(String text) async {
+    final replying = _replying;
+    final editing = _editing;
+    setState(() {
+      _replying = null;
+      _editing = null;
+    });
+    final messenger = widget.messenger;
+    await _act(
+      () => editing != null
+          ? messenger.editText(widget.chat, editing.id, text)
+          : replying != null
+          ? messenger.replyText(widget.chat, replying.id, text)
+          : messenger.sendText(widget.chat, text),
+    );
+  }
+
+  /// Runs [action], explaining a failure in words.
+  Future<void> _act(Future<void> Function() action) async {
     try {
-      await widget.messenger.sendText(widget.chat, text);
+      await action();
     } on MessengerFailure catch (failure) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -179,6 +205,98 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         ).showSnackBar(SnackBar(content: Text(describeFailure(failure.code))));
       }
     }
+  }
+
+  /// Sets [emoji] as the user's reaction, or removes it if it already is.
+  Future<void> _react(MessageView message, String emoji) {
+    final mine = message.reactions.where((r) => r.mine).firstOrNull?.emoji;
+    return _act(
+      () => widget.messenger.react(
+        widget.chat,
+        message.id,
+        mine == emoji ? null : emoji,
+      ),
+    );
+  }
+
+  Future<void> _showActions(MessageView message) async {
+    if (message.deleted || message.unsupported) {
+      return;
+    }
+    final action = await showModalBottomSheet<MessageAction>(
+      context: context,
+      backgroundColor: context.colors.surfaceRaised,
+      constraints: const BoxConstraints(maxWidth: 480),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(ZRadius.card)),
+      ),
+      builder: (_) => MessageActions(message),
+    );
+    if (!mounted || action == null) {
+      return;
+    }
+    switch (action) {
+      case React(:final emoji):
+        await _react(message, emoji);
+      case Answer():
+        setState(() {
+          _replying = message;
+          _editing = null;
+        });
+      case CopyText():
+        await Clipboard.setData(ClipboardData(text: message.text));
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('Copied')));
+        }
+      case Revise():
+        setState(() {
+          _editing = message;
+          _replying = null;
+          _input
+            ..text = message.text
+            ..selection = TextSelection.collapsed(offset: message.text.length);
+        });
+      case Remove():
+        await _confirmDeleteMessage(message);
+    }
+  }
+
+  Future<void> _confirmDeleteMessage(MessageView message) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete for everyone?'),
+        content: const Text(
+          'The message disappears for everyone in this chat.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            key: const Key('message.delete.confirm'),
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(foregroundColor: context.colors.danger),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed ?? false) {
+      await _act(() => widget.messenger.deleteMessage(widget.chat, message.id));
+    }
+  }
+
+  void _cancelMode() {
+    setState(() {
+      if (_editing != null) {
+        _input.clear();
+      }
+      _replying = null;
+      _editing = null;
+    });
   }
 
   @override
@@ -282,7 +400,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                       return Column(
                         children: [
                           if (startsDay) DayLabel(dayLabel(message.sentAtMs)),
-                          MessageBubble(message, grouped: grouped),
+                          MessageBubble(
+                            message,
+                            grouped: grouped,
+                            peer: title,
+                            onActions: () => _showActions(message),
+                            onReact: (emoji) => _react(message, emoji),
+                          ),
                         ],
                       );
                     },
@@ -295,7 +419,28 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   onAccept: _accept,
                   onDecline: () => _delete(title, request: true),
                 ),
-              Composer(onSend: _send),
+              Composer(
+                controller: _input,
+                onSend: _send,
+                onCancel: _cancelMode,
+                banner: switch ((_editing, _replying)) {
+                  (final editing?, _) => ComposerBanner(
+                    icon: Icons.edit_outlined,
+                    label: 'Editing',
+                    text: editing.text,
+                    onClose: _cancelMode,
+                  ),
+                  (_, final replying?) => ComposerBanner(
+                    icon: Icons.reply_rounded,
+                    label: replying.outgoing
+                        ? 'Replying to yourself'
+                        : 'Replying to $title',
+                    text: replying.text,
+                    onClose: _cancelMode,
+                  ),
+                  _ => null,
+                },
+              ),
             ],
           ),
         );
@@ -397,12 +542,28 @@ class DayLabel extends StatelessWidget {
 /// One message: sand on the right for the user's own, white on the left
 /// for others, the small corner pointing at the sender.
 class MessageBubble extends StatelessWidget {
-  const new(this.message, {this.grouped = false, super.key});
+  const new(
+    this.message, {
+    this.grouped = false,
+    this.peer = '',
+    this.onActions,
+    this.onReact,
+    super.key,
+  });
 
   final MessageView message;
 
   /// Followed by a newer message from the same side: less space below.
   final bool grouped;
+
+  /// The other side's name, for quotes of their messages.
+  final String peer;
+
+  /// Opens the message's actions (long press, right click).
+  final VoidCallback? onActions;
+
+  /// Toggles one reaction (tap on a reaction under the bubble).
+  final ValueChanged<String>? onReact;
 
   @override
   Widget build(BuildContext context) {
@@ -419,15 +580,16 @@ class MessageBubble extends StatelessWidget {
     const round = Radius.circular(ZRadius.bubble);
     const tail = Radius.circular(ZRadius.bubbleTail);
 
-    return Align(
-      alignment: outgoing ? Alignment.centerRight : Alignment.centerLeft,
+    final quote = message.replyTo;
+    final bubble = GestureDetector(
+      onLongPress: onActions,
+      onSecondaryTap: onActions,
       child: ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: min(MediaQuery.sizeOf(context).width * 0.78, 520),
         ),
         child: Container(
           key: Key('chat.message.${message.id}'),
-          margin: EdgeInsets.only(bottom: grouped ? ZSpace.xxs : ZSpace.sm),
           padding: const EdgeInsets.fromLTRB(14, 9, 14, 7),
           decoration: BoxDecoration(
             color: outgoing ? colors.bubbleOutgoing : colors.bubbleIncoming,
@@ -445,10 +607,12 @@ class MessageBubble extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.end,
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (quote != null && !message.deleted)
+                QuoteBox(quote, author: quote.outgoing ? 'You' : peer),
               Align(
                 alignment: Alignment.centerLeft,
                 widthFactor: 1,
-                child: SelectableText(
+                child: Text(
                   body,
                   style: text.bodyLarge?.copyWith(
                     color: quiet
@@ -482,6 +646,293 @@ class MessageBubble extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+    return Padding(
+      padding: EdgeInsets.only(bottom: grouped ? ZSpace.xxs : ZSpace.sm),
+      child: Column(
+        crossAxisAlignment: outgoing
+            ? CrossAxisAlignment.end
+            : CrossAxisAlignment.start,
+        children: [
+          bubble,
+          if (message.reactions.isNotEmpty && !message.deleted)
+            Padding(
+              padding: const EdgeInsets.only(top: ZSpace.xs),
+              child: Wrap(
+                spacing: ZSpace.xs,
+                children: [
+                  for (final reaction in message.reactions)
+                    ReactionChip(
+                      reaction,
+                      onTap: onReact == null
+                          ? null
+                          : () => onReact!(reaction.emoji),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The message a reply answers, quietly, at the top of the bubble.
+class QuoteBox extends StatelessWidget {
+  const new(this.quote, {required this.author, super.key});
+
+  final Quote quote;
+  final String author;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final text = context.text;
+    return Container(
+      key: const Key('chat.quote'),
+      margin: const EdgeInsets.only(bottom: ZSpace.xs),
+      padding: const EdgeInsets.fromLTRB(
+        ZSpace.sm,
+        ZSpace.xs,
+        ZSpace.sm,
+        ZSpace.xs,
+      ),
+      decoration: BoxDecoration(
+        color: colors.surfaceSunken.withValues(alpha: 0.6),
+        border: Border(left: BorderSide(color: colors.accent, width: 2)),
+        borderRadius: BorderRadius.circular(ZSpace.xs),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            author,
+            style: text.labelSmall?.copyWith(
+              color: colors.accent,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          Text(
+            quote.text,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: text.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One reaction under a message: bronze when it is the user's own.
+class ReactionChip extends StatelessWidget {
+  const new(this.reaction, {this.onTap, super.key});
+
+  final Reaction reaction;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Material(
+      color: reaction.mine ? colors.bubbleOutgoing : colors.surface,
+      shape: StadiumBorder(
+        side: BorderSide(
+          color: reaction.mine ? colors.accent : colors.hairline,
+        ),
+      ),
+      child: InkWell(
+        key: Key('chat.reaction.${reaction.emoji}'),
+        customBorder: const StadiumBorder(),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          child: Text(
+            reaction.count > 1
+                ? '${reaction.emoji} ${reaction.count}'
+                : reaction.emoji,
+            style: context.text.bodySmall?.copyWith(color: colors.textPrimary),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// What the user chose in a message's actions.
+sealed class MessageAction {
+  const new();
+}
+
+final class React extends MessageAction {
+  const new(this.emoji);
+
+  final String emoji;
+}
+
+final class Answer extends MessageAction {
+  const new();
+}
+
+final class CopyText extends MessageAction {
+  const new();
+}
+
+final class Revise extends MessageAction {
+  const new();
+}
+
+final class Remove extends MessageAction {
+  const new();
+}
+
+/// Reactions offered for every message.
+const quickReactions = ['❤️', '👍', '😂', '😮', '😢', '🙏'];
+
+/// A message's actions: reactions first, then what can be done with it.
+class MessageActions extends StatelessWidget {
+  const new(this.message, {super.key});
+
+  final MessageView message;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final mine = message.reactions.where((r) => r.mine).firstOrNull?.emoji;
+    void choose(MessageAction action) => Navigator.of(context).pop(action);
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: ZSpace.lg),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: ZSpace.lg),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  for (final emoji in quickReactions)
+                    InkWell(
+                      key: Key('actions.react.$emoji'),
+                      customBorder: const CircleBorder(),
+                      onTap: () => choose(React(emoji)),
+                      child: Container(
+                        width: 48,
+                        height: 48,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: emoji == mine ? colors.bubbleOutgoing : null,
+                          border: emoji == mine
+                              ? Border.all(color: colors.accent)
+                              : null,
+                        ),
+                        child: Text(
+                          emoji,
+                          style: const TextStyle(fontSize: 24),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: ZSpace.md),
+            const Divider(),
+            ListTile(
+              key: const Key('actions.reply'),
+              leading: const Icon(Icons.reply_rounded),
+              title: const Text('Reply'),
+              onTap: () => choose(const Answer()),
+            ),
+            ListTile(
+              key: const Key('actions.copy'),
+              leading: const Icon(Icons.copy_rounded),
+              title: const Text('Copy'),
+              onTap: () => choose(const CopyText()),
+            ),
+            if (message.editable) ...[
+              ListTile(
+                key: const Key('actions.edit'),
+                leading: const Icon(Icons.edit_outlined),
+                title: const Text('Edit'),
+                onTap: () => choose(const Revise()),
+              ),
+              ListTile(
+                key: const Key('actions.delete'),
+                leading: Icon(Icons.delete_outline, color: colors.danger),
+                title: Text(
+                  'Delete for everyone',
+                  style: TextStyle(color: colors.danger),
+                ),
+                onTap: () => choose(const Remove()),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Above the composer: what the next message answers or edits.
+class ComposerBanner extends StatelessWidget {
+  const new({
+    required this.icon,
+    required this.label,
+    required this.text,
+    required this.onClose,
+    super.key,
+  });
+
+  final IconData icon;
+  final String label;
+  final String text;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final style = context.text;
+    return Padding(
+      key: const Key('chat.banner'),
+      padding: const EdgeInsets.only(bottom: ZSpace.sm),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: colors.accent),
+          const SizedBox(width: ZSpace.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: style.labelSmall?.copyWith(
+                    color: colors.accent,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                Text(
+                  text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: style.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            key: const Key('chat.banner.close'),
+            tooltip: 'Cancel',
+            onPressed: onClose,
+            icon: Icon(
+              Icons.close_rounded,
+              size: 18,
+              color: colors.textTertiary,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -523,26 +974,59 @@ class StatusIcon extends StatelessWidget {
 
 /// Writing a message. Enter sends; Shift+Enter starts a new line.
 class Composer extends StatefulWidget {
-  const new({required this.onSend, super.key});
+  const new({
+    required this.controller,
+    required this.onSend,
+    this.banner,
+    this.onCancel,
+    super.key,
+  });
 
+  final TextEditingController controller;
   final Future<void> Function(String text) onSend;
+
+  /// What the next message answers or edits, shown above the field.
+  final Widget? banner;
+
+  /// Escape: stop answering or editing.
+  final VoidCallback? onCancel;
 
   @override
   State<Composer> createState() => _ComposerState();
 }
 
 class _ComposerState extends State<Composer> {
-  final _text = TextEditingController();
+  TextEditingController get _text => widget.controller;
   late final _focus = FocusNode(onKeyEvent: _onKey);
 
   bool get _canSend => _text.text.trim().isNotEmpty;
 
   @override
+  void initState() {
+    super.initState();
+    _text.addListener(_changed);
+  }
+
+  @override
+  void didUpdateWidget(Composer old) {
+    super.didUpdateWidget(old);
+    if (old.controller != widget.controller) {
+      old.controller.removeListener(_changed);
+      widget.controller.addListener(_changed);
+    }
+    if (old.banner == null && widget.banner != null) {
+      _focus.requestFocus();
+    }
+  }
+
+  @override
   void dispose() {
-    _text.dispose();
+    _text.removeListener(_changed);
     _focus.dispose();
     super.dispose();
   }
+
+  void _changed() => setState(() {});
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     final enter =
@@ -554,6 +1038,12 @@ class _ComposerState extends State<Composer> {
       unawaited(_send());
       return KeyEventResult.handled;
     }
+    if (event.logicalKey == LogicalKeyboardKey.escape &&
+        event is KeyDownEvent &&
+        widget.banner != null) {
+      widget.onCancel?.call();
+      return KeyEventResult.handled;
+    }
     return KeyEventResult.ignored;
   }
 
@@ -563,7 +1053,6 @@ class _ComposerState extends State<Composer> {
       return;
     }
     _text.clear();
-    setState(() {});
     await widget.onSend(text);
   }
 
@@ -581,41 +1070,46 @@ class _ComposerState extends State<Composer> {
         ZSpace.md,
         ZSpace.sm + MediaQuery.paddingOf(context).bottom,
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Expanded(
-            child: TextField(
-              key: const Key('chat.input'),
-              controller: _text,
-              focusNode: _focus,
-              minLines: 1,
-              maxLines: 6,
-              keyboardType: TextInputType.multiline,
-              textCapitalization: TextCapitalization.sentences,
-              decoration: const InputDecoration(hintText: 'Message'),
-              style: context.text.bodyLarge,
-              onChanged: (_) => setState(() {}),
-            ),
-          ),
-          const SizedBox(width: ZSpace.sm),
-          AnimatedContainer(
-            duration: ZMotion.fast,
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: _canSend ? colors.accent : colors.surfaceSunken,
-              shape: BoxShape.circle,
-            ),
-            child: IconButton(
-              key: const Key('chat.send'),
-              tooltip: 'Send',
-              onPressed: _canSend ? _send : null,
-              icon: Icon(
-                Icons.arrow_upward_rounded,
-                color: _canSend ? colors.onAccent : colors.textTertiary,
+          ?widget.banner,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: TextField(
+                  key: const Key('chat.input'),
+                  controller: _text,
+                  focusNode: _focus,
+                  minLines: 1,
+                  maxLines: 6,
+                  keyboardType: TextInputType.multiline,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: const InputDecoration(hintText: 'Message'),
+                  style: context.text.bodyLarge,
+                ),
               ),
-            ),
+              const SizedBox(width: ZSpace.sm),
+              AnimatedContainer(
+                duration: ZMotion.fast,
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: _canSend ? colors.accent : colors.surfaceSunken,
+                  shape: BoxShape.circle,
+                ),
+                child: IconButton(
+                  key: const Key('chat.send'),
+                  tooltip: 'Send',
+                  onPressed: _canSend ? _send : null,
+                  icon: Icon(
+                    Icons.arrow_upward_rounded,
+                    color: _canSend ? colors.onAccent : colors.textTertiary,
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),

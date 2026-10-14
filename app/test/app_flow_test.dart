@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -226,6 +227,87 @@ void main() {
       await tester.pumpAndSettle();
       return messenger;
     }
+
+    Future<void> actionsOn(WidgetTester tester, String id) async {
+      await tester.longPress(find.byKey(Key('chat.message.$id')));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a reaction is set from the actions and removed by a tap', (
+      tester,
+    ) async {
+      final messenger = await openChat(tester);
+      await actionsOn(tester, 'm2');
+      expect(find.byKey(const Key('actions.edit')), findsNothing);
+      await tester.tap(find.byKey(const Key('actions.react.❤️')));
+      await tester.pumpAndSettle();
+      expect(messenger.sent.last, 'c1: ❤️ m2');
+      expect(find.byKey(const Key('chat.reaction.❤️')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('chat.reaction.❤️')));
+      await tester.pumpAndSettle();
+      expect(messenger.sent.last, 'c1: ∅ m2');
+      expect(find.byKey(const Key('chat.reaction.❤️')), findsNothing);
+    });
+
+    testWidgets('a reply shows what it answers', (tester) async {
+      final messenger = await openChat(tester);
+      await actionsOn(tester, 'm2');
+      await tester.tap(find.byKey(const Key('actions.reply')));
+      await tester.pumpAndSettle();
+      expect(find.text('Replying to @bob'), findsOneWidget);
+
+      await tester.enterText(find.byKey(const Key('chat.input')), 'Yes!');
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(messenger.sent.last, 'c1: ↩ Yes!');
+      expect(find.byKey(const Key('chat.banner')), findsNothing);
+      expect(find.byKey(const Key('chat.quote')), findsOneWidget);
+      expect(find.text('Dinner at eight?'), findsNWidgets(2));
+    });
+
+    testWidgets('own messages can be edited, and Escape cancels', (
+      tester,
+    ) async {
+      final messenger = await openChat(tester);
+      // Right click, as on a desktop.
+      await tester.tap(
+        find.byKey(const Key('chat.message.m3')),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('actions.edit')));
+      await tester.pumpAndSettle();
+      final input = find.byKey(const Key('chat.input'));
+      expect(tester.widget<TextField>(input).controller?.text, 'Perfect');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('chat.banner')), findsNothing);
+      expect(tester.widget<TextField>(input).controller?.text, isEmpty);
+
+      await actionsOn(tester, 'm3');
+      await tester.tap(find.byKey(const Key('actions.edit')));
+      await tester.pumpAndSettle();
+      await tester.enterText(input, 'Perfect, see you');
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(messenger.sent.last, 'c1: ✎ Perfect, see you');
+      expect(find.text('Perfect, see you'), findsOneWidget);
+      expect(find.textContaining('edited'), findsOneWidget);
+    });
+
+    testWidgets('deleting for everyone asks first', (tester) async {
+      final messenger = await openChat(tester);
+      await actionsOn(tester, 'm3');
+      await tester.tap(find.byKey(const Key('actions.delete')));
+      await tester.pumpAndSettle();
+      expect(find.text('Delete for everyone?'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('message.delete.confirm')));
+      await tester.pumpAndSettle();
+      expect(messenger.sent.last, 'c1: ✕ m3');
+      expect(find.text('Message deleted'), findsOneWidget);
+    });
 
     testWidgets('shows bubbles, days and read receipts', (tester) async {
       await openChat(tester);
