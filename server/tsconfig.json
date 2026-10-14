@@ -33,6 +33,8 @@
 
     /* Enable all strict type-checking options. */
     "strict": true,
+    /* Indexing may miss: `rows[0]` is `T | undefined`. */
+    "noUncheckedIndexedAccess": true,
 
     /* Skip type checking all .d.ts files. */
     "skipLibCheck": true,

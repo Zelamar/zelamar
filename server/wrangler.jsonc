@@ -8,6 +8,23 @@
   "compatibility_date": "2026-10-06",
   "compatibility_flags": ["nodejs_compat"],
   "upload_source_maps": true,
+  "durable_objects": {
+    "bindings": [
+      { "name": "ACCOUNT", "class_name": "Account" },
+      { "name": "MAILBOX", "class_name": "Mailbox" },
+      { "name": "INVITES", "class_name": "Invites" },
+    ],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Account", "Mailbox", "Invites"] }],
+  // Proof-of-work difficulty for claiming a username (protocol/directory.md).
+  // INVITE_KEY (hex, 32+ bytes) is a secret: `wrangler secret put INVITE_KEY`.
+  "vars": { "WORK_BITS": "21" },
+  // Per network address, until anonymous tokens take over (ADR-0012).
+  "ratelimits": [
+    { "name": "DELIVER_LIMITER", "namespace_id": "1001", "simple": { "limit": 120, "period": 60 } },
+    { "name": "LOOKUP_LIMITER", "namespace_id": "1002", "simple": { "limit": 30, "period": 60 } },
+    { "name": "CLAIM_LIMITER", "namespace_id": "1003", "simple": { "limit": 5, "period": 60 } },
+  ],
   "observability": {
     "enabled": true,
     "logs": { "enabled": true, "head_sampling_rate": 1 },

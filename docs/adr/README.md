@@ -17,5 +17,6 @@ decision gets a new ADR that supersedes the old one.
 | [0009](0009-core-identity-ciphersuite-and-encodings.md) | Core: device certificates, post-quantum ciphersuite, encodings | Accepted |
 | [0010](0010-encrypted-device-store.md) | Encrypted device store: SQLite + per-row AEAD over MLS state diffs | Accepted |
 | [0011](0011-addressing-outbox-and-history.md) | Device addressing in the MLS tree, durable outbox, encrypted history | Accepted |
+| [0012](0012-delivery-service.md) | Delivery service: Durable Objects, sans-IO core, anonymous tokens, ordered commits | Accepted |
 
 New ADRs copy [`template.md`](template.md) and take the next number.

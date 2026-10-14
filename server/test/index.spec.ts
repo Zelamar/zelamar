@@ -1,4 +1,4 @@
-import { exports } from 'cloudflare:workers';
+import { env, exports } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 
 import packageJson from '../package.json';
@@ -8,7 +8,10 @@ const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
 
 describe('GET /health', () => {
   it('reports the service as healthy (unit)', async () => {
-    const response = worker.fetch(new IncomingRequest('https://api.zelamar.test/health'));
+    const response = await worker.fetch(
+      new IncomingRequest('https://api.zelamar.test/health'),
+      env,
+    );
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
