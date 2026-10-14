@@ -176,6 +176,9 @@ pub struct ChatPreview {
     pub last: Option<MessageView>,
     /// Messages from others not yet read, up to 99.
     pub unread: u32,
+    /// Someone else started it and the user has not answered: show it as a
+    /// request to accept or decline.
+    pub request: bool,
 }
 
 /// One device of one account, stored encrypted in a directory.
@@ -398,6 +401,20 @@ impl Session {
         Ok(u32::try_from(count).unwrap_or(u32::MAX))
     }
 
+    /// Accepts a chat request: the people there learn this account's
+    /// username and, from now on, get receipts.
+    pub fn accept_chat(&mut self, chat: String) -> Result<(), SessionError> {
+        let chat = self.find_chat(&chat)?;
+        Ok(self.device.accept_chat(&chat)?)
+    }
+
+    /// Removes a chat from this device, history and all; declines a request.
+    /// Nobody is told.
+    pub fn delete_chat(&mut self, chat: String) -> Result<(), SessionError> {
+        let chat = self.find_chat(&chat)?;
+        Ok(self.device.delete_chat(&chat)?)
+    }
+
     /// Every chat, most recently active first.
     pub fn chats(&self) -> Result<Vec<ChatPreview>, SessionError> {
         Ok(self
@@ -481,6 +498,7 @@ fn preview(summary: &ChatSummary) -> ChatPreview {
         verified: !summary.members.is_empty() && summary.members.iter().all(|m| m.verified),
         last: summary.last.as_ref().map(message_view),
         unread: summary.unread,
+        request: summary.request,
     }
 }
 
@@ -683,10 +701,15 @@ mod tests {
         assert_eq!(last.text, "Hello Bob");
         assert!(!last.outgoing);
         assert_eq!(after[0].unread, 1);
+        assert!(after[0].request, "Bob has not answered yet");
+        bob.accept_chat(chat.clone()).expect("accept");
+        assert!(!bob.chats().expect("chats")[0].request);
         assert_eq!(bob.mark_read(chat.clone()).expect("read"), 1);
         assert_eq!(bob.chats().expect("chats")[0].unread, 0);
 
         assert_eq!(alice.chats().expect("chats")[0].title, "@bob");
+        alice.delete_chat(chat).expect("delete");
+        assert!(alice.chats().expect("chats").is_empty());
     }
 
     #[test]

@@ -161,6 +161,50 @@ void main() {
     });
   });
 
+  group('chat requests', () {
+    Future<FakeMessenger> openRequest(WidgetTester tester) async {
+      final messenger =
+          FakeMessenger(phaseValue: MessengerPhase.ready, usernameValue: 'ada')
+            ..addChat('c1', '@bob', messages: [view(1, 'Lunch?')])
+            ..addChat(
+              'c2',
+              '@mallory',
+              messages: [view(2, 'Buy now')],
+              unread: 1,
+              request: true,
+            );
+      await pumpApp(tester, messenger: messenger);
+      expect(find.byKey(const Key('chats.section.requests')), findsOneWidget);
+      expect(find.byKey(const Key('chats.section.chats')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('chats.tile.c2')));
+      await tester.pumpAndSettle();
+      expect(find.text('@mallory wants to chat with you.'), findsOneWidget);
+      return messenger;
+    }
+
+    testWidgets('declining removes the chat after a confirmation', (
+      tester,
+    ) async {
+      final messenger = await openRequest(tester);
+      await tester.tap(find.byKey(const Key('chat.decline')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('won’t be told'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('chat.delete.confirm')));
+      await tester.pumpAndSettle();
+
+      expect(messenger.chats.map((chat) => chat.id), ['c1']);
+      expect(find.text('Chats'), findsOneWidget);
+      expect(find.byKey(const Key('chats.section.requests')), findsNothing);
+    });
+
+    testWidgets('accepting turns the request into a chat', (tester) async {
+      await openRequest(tester);
+      await tester.tap(find.byKey(const Key('chat.accept')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('chat.request')), findsNothing);
+    });
+  });
+
   group('a conversation', () {
     Future<FakeMessenger> openChat(WidgetTester tester) async {
       final yesterday = DateTime.now()

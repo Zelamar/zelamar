@@ -153,6 +153,19 @@ class LiveMessenger extends Messenger {
   });
 
   @override
+  Future<void> acceptChat(String chat) => _guard(() async {
+    await _ready.acceptChat(chat: chat);
+    await _refreshChats(chat);
+    unawaited(_flush());
+  });
+
+  @override
+  Future<void> deleteChat(String chat) => _guard(() async {
+    await _ready.deleteChat(chat: chat);
+    await _refreshChats(null);
+  });
+
+  @override
   void dispose() {
     _closed = true;
     _retry?.cancel();

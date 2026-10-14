@@ -458,3 +458,59 @@ fn receipts_flow_only_once_the_user_has_written_in_the_chat() {
     alice.read(&mut service);
     assert_eq!(status(&alice, &chat).delivered_to, vec![bob.account.id()]);
 }
+
+#[test]
+fn a_chat_request_can_be_declined_without_a_trace_or_accepted() {
+    let mut service = Service::default();
+    let mut bob = Person::join(&mut service, "bob");
+    let mut mallory = Person::join(&mut service, "mallory");
+    let mut alice = Person::join(&mut service, "alice");
+
+    // A stranger writes: Bob sees a request.
+    let spam = mallory.start_chat_with(&mut service, "bob");
+    mallory
+        .device
+        .send(&spam, &text(1, "Buy now"))
+        .expect("send");
+    mallory.flush(&mut service);
+    bob.read(&mut service);
+    let list = bob.device.chat_list().expect("list");
+    assert!(list[0].request);
+
+    // Declined: gone, history and all; what follows is refused and dropped.
+    bob.device.delete_chat(&spam).expect("decline");
+    assert_eq!(bob.device.chat_list().expect("list").len(), 0);
+    assert!(matches!(
+        bob.device.history(&spam, None, 10),
+        Err(CoreError::UnknownChat)
+    ));
+    mallory
+        .device
+        .send(&spam, &text(2, "Hello?"))
+        .expect("send");
+    mallory.flush(&mut service);
+    for bytes in service.take(&bob.device) {
+        let opened = bob.device.open_envelope(&bytes).expect("an envelope");
+        assert!(matches!(opened.result, Err(CoreError::UnknownChat)));
+        assert!(!opened.keep(), "acknowledged, so it never comes back");
+    }
+    assert!(
+        mallory.read(&mut service).is_empty(),
+        "Mallory learns nothing"
+    );
+
+    // Accepted: Bob introduces himself and the chat is an ordinary one.
+    let chat = alice.start_chat_with(&mut service, "bob");
+    alice.device.send(&chat, &text(3, "Hi Bob")).expect("send");
+    alice.flush(&mut service);
+    bob.read(&mut service);
+    assert!(bob.device.chat_list().expect("list")[0].request);
+    bob.device.accept_chat(&chat).expect("accept");
+    assert!(!bob.device.chat_list().expect("list")[0].request);
+    bob.flush(&mut service);
+    let introduced = alice.read(&mut service);
+    assert!(
+        matches!(&introduced[..], [Received::Message { message, .. }]
+        if message.body == Body::Profile { username: "bob".into() })
+    );
+}

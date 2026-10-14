@@ -32,6 +32,10 @@ String? normalizeUsername({required String username}) =>
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Session>>
 abstract class Session implements RustOpaqueInterface {
+  /// Accepts a chat request: the people there learn this account's
+  /// username and, from now on, get receipts.
+  Future<void> acceptChat({required String chat});
+
   /// Every chat, most recently active first.
   Future<List<ChatPreview>> chats();
 
@@ -58,6 +62,10 @@ abstract class Session implements RustOpaqueInterface {
     directory: directory,
     masterKey: masterKey,
   );
+
+  /// Removes a chat from this device, history and all; declines a request.
+  /// Nobody is told.
+  Future<void> deleteChat({required String chat});
 
   /// How to read this device's mailbox.
   MailboxLink mailbox();
@@ -140,12 +148,17 @@ class ChatPreview {
   /// Messages from others not yet read, up to 99.
   final int unread;
 
+  /// Someone else started it and the user has not answered: show it as a
+  /// request to accept or decline.
+  final bool request;
+
   const ChatPreview({
     required this.id,
     required this.title,
     required this.verified,
     this.last,
     required this.unread,
+    required this.request,
   });
 
   @override
@@ -154,7 +167,8 @@ class ChatPreview {
       title.hashCode ^
       verified.hashCode ^
       last.hashCode ^
-      unread.hashCode;
+      unread.hashCode ^
+      request.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -165,7 +179,8 @@ class ChatPreview {
           title == other.title &&
           verified == other.verified &&
           last == other.last &&
-          unread == other.unread;
+          unread == other.unread &&
+          request == other.request;
 }
 
 /// An HTTP request for the delivery service, ready to send as is.

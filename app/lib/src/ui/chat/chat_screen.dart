@@ -116,6 +116,59 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// Removes the chat from this device after the user confirms.
+  Future<void> _delete(String title, {required bool request}) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(request ? 'Decline this chat?' : 'Delete this chat?'),
+        content: Text(
+          'It disappears from this device with all its messages. '
+          '$title won’t be told.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            key: const Key('chat.delete.confirm'),
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(foregroundColor: context.colors.danger),
+            child: Text(request ? 'Decline' : 'Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    try {
+      await widget.messenger.deleteChat(widget.chat);
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+    } on MessengerFailure catch (failure) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(describeFailure(failure.code))));
+      }
+    }
+  }
+
+  Future<void> _accept() async {
+    try {
+      await widget.messenger.acceptChat(widget.chat);
+    } on MessengerFailure catch (failure) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(describeFailure(failure.code))));
+      }
+    }
+  }
+
   Future<void> _send(String text) async {
     try {
       await widget.messenger.sendText(widget.chat, text);
@@ -140,6 +193,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             .where((chat) => chat.id == widget.chat)
             .firstOrNull;
         final title = preview?.title ?? 'Chat';
+        final request = preview?.request ?? false;
         final subtitle = preview != null && !preview.verified
             ? 'Name not yet confirmed by Zelamar'
             : switch (widget.messenger.link) {
@@ -153,6 +207,20 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             surfaceTintColor: Colors.transparent,
             titleSpacing: 0,
             shape: Border(bottom: BorderSide(color: colors.hairline)),
+            actions: [
+              PopupMenuButton<void>(
+                key: const Key('chat.menu'),
+                tooltip: 'More',
+                icon: Icon(Icons.more_horiz, color: colors.textSecondary),
+                itemBuilder: (_) => [
+                  PopupMenuItem<void>(
+                    key: const Key('chat.delete'),
+                    onTap: () => unawaited(_delete(title, request: request)),
+                    child: Text(request ? 'Decline' : 'Delete chat'),
+                  ),
+                ],
+              ),
+            ],
             title: Row(
               children: [
                 Avatar(title, size: 36),
@@ -221,11 +289,85 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   ),
                 ),
               ),
+              if (request)
+                RequestBar(
+                  title: title,
+                  onAccept: _accept,
+                  onDecline: () => _delete(title, request: true),
+                ),
               Composer(onSend: _send),
             ],
           ),
         );
       },
+    );
+  }
+}
+
+/// Shown in a chat someone else started, until the user answers.
+class RequestBar extends StatelessWidget {
+  const new({
+    required this.title,
+    required this.onAccept,
+    required this.onDecline,
+    super.key,
+  });
+
+  final String title;
+  final VoidCallback onAccept;
+  final VoidCallback onDecline;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final text = context.text;
+    return Container(
+      key: const Key('chat.request'),
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: colors.surface,
+        border: Border(top: BorderSide(color: colors.hairline)),
+      ),
+      padding: const EdgeInsets.fromLTRB(
+        ZSpace.gutter,
+        ZSpace.lg,
+        ZSpace.gutter,
+        ZSpace.md,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('$title wants to chat with you.', style: text.titleSmall),
+          const SizedBox(height: ZSpace.xs),
+          Text(
+            'They won’t know you’ve seen this until you reply or accept.',
+            style: text.bodySmall,
+          ),
+          const SizedBox(height: ZSpace.md),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  key: const Key('chat.decline'),
+                  onPressed: onDecline,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: colors.danger,
+                  ),
+                  child: const Text('Decline'),
+                ),
+              ),
+              const SizedBox(width: ZSpace.md),
+              Expanded(
+                child: FilledButton(
+                  key: const Key('chat.accept'),
+                  onPressed: onAccept,
+                  child: const Text('Accept'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

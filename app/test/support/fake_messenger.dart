@@ -76,6 +76,7 @@ class FakeMessenger extends Messenger {
     bool verified = true,
     List<MessageView> messages = const [],
     int unread = 0,
+    bool request = false,
   }) {
     conversations[id] = [...messages];
     _chats[id] = ChatPreview(
@@ -84,6 +85,7 @@ class FakeMessenger extends Messenger {
       verified: verified,
       last: messages.firstOrNull,
       unread: unread,
+      request: request,
     );
     notifyListeners();
   }
@@ -120,12 +122,14 @@ class FakeMessenger extends Messenger {
     );
     conversations[chat] = [message, ...?conversations[chat]];
     final preview = _chats[chat]!;
+    // Writing in a chat accepts it.
     _chats[chat] = ChatPreview(
       id: chat,
       title: preview.title,
       verified: preview.verified,
       last: message,
       unread: preview.unread,
+      request: false,
     );
     _changes.add(chat);
     notifyListeners();
@@ -135,17 +139,35 @@ class FakeMessenger extends Messenger {
   final read = <String>[];
 
   @override
+  Future<void> acceptChat(String chat) async {
+    final preview = _chats[chat]!;
+    _chats[chat] = _copy(preview, request: false);
+    notifyListeners();
+  }
+
+  @override
+  Future<void> deleteChat(String chat) async {
+    _chats.remove(chat);
+    conversations.remove(chat);
+    notifyListeners();
+  }
+
+  ChatPreview _copy(ChatPreview preview, {bool? request, int? unread}) =>
+      ChatPreview(
+        id: preview.id,
+        title: preview.title,
+        verified: preview.verified,
+        last: preview.last,
+        unread: unread ?? preview.unread,
+        request: request ?? preview.request,
+      );
+
+  @override
   Future<void> markRead(String chat) async {
     read.add(chat);
     final preview = _chats[chat];
     if (preview != null && preview.unread > 0) {
-      _chats[chat] = ChatPreview(
-        id: chat,
-        title: preview.title,
-        verified: preview.verified,
-        last: preview.last,
-        unread: 0,
-      );
+      _chats[chat] = _copy(preview, unread: 0);
       notifyListeners();
     }
   }

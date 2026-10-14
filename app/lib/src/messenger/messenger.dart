@@ -92,4 +92,10 @@ abstract class Messenger extends ChangeNotifier {
   /// Marks [chat] as read. People who wrote there learn it only if the
   /// user has written in the chat too.
   Future<void> markRead(String chat);
+
+  /// Accepts a chat request: the people there learn the user's name.
+  Future<void> acceptChat(String chat);
+
+  /// Removes [chat] from this device, history and all. Nobody is told.
+  Future<void> deleteChat(String chat);
 }

@@ -173,6 +173,8 @@ pub(crate) struct Batch {
     pub(crate) outbox_inserts: Vec<([u8; 16], Vec<u8>)>,
     /// Outbox items confirmed and removed.
     pub(crate) outbox_deletes: Vec<[u8; 16]>,
+    /// Chats whose whole history is erased.
+    pub(crate) chat_deletes: Vec<Vec<u8>>,
 }
 
 impl Batch {
@@ -183,6 +185,7 @@ impl Batch {
             && self.messages.is_empty()
             && self.outbox_inserts.is_empty()
             && self.outbox_deletes.is_empty()
+            && self.chat_deletes.is_empty()
     }
 }
 
@@ -464,6 +467,11 @@ impl Store {
             .iter()
             .map(|id| self.cipher.slot(NS_OUTBOX, id))
             .collect::<Result<Vec<_>>>()?;
+        let chat_deletes = batch
+            .chat_deletes
+            .iter()
+            .map(|chat| self.cipher.slot(NS_CHAT, chat))
+            .collect::<Result<Vec<_>>>()?;
 
         let mut conn = self.conn()?;
         let tx = conn
@@ -512,6 +520,13 @@ impl Store {
                 params![slot.as_slice()],
             )
             .map_err(|e| CoreError::storage("removing from the outbox", e))?;
+        }
+        for chat_slot in &chat_deletes {
+            tx.execute(
+                "DELETE FROM messages WHERE chat = ?1",
+                params![chat_slot.as_slice()],
+            )
+            .map_err(|e| CoreError::storage("erasing a chat", e))?;
         }
         let committed = tx
             .commit()

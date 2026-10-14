@@ -89,17 +89,22 @@ class ChatsScreen extends StatelessWidget {
                 Expanded(
                   child: chats.isEmpty
                       ? _EmptyChats(onStart: () => _newChat(context))
-                      : ListView.separated(
+                      : ListView(
                           padding: const EdgeInsets.only(bottom: ZSpace.xl),
-                          itemCount: chats.length,
-                          separatorBuilder: (_, _) => const Padding(
-                            padding: EdgeInsets.only(left: 92),
-                            child: Divider(),
-                          ),
-                          itemBuilder: (context, index) => ChatTile(
-                            chats[index],
-                            onTap: () => _open(context, chats[index].id),
-                          ),
+                          children: [
+                            ..._section(
+                              context,
+                              'Requests',
+                              chats.where((chat) => chat.request).toList(),
+                              labelled: true,
+                            ),
+                            ..._section(
+                              context,
+                              'Chats',
+                              chats.where((chat) => !chat.request).toList(),
+                              labelled: chats.any((chat) => chat.request),
+                            ),
+                          ],
                         ),
                 ),
               ],
@@ -108,6 +113,43 @@ class ChatsScreen extends StatelessWidget {
         );
       },
     );
+  }
+}
+
+extension on ChatsScreen {
+  /// [chats] as tiles, under a quiet section label when [labelled].
+  List<Widget> _section(
+    BuildContext context,
+    String label,
+    List<ChatPreview> chats, {
+    required bool labelled,
+  }) {
+    if (chats.isEmpty) {
+      return const [];
+    }
+    return [
+      if (labelled)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            ZSpace.gutter,
+            ZSpace.lg,
+            ZSpace.gutter,
+            ZSpace.xs,
+          ),
+          child: Text(
+            label.toUpperCase(),
+            key: Key('chats.section.${label.toLowerCase()}'),
+            style: context.text.labelMedium?.copyWith(
+              color: context.colors.textTertiary,
+            ),
+          ),
+        ),
+      for (final (index, chat) in chats.indexed) ...[
+        if (index > 0)
+          const Padding(padding: EdgeInsets.only(left: 92), child: Divider()),
+        ChatTile(chat, onTap: () => _open(context, chat.id)),
+      ],
+    ];
   }
 }
 

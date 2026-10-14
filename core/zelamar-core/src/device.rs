@@ -152,6 +152,9 @@ pub struct ChatSummary {
     pub last: Option<HistoryEntry>,
     /// Messages from others not yet read here, up to 99.
     pub unread: u32,
+    /// Someone else started it and the user has not answered yet: show it
+    /// as a request to accept or decline.
+    pub request: bool,
 }
 
 /// One Zelamar device: its keys and the chats it takes part in.
@@ -205,6 +208,7 @@ struct Pending {
     messages: Vec<(ChatId, StoredMessage)>,
     outbox: Vec<(EnvelopeId, Vec<u8>)>,
     confirmed: Vec<EnvelopeId>,
+    erased: Vec<ChatId>,
 }
 
 /// An outbox item: what to send, and the history record it advances.
@@ -507,6 +511,7 @@ impl Device {
                     members,
                     last: self.history(chat, None, 1)?.into_iter().next(),
                     unread: self.unread(chat)?,
+                    request: !self.introduced.contains(chat),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -919,6 +924,40 @@ impl Device {
         Ok(())
     }
 
+    /// Accepts a chat request: introduces this device there, so the people
+    /// in the chat learn its username and, from now on, get receipts.
+    /// Writing in the chat accepts it too.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::UnknownChat`], or a crypto, MLS or storage error.
+    pub fn accept_chat(&mut self, chat: &ChatId) -> Result<()> {
+        if !self.chats.contains_key(chat) {
+            return Err(CoreError::UnknownChat);
+        }
+        self.transact(|device| device.introduce(chat))
+    }
+
+    /// Removes `chat` from this device: its keys, its history, its marks.
+    /// Nobody is told; whatever still arrives for it is refused as a
+    /// message for an unknown chat. This is how a request is declined.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::UnknownChat`], or an MLS or storage error.
+    pub fn delete_chat(&mut self, chat: &ChatId) -> Result<()> {
+        self.transact(|device| {
+            let mut group = device.chats.remove(chat).ok_or(CoreError::UnknownChat)?;
+            group
+                .delete(device.provider.storage())
+                .map_err(|e| CoreError::mls("erasing a chat", e))?;
+            device.introduced.remove(chat);
+            device.read_marks.remove(chat);
+            device.pending.erased.push(chat.clone());
+            Ok(())
+        })
+    }
+
     /// Marks everything in `chat` as read here. In a chat the user has
     /// written in, the authors get a read receipt for their messages (the
     /// newest 256 at most). Returns how many messages that covered.
@@ -1189,6 +1228,7 @@ impl Device {
             .map(|(id, item)| (id.0, item))
             .collect();
         batch.outbox_deletes = pending.confirmed.iter().map(|id| id.0).collect();
+        batch.chat_deletes = pending.erased.iter().map(|chat| chat.0.clone()).collect();
         if batch.is_empty() {
             return Ok(());
         }
