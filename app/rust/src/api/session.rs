@@ -13,7 +13,7 @@ use base64::Engine as _;
 use zelamar_core::content::{AppMessage, Body, MessageId};
 use zelamar_core::device::{ChatId, ChatSummary, Device, Received};
 use zelamar_core::history::{HistoryEntry, SendStatus, StoredContent};
-use zelamar_core::identity::AccountKey;
+use zelamar_core::identity::{AccountKey, SafetyCode};
 use zelamar_core::service::{self, Request, CLAIM_WORK_BITS};
 use zelamar_core::store::MasterKey;
 use zelamar_core::CoreError;
@@ -276,6 +276,44 @@ impl Session {
     pub fn open(directory: String, master_key: Vec<u8>) -> Result<Self, SessionError> {
         let device = Device::open(&store_path(&directory), &master(&master_key)?)?;
         Ok(Self { device })
+    }
+
+    /// The account key's fingerprint, for "this is me" screens:
+    /// `a1b2 c3d4 e5f6 0718 9a0b c1d2 e3f4 0516`.
+    #[flutter_rust_bridge::frb(sync)]
+    #[must_use]
+    pub fn fingerprint(&self) -> String {
+        self.device.account().as_bytes()[..16]
+            .chunks(2)
+            .map(|pair| {
+                pair.iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// The 60-digit safety code with the one other person in `chat`, as
+    /// twelve groups of five digits; `None` in a chat with more people or
+    /// nobody else. Two people compare it to know no one sits between them.
+    pub fn safety_code(&self, chat: String) -> Result<Option<Vec<String>>, SessionError> {
+        let summary = self
+            .device
+            .chat_list()?
+            .into_iter()
+            .find(|summary| chat_key(&summary.chat) == chat)
+            .ok_or_else(|| failure("unknown_chat", "no such chat on this device"))?;
+        Ok(match summary.members.as_slice() {
+            [other] => Some(
+                SafetyCode::between(&self.device.account(), &other.account)
+                    .groups()
+                    .iter()
+                    .map(|group| format!("{group:05}"))
+                    .collect(),
+            ),
+            _ => None,
+        })
     }
 
     /// The username this account holds, once claimed.
@@ -901,6 +939,16 @@ mod tests {
         assert_eq!(bob.chats().expect("chats")[0].unread, 0);
 
         assert_eq!(alice.chats().expect("chats")[0].title, "@bob");
+        // Both sides see the same safety code.
+        let code = alice
+            .safety_code(chat.clone())
+            .expect("code")
+            .expect("one other person");
+        assert_eq!(code.len(), 12);
+        assert!(code.iter().all(|group| group.len() == 5));
+        assert_eq!(bob.safety_code(chat.clone()).expect("code"), Some(code));
+        assert_eq!(alice.fingerprint().len(), "a1b2 ".len() * 8 - 1);
+        assert_ne!(alice.fingerprint(), bob.fingerprint());
         alice.delete_chat(chat).expect("delete");
         assert!(alice.chats().expect("chats").is_empty());
     }

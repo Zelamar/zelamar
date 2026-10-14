@@ -77,6 +77,10 @@ abstract class Session implements RustOpaqueInterface {
     required String text,
   });
 
+  /// The account key's fingerprint, for "this is me" screens:
+  /// `a1b2 c3d4 e5f6 0718 9a0b c1d2 e3f4 0516`.
+  String fingerprint();
+
   /// How to read this device's mailbox.
   MailboxLink mailbox();
 
@@ -132,6 +136,11 @@ abstract class Session implements RustOpaqueInterface {
     required String to,
     required String text,
   });
+
+  /// The 60-digit safety code with the one other person in `chat`, as
+  /// twelve groups of five digits; `None` in a chat with more people or
+  /// nobody else. Two people compare it to know no one sits between them.
+  Future<List<String>?> safetyCode({required String chat});
 
   /// Writes `text` into `chat`. It goes out with the next
   /// [`Session::pending_sends`].

@@ -206,6 +206,42 @@ void main() {
     });
   });
 
+  group('you and your keys', () {
+    testWidgets('the profile shows the name and the key fingerprint', (
+      tester,
+    ) async {
+      await pumpApp(
+        tester,
+        messenger: FakeMessenger(
+          phaseValue: MessengerPhase.ready,
+          usernameValue: 'ada',
+        ),
+      );
+      await tester.tap(find.byKey(const Key('chats.profile')));
+      await tester.pumpAndSettle();
+      expect(find.text('@ada'), findsWidgets);
+      expect(find.byKey(const Key('profile.fingerprint')), findsOneWidget);
+      expect(find.textContaining('Zelamar 0.'), findsOneWidget);
+    });
+
+    testWidgets('a chat shows its 60-digit safety code', (tester) async {
+      final messenger = FakeMessenger(
+        phaseValue: MessengerPhase.ready,
+        usernameValue: 'ada',
+      )..addChat('c1', '@bob', messages: [view(1, 'Hi')]);
+      await pumpApp(tester, messenger: messenger);
+      await tester.tap(find.byKey(const Key('chats.tile.c1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('chat.menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('chat.safety')));
+      await tester.pumpAndSettle();
+      expect(find.text('Safety code with @bob'), findsOneWidget);
+      expect(find.text('12345'), findsOneWidget);
+      expect(find.text('12356'), findsOneWidget);
+    });
+  });
+
   group('a conversation', () {
     Future<FakeMessenger> openChat(WidgetTester tester) async {
       final yesterday = DateTime.now()

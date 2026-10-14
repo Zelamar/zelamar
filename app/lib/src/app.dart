@@ -45,6 +45,7 @@ class ZelamarApp extends StatelessWidget {
             MessengerPhase.ready => ChatsScreen(
               key: const Key('app.chats'),
               messenger: messenger,
+              startLab: startLab,
             ),
             MessengerPhase.failed => _Failure(
               messenger.failure?.code ?? '',

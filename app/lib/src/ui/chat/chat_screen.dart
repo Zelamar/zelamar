@@ -8,6 +8,7 @@ import 'package:zelamar/src/design/tokens.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/rust/api/session.dart';
 import 'package:zelamar/src/ui/avatar.dart';
+import 'package:zelamar/src/ui/chat/safety_code.dart';
 import 'package:zelamar/src/ui/words.dart';
 
 /// One conversation.
@@ -289,6 +290,21 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _safetyCode(String title) async {
+    try {
+      final groups = await widget.messenger.safetyCode(widget.chat);
+      if (groups != null && mounted) {
+        await showSafetyCode(context, title: title, groups: groups);
+      }
+    } on MessengerFailure catch (failure) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(describeFailure(failure.code))));
+      }
+    }
+  }
+
   void _cancelMode() {
     setState(() {
       if (_editing != null) {
@@ -331,6 +347,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 tooltip: 'More',
                 icon: Icon(Icons.more_horiz, color: colors.textSecondary),
                 itemBuilder: (_) => [
+                  PopupMenuItem<void>(
+                    key: const Key('chat.safety'),
+                    onTap: () => unawaited(_safetyCode(title)),
+                    child: const Text('Safety code'),
+                  ),
                   PopupMenuItem<void>(
                     key: const Key('chat.delete'),
                     onTap: () => unawaited(_delete(title, request: request)),

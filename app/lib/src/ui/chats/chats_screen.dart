@@ -2,18 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:zelamar/src/design/emblem.dart';
 import 'package:zelamar/src/design/theme.dart';
 import 'package:zelamar/src/design/tokens.dart';
+import 'package:zelamar/src/lab/lab_engine.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/rust/api/session.dart';
 import 'package:zelamar/src/ui/avatar.dart';
 import 'package:zelamar/src/ui/chat/chat_screen.dart';
 import 'package:zelamar/src/ui/chats/new_chat_sheet.dart';
+import 'package:zelamar/src/ui/profile/profile_screen.dart';
 import 'package:zelamar/src/ui/words.dart';
 
 /// Every conversation, most recent first.
 class ChatsScreen extends StatelessWidget {
-  const new({required this.messenger, super.key});
+  const new({required this.messenger, required this.startLab, super.key});
 
   final Messenger messenger;
+  final LabEngineFactory startLab;
 
   Future<void> _open(BuildContext context, String chat) =>
       Navigator.of(context).push(
@@ -77,6 +80,23 @@ class ChatsScreen extends StatelessWidget {
                           ],
                         ),
                       ),
+                      IconButton(
+                        key: const Key('chats.profile'),
+                        tooltip: 'You',
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => ProfileScreen(
+                              messenger: messenger,
+                              startLab: startLab,
+                            ),
+                          ),
+                        ),
+                        icon: Icon(
+                          Icons.person_outline,
+                          color: colors.textSecondary,
+                        ),
+                      ),
+                      const SizedBox(width: ZSpace.xs),
                       IconButton.filled(
                         key: const Key('chats.new'),
                         tooltip: 'New chat',

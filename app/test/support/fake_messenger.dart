@@ -33,6 +33,13 @@ class FakeMessenger extends Messenger {
   String? get username => usernameValue;
 
   @override
+  String? get fingerprint => 'a1b2 c3d4 e5f6 0718 9a0b c1d2 e3f4 0516';
+
+  @override
+  Future<List<String>?> safetyCode(String chat) async =>
+      List.generate(12, (i) => '${12345 + i}');
+
+  @override
   Link get link => linkValue;
 
   @override

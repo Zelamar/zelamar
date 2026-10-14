@@ -58,6 +58,9 @@ abstract class Messenger extends ChangeNotifier {
   /// The account's username, once claimed.
   String? get username;
 
+  /// The account key's fingerprint, once there is an account.
+  String? get fingerprint;
+
   Link get link;
 
   /// Every chat, most recently active first.
@@ -100,6 +103,10 @@ abstract class Messenger extends ChangeNotifier {
 
   /// Sets the user's reaction to a message; `null` removes it.
   Future<void> react(String chat, String target, String? reaction);
+
+  /// The safety code with the one other person in [chat], as twelve groups
+  /// of five digits; `null` when the chat has more people or nobody else.
+  Future<List<String>?> safetyCode(String chat);
 
   /// Marks [chat] as read. People who wrote there learn it only if the
   /// user has written in the chat too.

@@ -59,6 +59,9 @@ class LiveMessenger extends Messenger {
   String? get username => _username;
 
   @override
+  String? get fingerprint => _session?.fingerprint();
+
+  @override
   Link get link => _link;
 
   @override
@@ -186,6 +189,10 @@ class LiveMessenger extends Messenger {
         (session) =>
             session.react(chat: chat, target: target, reaction: reaction),
       );
+
+  @override
+  Future<List<String>?> safetyCode(String chat) =>
+      _guard(() => _ready.safetyCode(chat: chat));
 
   /// Runs a change to [chat] in the core, then shows it and sends it.
   Future<void> _changeChat(
