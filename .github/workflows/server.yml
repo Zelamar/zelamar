@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - "server/**"
+      - "protocol/vectors/**"
       - ".github/workflows/server.yml"
   push:
     branches: [main]
     paths:
       - "server/**"
+      - "protocol/vectors/**"
       - ".github/workflows/server.yml"
   workflow_dispatch:
 

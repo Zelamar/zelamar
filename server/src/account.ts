@@ -6,9 +6,9 @@
 import { DurableObject } from 'cloudflare:workers';
 
 import { buffer, fixedBase64Url, fromBase64Url, toBase64Url } from './bytes';
-import { decodeCertificate, verifyCertificate } from './certificate';
-import { fresh, requestPayload, sameBytes, sha256, verifyEd25519 } from './crypto';
+import { sameBytes, sha256 } from './crypto';
 import { failure, parseObject, type Reply } from './http';
+import { checkSignedRequest, type SignedBy, type SignedRequest } from './signed';
 
 /** Most devices one account may register. */
 export const MAX_DEVICES = 5;
@@ -19,16 +19,6 @@ export const MAX_KEY_PACKAGE_BYTES = 16 * 1024;
 
 export type AccountState = 'free' | 'same' | 'taken';
 export type ClaimOutcome = 'created' | 'same' | 'taken';
-
-/** The parts of a signed device request the account needs to check it. */
-export interface SignedRequest {
-  method: string;
-  path: string;
-  certificate: string | null;
-  timestamp: string | null;
-  signature: string | null;
-  body: ArrayBuffer;
-}
 
 export class Account extends DurableObject<Env> {
   /** Whether the name is free, already held by `key`, or held by someone else. */
@@ -163,44 +153,13 @@ export class Account extends DurableObject<Env> {
     return { status: 200, body: { account: toBase64Url(key), devices: found } };
   }
 
-  /** Checks a signed device request; on success returns the device and its certificate. */
-  private async authenticate(
-    device: string,
-    request: SignedRequest,
-  ): Promise<{ device: Uint8Array; certificate: Uint8Array } | Reply> {
+  /** Checks a signed device request against this account's key. */
+  private async authenticate(device: string, request: SignedRequest): Promise<SignedBy | Reply> {
     const key = this.accountKey();
     if (key === null) {
       return failure(404, 'unknown_account');
     }
-    const deviceId = fixedBase64Url(device, 16);
-    const certificateBytes = fromBase64Url(request.certificate ?? '');
-    const certificate = certificateBytes === null ? null : decodeCertificate(certificateBytes);
-    const signature = fixedBase64Url(request.signature, 64);
-    if (
-      deviceId === null ||
-      certificateBytes === null ||
-      certificate === null ||
-      signature === null ||
-      !sameBytes(certificate.account, key) ||
-      !sameBytes(certificate.device, deviceId) ||
-      !(await verifyCertificate(certificate))
-    ) {
-      return failure(401, 'unauthorized');
-    }
-    const timestamp = /^\d{1,16}$/u.test(request.timestamp ?? '') ? Number(request.timestamp) : NaN;
-    if (!fresh(timestamp, Date.now())) {
-      return failure(400, 'stale_request');
-    }
-    const payload = await requestPayload(
-      request.method,
-      request.path,
-      timestamp,
-      new Uint8Array(request.body),
-    );
-    if (!(await verifyEd25519(certificate.deviceKey, payload, signature))) {
-      return failure(401, 'unauthorized');
-    }
-    return { device: deviceId, certificate: certificateBytes };
+    return checkSignedRequest(request, key, device, Date.now());
   }
 
   /** Stores new key packages up to the limit; returns how many the device has. */

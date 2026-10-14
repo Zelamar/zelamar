@@ -47,7 +47,9 @@ const RESERVED = new Set([
 
 /** Lowercased `input` if it is a well-formed username, else `null`. */
 export function normalizeUsername(input: unknown): string | null {
-  if (typeof input !== 'string' || input.length < 3 || input.length > 32) {
+  // ASCII only, checked before lowercasing: Unicode lowercasing turns some
+  // letters (the Kelvin sign) into ASCII ones.
+  if (typeof input !== 'string' || !/^[A-Za-z0-9_]{3,32}$/u.test(input)) {
     return null;
   }
   const name = input.toLowerCase();

@@ -20,6 +20,18 @@ migration). Drafted in Phase 2 together with the core implementation.
 | [`directory.md`](directory.md) ✅ | `@username` registry, signed device requests, KeyPackage publication and retrieval |
 | `attachments.md` | Client-side encrypted files: upload, reference, expiry |
 
+## Test vectors
+
+[`vectors/v0.json`](vectors/v0.json) holds byte-exact examples written by the
+core (`ZELAMAR_WRITE_VECTORS=1 cargo test -p zelamar-core vectors`):
+- username rules;
+- a username claim;
+- a signed device request;
+- a delivery frame, an envelope and an acknowledgement.
+
+The core rebuilds them and the server's tests run them through its
+production checks. If the two sides disagree by one byte, CI fails.
+
 ## Invariants (already binding)
 
 1. The server never receives plaintext or the sender's identity, and never

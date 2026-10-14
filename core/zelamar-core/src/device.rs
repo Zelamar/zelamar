@@ -19,8 +19,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use openmls::prelude::{tls_codec::Deserialize as _, tls_codec::Serialize as _, *};
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_rust_crypto::OpenMlsRustCrypto;
-use openmls_traits::{OpenMlsProvider, random::OpenMlsRand};
+use openmls_traits::{OpenMlsProvider, random::OpenMlsRand, signatures::Signer};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use crate::content::{AppMessage, MessageId};
 use crate::envelope::{EnvelopeId, MailboxId};
@@ -46,6 +47,7 @@ const MAILBOX_EXTENSION: u16 = 0xF5A1;
 const RECORD_CERTIFICATE: &str = "device.certificate";
 const RECORD_ACCOUNT_KEY: &str = "account.key";
 const RECORD_MAILBOX: &str = "device.mailbox";
+const RECORD_MAILBOX_SECRET: &str = "device.mailbox_secret";
 const RECORD_CHATS: &str = "device.chats";
 
 /// Identifier of a chat: the MLS group id (16 random bytes).
@@ -120,6 +122,14 @@ pub enum Received {
         /// The chat it belongs to.
         chat: ChatId,
     },
+    /// Someone added this device to a chat. The app shows it as a chat
+    /// request until the user accepts it.
+    Joined {
+        /// The new chat.
+        chat: ChatId,
+        /// Who added this device, authenticated like any member.
+        by: Author,
+    },
 }
 
 /// One Zelamar device: its keys and the chats it takes part in.
@@ -133,6 +143,8 @@ pub struct Device {
     account_key: Option<AccountKey>,
     /// Where this device receives mail; published in every chat it is in.
     mailbox: MailboxId,
+    /// Proves to the delivery service that this device owns `mailbox`.
+    mailbox_secret: Zeroizing<[u8; 32]>,
     chats: HashMap<ChatId, MlsGroup>,
     store: Store,
     /// The MLS state exactly as it is on disk.
@@ -141,6 +153,14 @@ pub struct Device {
     persisted_chats: HashSet<ChatId>,
     /// History and outbox writes of the operation in progress.
     pending: Pending,
+}
+
+/// Freshly built key packages, TLS-encoded.
+pub(crate) struct KeyPackages {
+    /// Each used once, then gone.
+    pub(crate) one_time: Vec<Vec<u8>>,
+    /// Reused once the one-time ones run out.
+    pub(crate) last_resort: Option<Vec<u8>>,
 }
 
 /// Writes of the operation in progress, joined into its transaction.
@@ -201,11 +221,18 @@ impl Device {
 
         let account_key = AccountKey::from_secret_bytes(&account.to_secret_bytes()?)?;
         let mailbox = MailboxId::random()?;
+        let mailbox_secret = Zeroizing::new(
+            provider
+                .rand()
+                .random_array::<32>()
+                .map_err(|e| CoreError::crypto("drawing a mailbox secret", e))?,
+        );
         store.apply(&Batch {
             records: vec![
                 (RECORD_CERTIFICATE, certificate.encode()),
                 (RECORD_ACCOUNT_KEY, account.to_secret_bytes()?.to_vec()),
                 (RECORD_MAILBOX, mailbox.0.to_vec()),
+                (RECORD_MAILBOX_SECRET, mailbox_secret.to_vec()),
             ],
             ..Batch::default()
         })?;
@@ -217,6 +244,7 @@ impl Device {
             certificate,
             account_key: Some(account_key),
             mailbox,
+            mailbox_secret,
             chats: HashMap::new(),
             store,
             persisted: HashMap::new(),
@@ -253,6 +281,15 @@ impl Device {
                 .try_into()
                 .map_err(|_| CoreError::malformed("store", "device mailbox is malformed"))?,
         );
+        let mailbox_secret = Zeroizing::new(
+            <[u8; 32]>::try_from(
+                store
+                    .record(RECORD_MAILBOX_SECRET)?
+                    .ok_or(CoreError::malformed("store", "mailbox secret is missing"))?
+                    .as_slice(),
+            )
+            .map_err(|_| CoreError::malformed("store", "mailbox secret is malformed"))?,
+        );
         let chat_ids = decode_chat_list(&store.record(RECORD_CHATS)?.unwrap_or_default())?;
 
         let provider = OpenMlsRustCrypto::default();
@@ -282,6 +319,7 @@ impl Device {
             certificate,
             account_key,
             mailbox,
+            mailbox_secret,
             chats,
             store,
             persisted,
@@ -402,22 +440,63 @@ impl Device {
     /// [`CoreError::Mls`] if the `KeyPackage` cannot be built or encoded, or a
     /// storage error.
     pub fn key_package(&mut self) -> Result<Vec<u8>> {
+        self.transact(|device| device.build_key_package(false))
+    }
+
+    /// `count` one-time key packages and, when `last_resort` is set, one
+    /// more that stays usable after the one-time ones run out. All are built
+    /// in one unit of work.
+    pub(crate) fn key_packages(&mut self, count: usize, last_resort: bool) -> Result<KeyPackages> {
         self.transact(|device| {
-            let bundle = KeyPackage::builder()
-                .leaf_node_capabilities(capabilities())
-                .leaf_node_extensions(mailbox_extension(device.mailbox)?)
-                .build(
-                    CIPHERSUITE,
-                    &device.provider,
-                    &device.signer,
-                    device.credential.clone(),
-                )
-                .map_err(|e| CoreError::mls("building a key package", e))?;
-            bundle
-                .key_package()
-                .tls_serialize_detached()
-                .map_err(|e| CoreError::mls("encoding a key package", e))
+            Ok(KeyPackages {
+                one_time: (0..count)
+                    .map(|_| device.build_key_package(false))
+                    .collect::<Result<Vec<_>>>()?,
+                last_resort: last_resort
+                    .then(|| device.build_key_package(true))
+                    .transpose()?,
+            })
         })
+    }
+
+    fn build_key_package(&self, last_resort: bool) -> Result<Vec<u8>> {
+        let mut builder = KeyPackage::builder()
+            .leaf_node_capabilities(capabilities())
+            .leaf_node_extensions(mailbox_extension(self.mailbox)?);
+        if last_resort {
+            builder = builder.mark_as_last_resort();
+        }
+        let bundle = builder
+            .build(
+                CIPHERSUITE,
+                &self.provider,
+                &self.signer,
+                self.credential.clone(),
+            )
+            .map_err(|e| CoreError::mls("building a key package", e))?;
+        bundle
+            .key_package()
+            .tls_serialize_detached()
+            .map_err(|e| CoreError::mls("encoding a key package", e))
+    }
+
+    /// Signs a request to the delivery service with this device's key. Every
+    /// signed payload starts with its own context string
+    /// (`protocol/directory.md`), so it is never valid as anything else.
+    pub(crate) fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
+        self.signer
+            .sign(payload)
+            .map_err(|e| CoreError::crypto("signing a request", format!("{e:?}")))
+    }
+
+    /// This device's certificate.
+    pub(crate) const fn certificate(&self) -> &DeviceCertificate {
+        &self.certificate
+    }
+
+    /// The secret that opens this device's mailbox at the delivery service.
+    pub(crate) fn mailbox_secret(&self) -> &[u8; 32] {
+        &self.mailbox_secret
     }
 
     /// Starts a new chat with this device as its only member.
@@ -426,24 +505,66 @@ impl Device {
     ///
     /// A crypto, MLS or storage error if the chat cannot be created.
     pub fn create_chat(&mut self) -> Result<ChatId> {
+        self.transact(Self::new_chat)
+    }
+
+    /// Starts a chat with every device of `account` behind `key_packages`
+    /// (as the directory hands them out), in one commit.
+    ///
+    /// Each device must be certified by `account` itself, so the directory
+    /// cannot slip in someone else's device. Whether `account` is really the
+    /// person the user means is what safety codes confirm.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Unauthenticated`] for a device of another account,
+    /// [`CoreError::Malformed`] for no or broken key packages,
+    /// [`CoreError::Mls`] or a storage error.
+    pub fn start_chat(
+        &mut self,
+        account: AccountId,
+        key_packages: &[Vec<u8>],
+    ) -> Result<(ChatId, Invitation)> {
+        if key_packages.is_empty() {
+            return Err(CoreError::malformed("contact", "has no reachable device"));
+        }
         self.transact(|device| {
-            let group_id: [u8; 16] = device
-                .provider
-                .rand()
-                .random_array()
-                .map_err(|e| CoreError::crypto("drawing a chat id", e))?;
-            let group = MlsGroup::new_with_group_id(
-                &device.provider,
-                &device.signer,
-                &create_config(device.mailbox)?,
-                GroupId::from_slice(&group_id),
-                device.credential.clone(),
-            )
-            .map_err(|e| CoreError::mls("creating a chat", e))?;
-            let chat = ChatId::of(group.group_id());
-            device.chats.insert(chat.clone(), group);
-            Ok(chat)
+            let mut packages = Vec::with_capacity(key_packages.len());
+            let mut newcomers = Vec::with_capacity(key_packages.len());
+            for bytes in key_packages {
+                let key_package = device.validate_key_package(bytes)?;
+                let leaf = key_package.leaf_node();
+                newcomers.push(verify_leaf(leaf)?);
+                if certificate_of(leaf.credential())?.account() != account {
+                    return Err(CoreError::Unauthenticated(
+                        "a device does not belong to the contact",
+                    ));
+                }
+                packages.push(key_package);
+            }
+            let chat = device.new_chat()?;
+            let invitation = device.add(&chat, &packages, newcomers)?;
+            Ok((chat, invitation))
         })
+    }
+
+    fn new_chat(&mut self) -> Result<ChatId> {
+        let group_id: [u8; 16] = self
+            .provider
+            .rand()
+            .random_array()
+            .map_err(|e| CoreError::crypto("drawing a chat id", e))?;
+        let group = MlsGroup::new_with_group_id(
+            &self.provider,
+            &self.signer,
+            &create_config(self.mailbox)?,
+            GroupId::from_slice(&group_id),
+            self.credential.clone(),
+        )
+        .map_err(|e| CoreError::mls("creating a chat", e))?;
+        let chat = ChatId::of(group.group_id());
+        self.chats.insert(chat.clone(), group);
+        Ok(chat)
     }
 
     /// Adds the device behind `key_package` to `chat`, and queues the commit
@@ -458,42 +579,59 @@ impl Device {
     /// [`CoreError::Malformed`], [`CoreError::Mls`] or a storage error.
     pub fn invite(&mut self, chat: &ChatId, key_package: &[u8]) -> Result<Invitation> {
         self.transact(|device| {
-            let key_package = KeyPackageIn::tls_deserialize_exact(key_package)
-                .map_err(|_| CoreError::malformed("key package", "invalid encoding"))?
-                .validate(device.provider.crypto(), ProtocolVersion::Mls10)
-                .map_err(|e| CoreError::mls("validating a key package", e))?;
-            if key_package.ciphersuite() != CIPHERSUITE {
-                return Err(CoreError::malformed(
-                    "key package",
-                    "unsupported ciphersuite",
-                ));
-            }
+            let key_package = device.validate_key_package(key_package)?;
             let newcomer = verify_leaf(key_package.leaf_node())?;
-
-            let group = device.chats.get_mut(chat).ok_or(CoreError::UnknownChat)?;
-            let existing = recipients(group)?;
-            let (commit, welcome, _group_info) = group
-                .add_members(&device.provider, &device.signer, &[key_package])
-                .map_err(|e| CoreError::mls("adding a member", e))?;
-            group
-                .merge_pending_commit(&device.provider)
-                .map_err(|e| CoreError::mls("applying an invitation", e))?;
-            let invitation = Invitation {
-                commit: Outgoing {
-                    id: EnvelopeId::random()?,
-                    recipients: existing,
-                    payload: encode(&commit, "encoding a commit")?,
-                },
-                welcome: Outgoing {
-                    id: EnvelopeId::random()?,
-                    recipients: vec![newcomer],
-                    payload: encode(&welcome, "encoding a welcome")?,
-                },
-            };
-            device.queue(&invitation.commit, None)?;
-            device.queue(&invitation.welcome, None)?;
-            Ok(invitation)
+            device.add(chat, &[key_package], vec![newcomer])
         })
+    }
+
+    fn validate_key_package(&self, bytes: &[u8]) -> Result<KeyPackage> {
+        let key_package = KeyPackageIn::tls_deserialize_exact(bytes)
+            .map_err(|_| CoreError::malformed("key package", "invalid encoding"))?
+            .validate(self.provider.crypto(), ProtocolVersion::Mls10)
+            .map_err(|e| CoreError::mls("validating a key package", e))?;
+        if key_package.ciphersuite() != CIPHERSUITE {
+            return Err(CoreError::malformed(
+                "key package",
+                "unsupported ciphersuite",
+            ));
+        }
+        Ok(key_package)
+    }
+
+    /// Adds verified devices to `chat` in one commit and queues the commit
+    /// and the welcome.
+    fn add(
+        &mut self,
+        chat: &ChatId,
+        packages: &[KeyPackage],
+        mut newcomers: Vec<MailboxId>,
+    ) -> Result<Invitation> {
+        let group = self.chats.get_mut(chat).ok_or(CoreError::UnknownChat)?;
+        let existing = recipients(group)?;
+        let (commit, welcome, _group_info) = group
+            .add_members(&self.provider, &self.signer, packages)
+            .map_err(|e| CoreError::mls("adding a member", e))?;
+        group
+            .merge_pending_commit(&self.provider)
+            .map_err(|e| CoreError::mls("applying an invitation", e))?;
+        newcomers.sort_unstable();
+        newcomers.dedup();
+        let invitation = Invitation {
+            commit: Outgoing {
+                id: EnvelopeId::random()?,
+                recipients: existing,
+                payload: encode(&commit, "encoding a commit")?,
+            },
+            welcome: Outgoing {
+                id: EnvelopeId::random()?,
+                recipients: newcomers,
+                payload: encode(&welcome, "encoding a welcome")?,
+            },
+        };
+        self.queue(&invitation.commit, None)?;
+        self.queue(&invitation.welcome, None)?;
+        Ok(invitation)
     }
 
     /// Joins a chat from a welcome addressed to this device.
@@ -512,18 +650,37 @@ impl Device {
             let MlsMessageBodyIn::Welcome(welcome) = message.extract() else {
                 return Err(CoreError::malformed("welcome", "not a welcome message"));
             };
-            let staged =
-                StagedWelcome::new_from_welcome(&device.provider, &join_config(), welcome, None)
-                    .map_err(|e| CoreError::mls("reading a welcome", e))?;
-            let group = staged
-                .into_group(&device.provider)
-                .map_err(|e| CoreError::mls("joining a chat", e))?;
-            // A refusal rolls the stored group back with everything else.
-            verify_roster(&group)?;
-            let chat = ChatId::of(group.group_id());
-            device.chats.insert(chat.clone(), group);
-            Ok(chat)
+            device.join_welcome(welcome).map(|(chat, _)| chat)
         })
+    }
+
+    fn join_welcome(&mut self, welcome: Welcome) -> Result<(ChatId, Author)> {
+        let staged = StagedWelcome::new_from_welcome(&self.provider, &join_config(), welcome, None)
+            .map_err(|e| CoreError::mls("reading a welcome", e))?;
+        let chat = ChatId::of(staged.group_context().group_id());
+        if self.chats.contains_key(&chat) {
+            return Err(CoreError::malformed("welcome", "already in this chat"));
+        }
+        let inviter = certificate_of(
+            staged
+                .welcome_sender()
+                .map_err(|e| CoreError::mls("reading a welcome", e))?
+                .credential(),
+        )?;
+        let group = staged
+            .into_group(&self.provider)
+            .map_err(|e| CoreError::mls("joining a chat", e))?;
+        // Verifies the inviter too. A refusal rolls the stored group back
+        // with everything else.
+        verify_roster(&group)?;
+        self.chats.insert(chat.clone(), group);
+        Ok((
+            chat,
+            Author {
+                account: inviter.account(),
+                device: inviter.device(),
+            },
+        ))
     }
 
     /// Encrypts `message` for everyone else in `chat`, records it in history
@@ -561,7 +718,7 @@ impl Device {
     }
 
     /// Decrypts and authenticates an incoming MLS message, and folds it into
-    /// the chat's history.
+    /// the chat's history. A welcome joins the chat it invites to.
     ///
     /// # Errors
     ///
@@ -576,9 +733,15 @@ impl Device {
     fn receive_inner(&mut self, bytes: &[u8]) -> Result<Received> {
         let message = MlsMessageIn::tls_deserialize_exact(bytes)
             .map_err(|_| CoreError::malformed("MLS message", "invalid encoding"))?;
-        let protocol = message
-            .try_into_protocol_message()
-            .map_err(|_| CoreError::malformed("MLS message", "not a chat message"))?;
+        let protocol: ProtocolMessage = match message.extract() {
+            MlsMessageBodyIn::Welcome(welcome) => {
+                let (chat, by) = self.join_welcome(welcome)?;
+                return Ok(Received::Joined { chat, by });
+            }
+            MlsMessageBodyIn::PrivateMessage(message) => message.into(),
+            MlsMessageBodyIn::PublicMessage(message) => message.into(),
+            _ => return Err(CoreError::malformed("MLS message", "not a chat message")),
+        };
         let chat = ChatId::of(protocol.group_id());
         let group = self.chats.get_mut(&chat).ok_or(CoreError::UnknownChat)?;
         let processed = group
@@ -822,12 +985,15 @@ fn join_config() -> MlsGroupJoinConfig {
 }
 
 /// What every Zelamar leaf supports: the one ciphersuite, basic
-/// credentials, and the mailbox extension.
+/// credentials, the mailbox extension and last-resort key packages.
 fn capabilities() -> Capabilities {
     Capabilities::new(
         None,
         Some(&[CIPHERSUITE]),
-        Some(&[ExtensionType::Unknown(MAILBOX_EXTENSION)]),
+        Some(&[
+            ExtensionType::Unknown(MAILBOX_EXTENSION),
+            ExtensionType::LastResort,
+        ]),
         None,
         Some(&[CredentialType::Basic]),
     )

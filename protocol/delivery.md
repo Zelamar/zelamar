@@ -66,6 +66,25 @@ Errors: `400 malformed`, `413 too_large`, `429 rate_limited`.
 - One device may hold several connections. Each new envelope goes to all
   of them.
 
+## Client rules
+
+Implemented without I/O in `core/zelamar-core/src/service.rs`. The app only
+moves the bytes.
+
+1. **Sending.** Each outbox item goes out as one delivery frame. The item
+   is confirmed (removed from the outbox) once the service answers `202`.
+   On `429` or `5xx` the client retries later, in order.
+2. **Receiving.** The client opens each envelope from its mailbox: a message,
+   a chat update, or a welcome. A welcome joins the chat, which the app
+   shows as a chat request naming the inviter.
+3. **Acknowledging.** Every envelope is acknowledged, delivered or refused
+   for good, so a bad envelope never blocks the queue. The one exception is
+   a transient failure (the device's own storage), which leaves the
+   envelope for the next attempt.
+4. **Starting a chat.** The client starts a chat from a directory lookup
+   with all of the contact's devices. Every key package must be certified by
+   the looked-up account; otherwise nothing is created.
+
 ## Ordered commits
 
 See ADR-0012. Specified together with the core's pending-commit lifecycle.

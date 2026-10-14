@@ -7,13 +7,13 @@
  * sent a message.
  */
 import packageJson from '../package.json';
-import type { SignedRequest } from './account';
-import { buffer, concat, fixedBase64Url, toBase64Url, u64, utf8 } from './bytes';
-import { fresh, leadingZeroBits, sha256, verifyEd25519 } from './crypto';
+import { buffer, fixedBase64Url, toBase64Url } from './bytes';
+import { checkClaim } from './claim';
 import { decodeDelivery, encodeEnvelope, MAX_DELIVERY_FRAME } from './frames';
 import { failure, json, parseObject, readBody, respond, type Reply } from './http';
 import { inviteKey, inviteSerial } from './invite';
-import { isReserved, normalizeUsername } from './username';
+import type { SignedRequest } from './signed';
+import { normalizeUsername } from './username';
 
 export { Account, Invites } from './account';
 export { Mailbox } from './mailbox';
@@ -143,33 +143,11 @@ async function claim(request: Request, env: Env): Promise<Reply> {
   if (fields === null) {
     return failure(400, 'malformed');
   }
-  const username = normalizeUsername(fields.username);
-  if (username === null) {
-    return failure(400, 'invalid_username');
+  const checked = await checkClaim(fields, Number(env.WORK_BITS), Date.now());
+  if ('status' in checked) {
+    return checked;
   }
-  if (isReserved(username)) {
-    return failure(403, 'reserved');
-  }
-  const account = fixedBase64Url(fields.account, 32);
-  const work = fixedBase64Url(fields.work, 8);
-  const signature = fixedBase64Url(fields.signature, 64);
-  const timestamp = fields.timestamp;
-  if (account === null || work === null || signature === null || typeof timestamp !== 'number') {
-    return failure(400, 'malformed');
-  }
-  if (!fresh(timestamp, Date.now())) {
-    return failure(400, 'stale_request');
-  }
-  const name = utf8(username);
-  const nameField = concat(Uint8Array.of(name.length), name);
-  const proof = await sha256(concat(utf8('zelamar/work/v0'), account, nameField, work));
-  if (leadingZeroBits(proof) < Number(env.WORK_BITS)) {
-    return failure(400, 'insufficient_work');
-  }
-  const payload = concat(utf8('zelamar/claim/v0'), nameField, u64(timestamp), work);
-  if (!(await verifyEd25519(account, payload, signature))) {
-    return failure(401, 'bad_signature');
-  }
+  const { username, account } = checked;
 
   const holder = env.ACCOUNT.getByName(username);
   const state = await holder.state(buffer(account));
@@ -180,7 +158,7 @@ async function claim(request: Request, env: Env): Promise<Reply> {
     return failure(409, 'username_taken');
   }
   const key = inviteKey(env.INVITE_KEY);
-  const serial = key === null ? null : await inviteSerial(key, fields.invite);
+  const serial = key === null ? null : await inviteSerial(key, checked.invite);
   if (serial === null || !(await env.INVITES.getByName('beta').redeem(serial))) {
     return failure(403, 'invalid_invite');
   }

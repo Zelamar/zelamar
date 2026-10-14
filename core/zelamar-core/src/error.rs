@@ -102,9 +102,31 @@ pub enum CoreError {
     /// No device lives in this store yet; create one first.
     #[error("no device exists in this store")]
     NotInitialized,
+
+    /// The delivery service refused a request (`protocol/delivery.md`,
+    /// `protocol/directory.md`).
+    #[error("the service answered {status}: {code}")]
+    Service {
+        /// The HTTP status.
+        status: u16,
+        /// The stable error code, such as `username_taken`.
+        code: String,
+    },
 }
 
 impl CoreError {
+    /// Whether the same operation may succeed if retried later: the device's
+    /// storage hiccupped, or the service was busy or down. Everything else is
+    /// a permanent answer.
+    #[must_use]
+    pub const fn is_transient(&self) -> bool {
+        match self {
+            Self::Storage { .. } => true,
+            Self::Service { status, .. } => *status == 429 || *status >= 500,
+            _ => false,
+        }
+    }
+
     pub(crate) fn crypto(context: &'static str, source: impl Into<Source>) -> Self {
         Self::Crypto {
             context,

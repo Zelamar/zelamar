@@ -34,6 +34,13 @@ const ED25519_SIGNATURE_LEN: usize = 64;
 pub struct AccountId(#[serde(with = "serde_bytes")] [u8; ED25519_PUBLIC_KEY_LEN]);
 
 impl AccountId {
+    /// The account with public key `bytes`. Whether such an account exists,
+    /// or signs anything, is checked wherever its signatures are verified.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; ED25519_PUBLIC_KEY_LEN]) -> Self {
+        Self(bytes)
+    }
+
     /// The raw public key bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; ED25519_PUBLIC_KEY_LEN] {
@@ -126,6 +133,16 @@ impl AccountKey {
                 CoreError::malformed("account key", "unexpected public key length")
             })?);
         Ok(Self { keys, id })
+    }
+
+    /// Signs a Zelamar protocol payload with the account key. Every such
+    /// payload starts with its own context string (for example
+    /// `zelamar/claim/v0`), so a signature for one purpose never verifies as
+    /// another.
+    pub(crate) fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
+        self.keys
+            .sign(payload)
+            .map_err(|e| CoreError::crypto("signing with the account key", format!("{e:?}")))
     }
 
     /// Issues a certificate binding `device_signature_key` to this account.

@@ -12,6 +12,7 @@
 //! - [`device`]: a device as a member of MLS chats;
 //! - [`content`]: what travels inside a message;
 //! - [`envelope`]: the transport-agnostic wire unit;
+//! - [`service`]: requests to and answers from the delivery service, without I/O;
 //! - [`history`]: the local history of each chat;
 //! - [`store`]: encrypted persistence of a device.
 
@@ -21,6 +22,7 @@ pub mod envelope;
 pub mod error;
 pub mod history;
 pub mod identity;
+pub mod service;
 pub mod store;
 
 pub use error::{CoreError, Result};
