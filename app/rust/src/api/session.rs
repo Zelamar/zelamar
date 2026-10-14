@@ -174,6 +174,8 @@ pub struct ChatPreview {
     /// Whether the directory confirmed every name in the title.
     pub verified: bool,
     pub last: Option<MessageView>,
+    /// Messages from others not yet read, up to 99.
+    pub unread: u32,
 }
 
 /// One device of one account, stored encrypted in a directory.
@@ -387,6 +389,15 @@ impl Session {
         Ok(self.device.confirm_contact(&entry)?)
     }
 
+    /// Marks `chat` as read; in a chat the user has written in, the authors
+    /// get a read receipt (it goes out with the next
+    /// [`Session::pending_sends`]). Returns how many messages it covered.
+    pub fn mark_read(&mut self, chat: String) -> Result<u32, SessionError> {
+        let chat = self.find_chat(&chat)?;
+        let count = self.device.mark_read(&chat)?;
+        Ok(u32::try_from(count).unwrap_or(u32::MAX))
+    }
+
     /// Every chat, most recently active first.
     pub fn chats(&self) -> Result<Vec<ChatPreview>, SessionError> {
         Ok(self
@@ -469,6 +480,7 @@ fn preview(summary: &ChatSummary) -> ChatPreview {
         title,
         verified: !summary.members.is_empty() && summary.members.iter().all(|m| m.verified),
         last: summary.last.as_ref().map(message_view),
+        unread: summary.unread,
     }
 }
 
@@ -670,6 +682,9 @@ mod tests {
         let last = after[0].last.clone().expect("last message");
         assert_eq!(last.text, "Hello Bob");
         assert!(!last.outgoing);
+        assert_eq!(after[0].unread, 1);
+        assert_eq!(bob.mark_read(chat.clone()).expect("read"), 1);
+        assert_eq!(bob.chats().expect("chats")[0].unread, 0);
 
         assert_eq!(alice.chats().expect("chats")[0].title, "@bob");
     }

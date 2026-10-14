@@ -105,6 +105,7 @@ void main() {
           '@carol',
           verified: false,
           messages: [view(1, 'Hi Ada')],
+          unread: 3,
         );
       await pumpApp(tester, messenger: messenger);
 
@@ -113,6 +114,16 @@ void main() {
       expect(find.text('@carol'), findsOneWidget);
       expect(find.text('Hi Ada'), findsOneWidget);
       expect(find.text('unconfirmed'), findsOneWidget);
+      expect(find.byKey(const Key('chats.unread')), findsOneWidget);
+      expect(find.text('3'), findsOneWidget);
+
+      // Opening the chat reads it; the badge is gone on the way back.
+      await tester.tap(find.byKey(const Key('chats.tile.c2')));
+      await tester.pumpAndSettle();
+      expect(messenger.read, contains('c2'));
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('chats.unread')), findsNothing);
     });
 
     testWidgets('a new chat by exact name opens the conversation', (

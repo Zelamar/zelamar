@@ -150,6 +150,7 @@ class ChatTile extends StatelessWidget {
     final colors = context.colors;
     final text = context.text;
     final last = chat.last;
+    final unread = chat.unread > 0;
     return InkWell(
       key: Key('chats.tile.${chat.id}'),
       onTap: onTap,
@@ -187,20 +188,67 @@ class ChatTile extends StatelessWidget {
                       ],
                       const Spacer(),
                       if (last != null)
-                        Text(listTime(last.sentAtMs), style: text.labelSmall),
+                        Text(
+                          listTime(last.sentAtMs),
+                          style: text.labelSmall?.copyWith(
+                            color: unread ? colors.accent : null,
+                          ),
+                        ),
                     ],
                   ),
                   const SizedBox(height: ZSpace.xs),
-                  Text(
-                    preview(last),
-                    style: text.bodyMedium,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          preview(last),
+                          style: text.bodyMedium?.copyWith(
+                            color: unread ? colors.textPrimary : null,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (unread) ...[
+                        const SizedBox(width: ZSpace.sm),
+                        UnreadBadge(chat.unread),
+                      ],
+                    ],
                   ),
                 ],
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A bronze pill with the number of unread messages.
+class UnreadBadge extends StatelessWidget {
+  const new(this.count, {super.key});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Container(
+      key: const Key('chats.unread'),
+      constraints: const BoxConstraints(minWidth: 20),
+      height: 20,
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: colors.accent,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        count >= 99 ? '99+' : '$count',
+        style: context.text.labelSmall?.copyWith(
+          color: colors.onAccent,
+          fontWeight: FontWeight.w600,
         ),
       ),
     );

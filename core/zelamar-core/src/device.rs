@@ -12,7 +12,7 @@
 //! one transaction; on failure the in-memory state is rolled back to the last
 //! persisted state, so a device is never left half-way through a change.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 use crate::contacts::{self, Contact, Contacts};
-use crate::content::{AppMessage, Body, MessageId};
+use crate::content::{AppMessage, Body, MAX_RECEIPT_IDS, MessageId, ReceiptStatus};
 use crate::envelope::{EnvelopeId, MailboxId};
 use crate::error::{CoreError, Result};
 use crate::history::{self, HistoryEntry, HistoryReader, SendStatus, StoredMessage};
@@ -54,6 +54,10 @@ const RECORD_CHATS: &str = "device.chats";
 const RECORD_USERNAME: &str = "account.username";
 const RECORD_CONTACTS: &str = "device.contacts";
 const RECORD_INTRODUCED: &str = "device.introduced";
+const RECORD_READ_MARKS: &str = "device.read_marks";
+
+/// Unread counts stop at this many; the app shows "99+".
+const UNREAD_CAP: u32 = 99;
 
 /// Identifier of a chat: the MLS group id (16 random bytes).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -146,6 +150,8 @@ pub struct ChatSummary {
     pub members: Vec<Contact>,
     /// Its newest message, if any.
     pub last: Option<HistoryEntry>,
+    /// Messages from others not yet read here, up to 99.
+    pub unread: u32,
 }
 
 /// One Zelamar device: its keys and the chats it takes part in.
@@ -175,8 +181,14 @@ pub struct Device {
     contacts: Contacts,
     persisted_contacts: Contacts,
     /// Chats this device has sent its profile to, in memory and as on disk.
+    /// Only these get receipts: until the user writes in a chat, the people
+    /// there learn nothing, not even that a message arrived.
     introduced: BTreeSet<ChatId>,
     persisted_introduced: BTreeSet<ChatId>,
+    /// Per chat, the newest history position the user has seen, in memory
+    /// and as on disk.
+    read_marks: BTreeMap<ChatId, i64>,
+    persisted_read_marks: BTreeMap<ChatId, i64>,
 }
 
 /// Freshly built key packages, TLS-encoded.
@@ -279,6 +291,8 @@ impl Device {
             persisted_contacts: Contacts::new(),
             introduced: BTreeSet::new(),
             persisted_introduced: BTreeSet::new(),
+            read_marks: BTreeMap::new(),
+            persisted_read_marks: BTreeMap::new(),
         };
         device.persist()?;
         Ok(device)
@@ -336,6 +350,11 @@ impl Device {
             decode_chat_list(&store.record(RECORD_INTRODUCED)?.unwrap_or_default())?
                 .into_iter()
                 .collect();
+        let read_marks = store
+            .record(RECORD_READ_MARKS)?
+            .map(|bytes| decode_read_marks(&bytes))
+            .transpose()?
+            .unwrap_or_default();
 
         let provider = OpenMlsRustCrypto::default();
         let persisted = store.load_mls_state()?;
@@ -375,6 +394,8 @@ impl Device {
             contacts,
             persisted_introduced: introduced.clone(),
             introduced,
+            persisted_read_marks: read_marks.clone(),
+            read_marks,
         })
     }
 
@@ -485,6 +506,7 @@ impl Device {
                     chat: chat.clone(),
                     members,
                     last: self.history(chat, None, 1)?.into_iter().next(),
+                    unread: self.unread(chat)?,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -881,6 +903,67 @@ impl Device {
         Ok(outgoing)
     }
 
+    /// Sends a receipt for `messages` into `chat`.
+    fn acknowledge(
+        &mut self,
+        chat: &ChatId,
+        status: ReceiptStatus,
+        messages: Vec<MessageId>,
+    ) -> Result<()> {
+        let receipt = AppMessage::new(
+            MessageId::random()?,
+            now_ms(),
+            Body::Receipt { status, messages },
+        );
+        self.send_now(chat, &receipt, &receipt.encode()?)?;
+        Ok(())
+    }
+
+    /// Marks everything in `chat` as read here. In a chat the user has
+    /// written in, the authors get a read receipt for their messages (the
+    /// newest 256 at most). Returns how many messages that covered.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::UnknownChat`], or a crypto, MLS or storage error.
+    pub fn mark_read(&mut self, chat: &ChatId) -> Result<usize> {
+        let mark = self.read_marks.get(chat).copied().unwrap_or(0);
+        let newest = self.history(chat, None, u32::try_from(MAX_RECEIPT_IDS).unwrap_or(256))?;
+        let Some(top) = newest.first().map(|entry| entry.seq) else {
+            return Ok(0);
+        };
+        if top <= mark {
+            return Ok(0);
+        }
+        let unread: Vec<MessageId> = newest
+            .iter()
+            .take_while(|entry| entry.seq > mark)
+            .filter(|entry| !entry.message.outgoing && !entry.message.deleted)
+            .map(|entry| entry.message.id)
+            .collect();
+        let count = unread.len();
+        self.transact(|device| {
+            if device.introduced.contains(chat) && !unread.is_empty() {
+                device.acknowledge(chat, ReceiptStatus::Read, unread)?;
+            }
+            device.read_marks.insert(chat.clone(), top);
+            Ok(())
+        })?;
+        Ok(count)
+    }
+
+    /// Messages from others in `chat` past its read mark, up to the cap.
+    fn unread(&self, chat: &ChatId) -> Result<u32> {
+        let mark = self.read_marks.get(chat).copied().unwrap_or(0);
+        let count = self
+            .history(chat, None, UNREAD_CAP + 1)?
+            .iter()
+            .take_while(|entry| entry.seq > mark)
+            .filter(|entry| !entry.message.outgoing && !entry.message.deleted)
+            .count();
+        Ok(u32::try_from(count).unwrap_or(UNREAD_CAP).min(UNREAD_CAP))
+    }
+
     /// Sends this device's profile into `chat`, once, before its first
     /// message there, so the others learn which username it goes by.
     fn introduce(&mut self, chat: &ChatId) -> Result<()> {
@@ -941,6 +1024,12 @@ impl Device {
                     && author.account != self.account()
                 {
                     contacts::claimed(&mut self.contacts, author.account, username);
+                }
+                if history::inserts(&message.body)
+                    && author.account != self.account()
+                    && self.introduced.contains(&chat)
+                {
+                    self.acknowledge(&chat, ReceiptStatus::Delivered, vec![message.id])?;
                 }
                 Ok(Received::Message {
                     chat,
@@ -1077,6 +1166,11 @@ impl Device {
                 .records
                 .push((RECORD_CONTACTS, contacts::encode(&self.contacts)?));
         }
+        if self.read_marks != self.persisted_read_marks {
+            batch
+                .records
+                .push((RECORD_READ_MARKS, encode_read_marks(&self.read_marks)?));
+        }
         if self.introduced != self.persisted_introduced {
             let introduced: HashSet<ChatId> = self.introduced.iter().cloned().collect();
             batch
@@ -1109,6 +1203,7 @@ impl Device {
         self.persisted_chats = chats;
         self.persisted_contacts.clone_from(&self.contacts);
         self.persisted_introduced.clone_from(&self.introduced);
+        self.persisted_read_marks.clone_from(&self.read_marks);
         Ok(())
     }
 
@@ -1124,6 +1219,7 @@ impl Device {
         self.pending = Pending::default();
         self.contacts.clone_from(&self.persisted_contacts);
         self.introduced.clone_from(&self.persisted_introduced);
+        self.read_marks.clone_from(&self.persisted_read_marks);
         Ok(())
     }
 }
@@ -1231,6 +1327,24 @@ fn load_chats(
             Ok((chat.clone(), group))
         })
         .collect()
+}
+
+/// Read marks record: CBOR list of `(chat, seq)`.
+fn encode_read_marks(marks: &BTreeMap<ChatId, i64>) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    ciborium::into_writer(&marks.iter().collect::<Vec<_>>(), &mut out).map_err(|e| {
+        CoreError::Encoding {
+            what: "read marks",
+            source: e.into(),
+        }
+    })?;
+    Ok(out)
+}
+
+fn decode_read_marks(bytes: &[u8]) -> Result<BTreeMap<ChatId, i64>> {
+    let list: Vec<(ChatId, i64)> = ciborium::from_reader(bytes)
+        .map_err(|_| CoreError::malformed("read marks", "invalid encoding"))?;
+    Ok(list.into_iter().collect())
 }
 
 /// Chat list record: a sequence of `u8 length || id`.

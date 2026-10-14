@@ -75,6 +75,7 @@ class FakeMessenger extends Messenger {
     String title, {
     bool verified = true,
     List<MessageView> messages = const [],
+    int unread = 0,
   }) {
     conversations[id] = [...messages];
     _chats[id] = ChatPreview(
@@ -82,6 +83,7 @@ class FakeMessenger extends Messenger {
       title: title,
       verified: verified,
       last: messages.firstOrNull,
+      unread: unread,
     );
     notifyListeners();
   }
@@ -123,9 +125,29 @@ class FakeMessenger extends Messenger {
       title: preview.title,
       verified: preview.verified,
       last: message,
+      unread: preview.unread,
     );
     _changes.add(chat);
     notifyListeners();
+  }
+
+  /// Chats marked read, in order.
+  final read = <String>[];
+
+  @override
+  Future<void> markRead(String chat) async {
+    read.add(chat);
+    final preview = _chats[chat];
+    if (preview != null && preview.unread > 0) {
+      _chats[chat] = ChatPreview(
+        id: chat,
+        title: preview.title,
+        verified: preview.verified,
+        last: preview.last,
+        unread: 0,
+      );
+      notifyListeners();
+    }
   }
 
   @override

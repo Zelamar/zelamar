@@ -62,6 +62,11 @@ abstract class Session implements RustOpaqueInterface {
   /// How to read this device's mailbox.
   MailboxLink mailbox();
 
+  /// Marks `chat` as read; in a chat the user has written in, the authors
+  /// get a read receipt (it goes out with the next
+  /// [`Session::pending_sends`]). Returns how many messages it covered.
+  Future<int> markRead({required String chat});
+
   /// Up to `limit` messages of `chat`, newest first, older than `before`
   /// when given.
   Future<List<MessageView>> messages({
@@ -132,16 +137,24 @@ class ChatPreview {
   final bool verified;
   final MessageView? last;
 
+  /// Messages from others not yet read, up to 99.
+  final int unread;
+
   const ChatPreview({
     required this.id,
     required this.title,
     required this.verified,
     this.last,
+    required this.unread,
   });
 
   @override
   int get hashCode =>
-      id.hashCode ^ title.hashCode ^ verified.hashCode ^ last.hashCode;
+      id.hashCode ^
+      title.hashCode ^
+      verified.hashCode ^
+      last.hashCode ^
+      unread.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -151,7 +164,8 @@ class ChatPreview {
           id == other.id &&
           title == other.title &&
           verified == other.verified &&
-          last == other.last;
+          last == other.last &&
+          unread == other.unread;
 }
 
 /// An HTTP request for the delivery service, ready to send as is.

@@ -410,3 +410,51 @@ fn an_envelope_for_another_mailbox_is_refused_but_acknowledged() {
     assert!(service::lookup("no").is_err());
     assert_eq!(b64(b"x"), "eA");
 }
+
+#[test]
+fn receipts_flow_only_once_the_user_has_written_in_the_chat() {
+    let mut service = Service::default();
+    let mut alice = Person::join(&mut service, "alice");
+    let mut bob = Person::join(&mut service, "bob");
+    let status = |person: &Person, chat: &ChatId| {
+        person.device.history(chat, None, 1).expect("history")[0]
+            .message
+            .clone()
+    };
+
+    let chat = alice.start_chat_with(&mut service, "bob");
+    alice.device.send(&chat, &text(1, "Hi Bob")).expect("send");
+    alice.flush(&mut service);
+    bob.read(&mut service);
+
+    // Bob has not answered: reading tells Alice nothing.
+    assert_eq!(bob.device.chat_list().expect("list")[0].unread, 1);
+    assert_eq!(bob.device.mark_read(&chat).expect("read"), 1);
+    assert_eq!(bob.device.chat_list().expect("list")[0].unread, 0);
+    bob.flush(&mut service);
+    assert!(
+        alice.read(&mut service).is_empty(),
+        "no receipt from a stranger"
+    );
+    assert_eq!(status(&alice, &chat).delivered_to, Vec::new());
+
+    // Once Bob writes back, receipts flow both ways.
+    bob.device.send(&chat, &text(2, "Hi Alice")).expect("reply");
+    bob.flush(&mut service);
+    alice.read(&mut service);
+    alice.flush(&mut service);
+    bob.read(&mut service);
+    assert_eq!(status(&bob, &chat).delivered_to, vec![alice.account.id()]);
+
+    assert_eq!(alice.device.mark_read(&chat).expect("read"), 1);
+    alice.flush(&mut service);
+    bob.read(&mut service);
+    assert_eq!(status(&bob, &chat).read_by, vec![alice.account.id()]);
+
+    alice.device.send(&chat, &text(3, "Dinner?")).expect("send");
+    alice.flush(&mut service);
+    bob.read(&mut service);
+    bob.flush(&mut service);
+    alice.read(&mut service);
+    assert_eq!(status(&alice, &chat).delivered_to, vec![bob.account.id()]);
+}

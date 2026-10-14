@@ -88,4 +88,8 @@ abstract class Messenger extends ChangeNotifier {
 
   /// Sends [text] into [chat].
   Future<void> sendText(String chat, String text);
+
+  /// Marks [chat] as read. People who wrote there learn it only if the
+  /// user has written in the chat too.
+  Future<void> markRead(String chat);
 }

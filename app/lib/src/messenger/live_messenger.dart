@@ -144,6 +144,15 @@ class LiveMessenger extends Messenger {
   });
 
   @override
+  Future<void> markRead(String chat) => _guard(() async {
+    final covered = await _ready.markRead(chat: chat);
+    if (covered > 0) {
+      await _refreshChats(null);
+      unawaited(_flush());
+    }
+  });
+
+  @override
   void dispose() {
     _closed = true;
     _retry?.cancel();

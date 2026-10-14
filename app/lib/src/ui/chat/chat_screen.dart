@@ -23,7 +23,7 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   static const _page = 60;
 
   List<MessageView> _messages = const [];
@@ -34,6 +34,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _changes = widget.messenger.chatChanged.listen((chat) {
       if (chat == null || chat == widget.chat) {
         unawaited(_reload());
@@ -44,8 +45,32 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     unawaited(_changes?.cancel());
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_markRead());
+    }
+  }
+
+  /// Marks the chat read while the user can actually see it.
+  Future<void> _markRead() async {
+    final visible = switch (WidgetsBinding.instance.lifecycleState) {
+      null || AppLifecycleState.resumed => true,
+      _ => false,
+    };
+    if (!visible || !_messages.any((message) => !message.outgoing)) {
+      return;
+    }
+    try {
+      await widget.messenger.markRead(widget.chat);
+    } on MessengerFailure {
+      // The next change tries again.
+    }
   }
 
   /// Reloads at least the messages already shown, newest first.
@@ -61,6 +86,7 @@ class _ChatScreenState extends State<ChatScreen> {
           _messages = messages;
           _complete = messages.length < limit;
         });
+        unawaited(_markRead());
       }
     } on MessengerFailure {
       // Keep what is shown; the next change tries again.

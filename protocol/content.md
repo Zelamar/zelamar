@@ -35,7 +35,16 @@ A device sends its `profile` once per chat:
 - when it starts the chat;
 - in a chat it was invited to, right before its own first message there.
 
-So someone who declines a chat request reveals nothing. The username in a
+So someone who declines a chat request reveals nothing.
+
+A device sends receipts only in chats it has introduced itself in, that is,
+chats the user started or wrote in:
+- a `delivered` receipt as each `text`, `reply` or unknown kind arrives from
+  someone else;
+- a `read` receipt (the newest 256 at most) when the user sees the chat.
+
+Until the user writes, a stranger learns nothing, not even that a message
+arrived. The username in a
 profile is only a claim. Receivers show it as confirmed only after the
 directory (`GET /v0/accounts/{username}/key`) names the same account.
 
