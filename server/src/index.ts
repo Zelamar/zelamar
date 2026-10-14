@@ -9,13 +9,21 @@
 import packageJson from '../package.json';
 import { buffer, fixedBase64Url, toBase64Url } from './bytes';
 import { checkClaim } from './claim';
-import { decodeDelivery, encodeEnvelope, MAX_DELIVERY_FRAME } from './frames';
+import {
+  decodeCommit,
+  decodeDelivery,
+  type Delivery,
+  encodeEnvelope,
+  MAX_COMMIT_FRAME,
+  MAX_DELIVERY_FRAME,
+} from './frames';
 import { failure, json, parseObject, readBody, respond, type Reply } from './http';
 import { inviteKey, inviteSerial } from './invite';
 import type { SignedRequest } from './signed';
 import { normalizeUsername } from './username';
 
 export { Account, Invites } from './account';
+export { Group } from './group';
 export { Mailbox } from './mailbox';
 
 const SERVICE_NAME = 'zelamar';
@@ -52,6 +60,9 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   if (resource === 'deliver' && parts.length === 2) {
     return only(request, 'POST') ?? respond(await deliver(request, env));
+  }
+  if (resource === 'groups' && name !== undefined && sub === 'commits' && parts.length === 4) {
+    return only(request, 'POST') ?? respond(await commit(request, env, name));
   }
   if (resource === 'mailboxes' && name !== undefined && parts.length === 3) {
     return only(request, 'GET') ?? mailbox(request, env, name);
@@ -112,14 +123,19 @@ async function deliver(request: Request, env: Env): Promise<Reply> {
     return failure(413, 'too_large');
   }
 
+  return { status: 202, body: { delivered: await fanOut(env, frame) } };
+}
+
+/** Puts one envelope per recipient into their mailboxes; returns how many took it. */
+async function fanOut(env: Env, delivery: Delivery): Promise<number> {
   let delivered = 0;
-  for (let at = 0; at < frame.recipients.length; at += FAN_OUT_BATCH) {
-    const batch = frame.recipients.slice(at, at + FAN_OUT_BATCH);
+  for (let at = 0; at < delivery.recipients.length; at += FAN_OUT_BATCH) {
+    const batch = delivery.recipients.slice(at, at + FAN_OUT_BATCH);
     const outcomes = await Promise.all(
       batch.map((recipient) =>
         env.MAILBOX.getByName(toBase64Url(recipient)).deposit(
-          buffer(frame.id),
-          buffer(encodeEnvelope(frame.id, recipient, frame.payload)),
+          buffer(delivery.id),
+          buffer(encodeEnvelope(delivery.id, recipient, delivery.payload)),
         ),
       ),
     );
@@ -127,7 +143,37 @@ async function deliver(request: Request, env: Env): Promise<Reply> {
       (outcome) => outcome === 'queued' || outcome === 'duplicate',
     ).length;
   }
-  return { status: 202, body: { delivered } };
+  return delivered;
+}
+
+/** A commit through its chat's sequencer: the first one for an epoch wins. */
+async function commit(request: Request, env: Env, group: string): Promise<Reply> {
+  if (fixedBase64Url(group, 16) === null) {
+    return failure(404, 'unknown_group');
+  }
+  if (!(await allowed(env.DELIVER_LIMITER, request))) {
+    return failure(429, 'rate_limited');
+  }
+  const body = await readBody(request, MAX_COMMIT_FRAME);
+  if (body === null) {
+    return failure(413, 'too_large');
+  }
+  const frame = decodeCommit(body);
+  if (frame === 'malformed') {
+    return failure(400, 'malformed');
+  }
+  if (frame === 'too_large') {
+    return failure(413, 'too_large');
+  }
+  const advance = await env.GROUP.getByName(group).advance(frame.epoch, buffer(frame.commit.id));
+  if (advance.outcome === 'mismatch') {
+    return { status: 409, body: { error: 'epoch_mismatch', epoch: advance.epoch } };
+  }
+  // The commit first, then the welcome: newcomers can only use a welcome
+  // once the others are in the new epoch.
+  const delivered = await fanOut(env, frame.commit);
+  const welcomed = frame.welcome === null ? 0 : await fanOut(env, frame.welcome);
+  return { status: 202, body: { epoch: advance.epoch, delivered, welcomed } };
 }
 
 function mailbox(request: Request, env: Env, name: string): Promise<Response> | Response {

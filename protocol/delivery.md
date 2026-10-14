@@ -87,4 +87,28 @@ moves the bytes.
 
 ## Ordered commits
 
-See ADR-0012. Specified together with the core's pending-commit lifecycle.
+MLS breaks if two members commit in the same epoch and each applies their
+own. Every commit that others must apply therefore goes through its chat's
+sequencer: `POST /v0/groups/{group}/commits`, where `{group}` is the MLS
+group id (16 bytes, base64url). The body is a **commit frame**:
+
+| Size | Field |
+|---|---|
+| 2 | magic `ZC` (`0x5A 0x43`) |
+| 1 | version `0` |
+| 8 | the epoch the commit was made in |
+| … | a delivery frame with the commit for the current members (it may have no recipients) |
+| … | optionally, a delivery frame with the welcome for added members |
+
+The sequencer keeps only the chat's current epoch and the last winning
+commit's id. It does not keep members or content.
+
+| Request | Answer |
+|---|---|
+| The first commit for the current epoch, or the first ever for this chat | `202 {"epoch": <new>, "delivered": k, "welcomed": w}`; the commit, then the welcome, go out |
+| The winning commit again (a retry) | `202` again, delivered once (envelopes are idempotent) |
+| Any other commit | `409 {"error": "epoch_mismatch", "epoch": <current>}` |
+
+A device applies its own commit only after the `202`. After a `409`, it
+drops the commit, applies the winning one from its mailbox, and retries if
+it still needs to.

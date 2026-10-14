@@ -13,9 +13,13 @@
       { "name": "ACCOUNT", "class_name": "Account" },
       { "name": "MAILBOX", "class_name": "Mailbox" },
       { "name": "INVITES", "class_name": "Invites" },
+      { "name": "GROUP", "class_name": "Group" },
     ],
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Account", "Mailbox", "Invites"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Account", "Mailbox", "Invites"] },
+    { "tag": "v2", "new_sqlite_classes": ["Group"] },
+  ],
   // Proof-of-work difficulty for claiming a username (protocol/directory.md).
   // INVITE_KEY (hex, 32+ bytes) is a secret: `wrangler secret put INVITE_KEY`.
   "vars": { "WORK_BITS": "21" },
