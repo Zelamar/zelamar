@@ -10,12 +10,14 @@
 //! Modules:
 //! - [`identity`]: account keys and device certificates;
 //! - [`device`]: a device as a member of MLS chats;
+//! - [`contacts`]: who is who, and which usernames are confirmed;
 //! - [`content`]: what travels inside a message;
 //! - [`envelope`]: the transport-agnostic wire unit;
 //! - [`service`]: requests to and answers from the delivery service, without I/O;
 //! - [`history`]: the local history of each chat;
 //! - [`store`]: encrypted persistence of a device.
 
+pub mod contacts;
 pub mod content;
 pub mod device;
 pub mod envelope;

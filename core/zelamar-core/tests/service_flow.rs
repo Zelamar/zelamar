@@ -1,6 +1,6 @@
-//! The whole client side of the delivery service, end to end: two people
-//! claim usernames, register devices, find each other, and talk. The service
-//! is a small in-memory stand-in that routes like the real one
+//! The whole client side of the delivery service, end to end: people claim
+//! usernames, register devices, find each other, and talk. The service is a
+//! small in-memory stand-in that routes like the real one
 //! (`protocol/delivery.md`, `protocol/directory.md`); the real one checks the
 //! same bytes through the shared vectors.
 
@@ -14,10 +14,11 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde_json::{Value, json};
 use zelamar_core::CoreError;
+use zelamar_core::contacts::Contact;
 use zelamar_core::content::{AppMessage, Body, MessageId};
 use zelamar_core::device::{Author, ChatId, Device, Outgoing, Received};
 use zelamar_core::envelope::{Envelope, EnvelopeId, MailboxId};
-use zelamar_core::history::SendStatus;
+use zelamar_core::history::{SendStatus, StoredContent};
 use zelamar_core::identity::AccountKey;
 use zelamar_core::service::{self, KEY_PACKAGES_AT_REGISTRATION, Request};
 use zelamar_core::store::MasterKey;
@@ -53,6 +54,7 @@ impl Service {
         let parts: Vec<&str> = request.path.split('/').skip(2).collect();
         let json_body = || serde_json::from_slice::<Value>(&request.body).expect("json body");
         let answer = |status: u16, body: &Value| (status, serde_json::to_vec(body).expect("json"));
+        let unknown = || answer(404, &json!({ "error": "unknown_account" }));
         match (request.method, parts.as_slice()) {
             ("POST", ["accounts"]) => {
                 let body = json_body();
@@ -94,7 +96,7 @@ impl Service {
             }
             ("GET", ["accounts", name]) => {
                 let Some((key, devices)) = self.accounts.get_mut(*name) else {
-                    return answer(404, &json!({ "error": "unknown_account" }));
+                    return unknown();
                 };
                 let listed: Vec<Value> = devices
                     .iter_mut()
@@ -106,8 +108,15 @@ impl Service {
                         json!({ "certificate": device.certificate, "key_package": key_package })
                     })
                     .collect();
-                answer(200, &json!({ "account": key, "devices": listed }))
+                answer(
+                    200,
+                    &json!({ "username": name, "account": key, "devices": listed }),
+                )
             }
+            ("GET", ["accounts", name, "key"]) => match self.accounts.get(*name) {
+                Some((key, _)) => answer(200, &json!({ "username": name, "account": key })),
+                None => unknown(),
+            },
             ("POST", ["deliver"]) => {
                 let frame = &request.body;
                 let id = EnvelopeId(frame[3..19].try_into().expect("id"));
@@ -165,12 +174,13 @@ impl Person {
         )
         .expect("device");
 
-        let claim = service::claim(&account, name, "beta-invite", NOW, WORK_BITS).expect("claim");
+        let claim = device
+            .claim(name, "beta-invite", NOW, WORK_BITS)
+            .expect("claim");
         let (status, body) = service.handle(&claim);
-        assert_eq!(
-            service::claimed(status, &body).expect("claimed"),
-            name.to_ascii_lowercase()
-        );
+        let normalized = name.to_ascii_lowercase();
+        assert_eq!(device.claimed(status, &body).expect("claimed"), normalized);
+        assert_eq!(device.username(), Some(normalized.as_str()));
 
         let registration = device.register(name, NOW).expect("registration");
         let (status, body) = service.handle(&registration);
@@ -190,6 +200,13 @@ impl Person {
             account: self.account.id(),
             device: self.device.id(),
         }
+    }
+
+    /// Looks `name` up and starts a chat with every device found.
+    fn start_chat_with(&mut self, service: &mut Service, name: &str) -> ChatId {
+        let (status, body) = service.handle(&service::lookup(name).expect("lookup"));
+        let entry = service::directory_entry(name, status, &body).expect("entry");
+        self.device.start_chat(&entry).expect("start chat").0
     }
 
     /// Sends everything in the outbox and confirms what the service took.
@@ -223,19 +240,23 @@ fn text(n: u8, body: &str) -> AppMessage {
     AppMessage::text(MessageId([n; 16]), NOW + u64::from(n), body)
 }
 
+fn is_profile(received: &Received, name: &str) -> bool {
+    matches!(received, Received::Message { message, .. }
+        if message.body == Body::Profile { username: name.into() })
+}
+
+fn is_text(received: &Received, from: Author, expected: &str) -> bool {
+    matches!(received, Received::Message { author, message, .. }
+        if *author == from && message.body == Body::Text { text: expected.into() })
+}
+
 #[test]
 fn two_people_find_each_other_by_username_and_talk() {
     let mut service = Service::default();
     let mut alice = Person::join(&mut service, "alice");
     let mut bob = Person::join(&mut service, "Bob_Smith");
 
-    let (status, body) = service.handle(&service::lookup("bob_smith").expect("lookup"));
-    let bob_found = service::contact(status, &body).expect("contact");
-    assert_eq!(bob_found.account, bob.account.id());
-    let (chat, _) = alice
-        .device
-        .start_chat(bob_found.account, &bob_found.key_packages)
-        .expect("start chat");
+    let chat = alice.start_chat_with(&mut service, "bob_smith");
     alice
         .device
         .send(&chat, &text(1, "Hi Bob, it's Alice"))
@@ -244,7 +265,9 @@ fn two_people_find_each_other_by_username_and_talk() {
     let sent = &alice.device.history(&chat, None, 1).expect("history")[0].message;
     assert_eq!(sent.status, SendStatus::Sent);
 
+    // The welcome, then Alice's profile (once per chat), then her message.
     let inbox = bob.read(&mut service);
+    assert_eq!(inbox.len(), 3);
     assert_eq!(
         inbox[0],
         Received::Joined {
@@ -252,17 +275,83 @@ fn two_people_find_each_other_by_username_and_talk() {
             by: alice.author(),
         }
     );
-    assert!(
-        matches!(&inbox[1], Received::Message { author, message, .. }
-            if *author == alice.author() && message.body == Body::Text { text: "Hi Bob, it's Alice".into() })
-    );
+    assert!(is_profile(&inbox[1], "alice"));
+    assert!(is_text(&inbox[2], alice.author(), "Hi Bob, it's Alice"));
 
-    bob.device
-        .send(&chat, &text(2, "Hi Alice!"))
-        .expect("reply");
+    for (n, line) in [(2, "Hi Alice!"), (3, "Dinner at eight?")] {
+        bob.device.send(&chat, &text(n, line)).expect("reply");
+    }
     bob.flush(&mut service);
     let replies = alice.read(&mut service);
-    assert!(matches!(&replies[..], [Received::Message { author, .. }] if *author == bob.author()));
+    assert_eq!(replies.len(), 3, "Bob introduces himself once");
+    assert!(is_profile(&replies[0], "bob_smith"));
+    assert!(is_text(&replies[1], bob.author(), "Hi Alice!"));
+    assert!(is_text(&replies[2], bob.author(), "Dinner at eight?"));
+}
+
+#[test]
+fn usernames_are_claimed_in_chat_and_confirmed_by_the_directory() {
+    let mut service = Service::default();
+    let mut alice = Person::join(&mut service, "alice");
+    let mut bob = Person::join(&mut service, "bob");
+
+    let chat = alice.start_chat_with(&mut service, "bob");
+    alice.device.send(&chat, &text(1, "Dinner?")).expect("send");
+    alice.flush(&mut service);
+    bob.read(&mut service);
+
+    // Alice looked Bob up, so she knows his name for certain. Bob only has
+    // Alice's word for hers.
+    assert_eq!(
+        alice.device.contacts(),
+        vec![Contact {
+            account: bob.account.id(),
+            username: Some("bob".into()),
+            verified: true,
+        }]
+    );
+    let unconfirmed = bob.device.unconfirmed_contacts();
+    assert_eq!(
+        unconfirmed,
+        vec![Contact {
+            account: alice.account.id(),
+            username: Some("alice".into()),
+            verified: false,
+        }]
+    );
+
+    let (status, body) = service.handle(&service::key_lookup("alice").expect("key lookup"));
+    let answer = service::directory_entry("alice", status, &body).expect("entry");
+    assert_eq!(
+        answer.key_packages,
+        Vec::<Vec<u8>>::new(),
+        "takes no key package"
+    );
+    assert!(bob.device.confirm_contact(&answer).expect("confirm"));
+    assert_eq!(bob.device.unconfirmed_contacts(), Vec::new());
+
+    // A directory answer about someone else confirms nothing.
+    let (status, body) = service.handle(&service::key_lookup("bob").expect("key lookup"));
+    let other = service::directory_entry("bob", status, &body).expect("entry");
+    assert!(!bob.device.confirm_contact(&other).expect("confirm"));
+
+    let chats = bob.device.chat_list().expect("chat list");
+    assert_eq!(chats.len(), 1);
+    assert_eq!(
+        chats[0].members,
+        vec![Contact {
+            account: alice.account.id(),
+            username: Some("alice".into()),
+            verified: true,
+        }]
+    );
+    let newest = chats[0].last.as_ref().expect("a last message");
+    assert_eq!(
+        newest.message.content,
+        StoredContent::Text {
+            text: "Dinner?".into()
+        }
+    );
 }
 
 #[test]
@@ -272,16 +361,15 @@ fn the_directory_cannot_slip_in_someone_elses_device() {
     let bob = Person::join(&mut service, "bob");
     let mut mallory = Person::join(&mut service, "mallory");
 
-    // A dishonest directory lists Bob's genuine certificate with a key
-    // package from Mallory's device.
+    // A dishonest directory lists Bob's account with a key package from
+    // Mallory's device.
     let (status, body) = service.handle(&service::lookup("bob").expect("lookup"));
-    let mut found = service::contact(status, &body).expect("contact");
+    let mut found = service::directory_entry("bob", status, &body).expect("entry");
+    assert_eq!(found.account, bob.account.id());
     found.key_packages = vec![mallory.device.key_package().expect("key package")];
 
     assert!(matches!(
-        alice
-            .device
-            .start_chat(bob.account.id(), &found.key_packages),
+        alice.device.start_chat(&found),
         Err(CoreError::Unauthenticated(_))
     ));
     assert_eq!(
@@ -289,6 +377,7 @@ fn the_directory_cannot_slip_in_someone_elses_device() {
         Vec::<ChatId>::new(),
         "nothing was created"
     );
+    assert_eq!(alice.device.contacts(), Vec::new(), "nothing was learned");
     assert_eq!(
         alice.device.outbox().expect("outbox"),
         Vec::<Outgoing>::new()
@@ -312,10 +401,10 @@ fn an_envelope_for_another_mailbox_is_refused_but_acknowledged() {
     assert!(!opened.keep());
     assert_eq!(service::acknowledgement(&[opened.id])[0], 0x01);
 
-    // And unknown usernames come back as the service's own answer.
+    // Unknown usernames come back as the service's own answer.
     let (status, body) = service.handle(&service::lookup("nobody").expect("lookup"));
     assert!(matches!(
-        service::contact(status, &body),
+        service::directory_entry("nobody", status, &body),
         Err(CoreError::Service { status: 404, code }) if code == "unknown_account"
     ));
     assert!(service::lookup("no").is_err());

@@ -169,6 +169,8 @@ pub(crate) fn apply(
             history,
             new_record(StoredContent::Unknown { kind: kind.clone() }),
         ),
+        // Profiles update contacts, not history.
+        Body::Profile { .. } => Ok(Vec::new()),
         Body::Edit { target, text } => {
             let Some(mut record) = own_target(history, *target, author)? else {
                 return Ok(Vec::new());

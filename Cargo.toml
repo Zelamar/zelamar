@@ -31,3 +31,8 @@ todo = "warn"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# Dependencies (post-quantum crypto, SQLite) run optimized even in debug builds
+# and tests, which keeps the test suite fast; our own code stays debuggable.
+[profile.dev.package."*"]
+opt-level = 2

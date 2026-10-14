@@ -5,6 +5,8 @@
 //! that a kind from a newer Zelamar surfaces as [`Body::Unknown`] instead of
 //! failing the whole chat, and unknown fields inside known kinds are ignored.
 
+use openmls_rust_crypto::RustCrypto;
+use openmls_traits::random::OpenMlsRand;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +34,20 @@ const MAX_KIND: usize = 32;
 /// Sender-chosen unique id of a message, used by replies, edits, reactions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MessageId(#[serde(with = "serde_bytes")] pub [u8; 16]);
+
+impl MessageId {
+    /// Draws a fresh random message id.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Crypto`] if the system random generator fails.
+    pub fn random() -> Result<Self> {
+        RustCrypto::default()
+            .random_array()
+            .map(Self)
+            .map_err(|e| CoreError::crypto("drawing a message id", e))
+    }
+}
 
 /// How far a message has got on the receiver's side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +100,14 @@ pub enum Body {
         status: ReceiptStatus,
         /// The acknowledged messages, at most [`MAX_RECEIPT_IDS`].
         messages: Vec<MessageId>,
+    },
+    /// Who the author is, as they would be found in the directory. Sent
+    /// once per chat, before the author's first message there; never shown
+    /// as a message. Receivers treat the name as a claim until the directory
+    /// confirms it.
+    Profile {
+        /// The author's username, normalized.
+        username: String,
     },
     /// A kind this Zelamar does not know yet (sent by a newer version).
     /// Received only; never sent.
@@ -143,6 +167,11 @@ struct ReactFields {
 #[derive(Serialize, Deserialize)]
 struct DeleteFields {
     target: MessageId,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ProfileFields {
+    username: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -206,6 +235,12 @@ impl AppMessage {
                 fields(&ReceiptFields {
                     status: *status,
                     messages: messages.clone(),
+                })?,
+            ),
+            Body::Profile { username } => (
+                "profile",
+                fields(&ProfileFields {
+                    username: username.clone(),
                 })?,
             ),
             Body::Unknown { .. } => {
@@ -300,6 +335,12 @@ impl AppMessage {
                     messages: f.messages,
                 }
             }
+            "profile" => {
+                let f: ProfileFields = parse(&wire.c)?;
+                Body::Profile {
+                    username: f.username,
+                }
+            }
             other => Body::Unknown {
                 kind: other.to_owned(),
             },
@@ -340,6 +381,14 @@ impl AppMessage {
             }
             Body::Receipt { messages, .. } if messages.len() > MAX_RECEIPT_IDS => {
                 too_large("receipt", messages.len(), MAX_RECEIPT_IDS)
+            }
+            Body::Profile { username }
+                if crate::service::normalize_username(username).ok().as_ref() != Some(username) =>
+            {
+                Err(CoreError::malformed(
+                    "profile",
+                    "username is not a normalized username",
+                ))
             }
             _ => Ok(()),
         }

@@ -80,6 +80,10 @@ The constraints:
 - Application messages go straight to mailboxes. Receivers keep a few
   past epochs (for late messages) and buffer messages from an epoch they
   have not reached yet.
+- **Timing.** The sequencer ships together with the first commit that can
+  race: linking a second device, or group chats. Until then the only commit
+  in a chat is its creator's first invitation, made before anyone else is
+  in the chat. It cannot race, so it is merged at once (ADR-0011).
 
 **Sans-IO core.**
 - The Rust core builds, signs and parses every server request and

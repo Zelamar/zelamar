@@ -60,7 +60,10 @@ async function route(request: Request, env: Env): Promise<Response> {
     return only(request, 'POST') ?? respond(await claim(request, env));
   }
   if (resource === 'accounts' && name !== undefined && sub === undefined) {
-    return only(request, 'GET') ?? respond(await lookup(request, env, name));
+    return only(request, 'GET') ?? respond(await lookup(request, env, name, 'devices'));
+  }
+  if (resource === 'accounts' && name !== undefined && sub === 'key' && parts.length === 4) {
+    return only(request, 'GET') ?? respond(await lookup(request, env, name, 'key'));
   }
   if (resource === 'accounts' && name !== undefined && sub === 'devices' && device !== undefined) {
     if (parts.length === 5) {
@@ -168,7 +171,13 @@ async function claim(request: Request, env: Env): Promise<Reply> {
     : { status: outcome === 'created' ? 201 : 200, body: { username } };
 }
 
-async function lookup(request: Request, env: Env, name: string): Promise<Reply> {
+/** A directory lookup: with one key package per device, or only the account key. */
+async function lookup(
+  request: Request,
+  env: Env,
+  name: string,
+  what: 'devices' | 'key',
+): Promise<Reply> {
   const username = normalizeUsername(name);
   if (username === null) {
     return failure(400, 'invalid_username');
@@ -176,7 +185,8 @@ async function lookup(request: Request, env: Env, name: string): Promise<Reply> 
   if (!(await allowed(env.LOOKUP_LIMITER, request))) {
     return failure(429, 'rate_limited');
   }
-  return env.ACCOUNT.getByName(username).lookup();
+  const holder = env.ACCOUNT.getByName(username);
+  return what === 'devices' ? holder.lookup() : holder.keyOf();
 }
 
 async function signed(

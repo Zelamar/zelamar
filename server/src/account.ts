@@ -125,8 +125,8 @@ export class Account extends DurableObject<Env> {
 
   /** The account key and one key package per device; one-time ones are consumed. */
   lookup(): Reply {
-    const key = this.accountKey();
-    if (key === null) {
+    const holder = this.holder();
+    if (holder === null) {
       return failure(404, 'unknown_account');
     }
     const sql = this.ctx.storage.sql;
@@ -150,7 +150,18 @@ export class Account extends DurableObject<Env> {
         key_package: toBase64Url(new Uint8Array(keyPackage)),
       };
     });
-    return { status: 200, body: { account: toBase64Url(key), devices: found } };
+    return {
+      status: 200,
+      body: { username: holder.username, account: toBase64Url(holder.key), devices: found },
+    };
+  }
+
+  /** Only which account holds the name; hands out no key package. */
+  keyOf(): Reply {
+    const holder = this.holder();
+    return holder === null
+      ? failure(404, 'unknown_account')
+      : { status: 200, body: { username: holder.username, account: toBase64Url(holder.key) } };
   }
 
   /** Checks a signed device request against this account's key. */
@@ -192,6 +203,11 @@ export class Account extends DurableObject<Env> {
   }
 
   private accountKey(): Uint8Array | null {
+    return this.holder()?.key ?? null;
+  }
+
+  /** The name and the account key holding it; `null` while unclaimed. */
+  private holder(): { username: string; key: Uint8Array } | null {
     const exists = this.ctx.storage.sql
       .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'account'")
       .toArray().length;
@@ -199,9 +215,13 @@ export class Account extends DurableObject<Env> {
       return null;
     }
     const rows = this.ctx.storage.sql
-      .exec<{ key: ArrayBuffer }>('SELECT key FROM account WHERE id = 1')
+      .exec<{ username: string; key: ArrayBuffer }>(
+        'SELECT username, key FROM account WHERE id = 1',
+      )
       .toArray();
-    return rows[0] === undefined ? null : new Uint8Array(rows[0].key);
+    return rows[0] === undefined
+      ? null
+      : { username: rows[0].username, key: new Uint8Array(rows[0].key) };
   }
 
   private createSchema(): void {

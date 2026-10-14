@@ -23,12 +23,21 @@ The plaintext of every MLS application message is one CBOR map:
 | `react` | `target`: bytes(16), `reaction`: string (1–32 bytes) or null | Sets, or with null clears, the author's reaction |
 | `delete` | `target`: bytes(16) | Deletes one of the author's own messages for everyone |
 | `receipt` | `status`: `"delivered"` or `"read"`, `messages`: array of bytes(16), 1–256 items | Acknowledges messages |
+| `profile` | `username`: string, a normalized username (`directory.md`) | Who the author is; never shown as a message |
 
 Receivers MUST check, against their own history, that an `edit` or
 `delete` targets a message by the same author (same account); otherwise
 they ignore it. A `receipt` only ever updates the receiver's own messages.
 A message id is unique within a chat: a `text`, `reply` or unknown kind
 whose `i` is already in the receiver's history MUST be rejected.
+
+A device sends its `profile` once per chat:
+- when it starts the chat;
+- in a chat it was invited to, right before its own first message there.
+
+So someone who declines a chat request reveals nothing. The username in a
+profile is only a claim. Receivers show it as confirmed only after the
+directory (`GET /v0/accounts/{username}/key`) names the same account.
 
 ## Rules
 

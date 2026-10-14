@@ -114,7 +114,7 @@ JSON `{"key_packages": [...], "last_resort": ...?}`.
 `GET /v0/accounts/{username}` responds with:
 
 ```json
-{"account": "<32 bytes>", "devices": [{"certificate": "…", "key_package": "…"}]}
+{"username": "alice", "account": "<32 bytes>", "devices": [{"certificate": "…", "key_package": "…"}]}
 ```
 
 - Each device's oldest one-time key package is handed out and deleted.
@@ -125,3 +125,11 @@ JSON `{"key_packages": [...], "last_resort": ...?}`.
 - `404 unknown_account` if there is no such account.
 - Lookups will spend an anonymous token (ADR-0012). Until then they are
   rate-limited by network address.
+- The client checks that `username` is the name it asked for.
+
+## Looking up only the account key
+
+`GET /v0/accounts/{username}/key` responds with
+`{"username": "alice", "account": "<32 bytes>"}` and hands out no key
+package. Clients use it to confirm a username someone claims in a chat
+(`content.md`, `profile`). It is rate-limited like a lookup.

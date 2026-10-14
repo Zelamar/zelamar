@@ -6,14 +6,16 @@
 //! `protocol/directory.md` and `protocol/delivery.md`.
 //!
 //! A session looks like this:
-//! 1. [`claim`] a username with the account key; [`claimed`] reads the answer.
+//! 1. [`Device::claim`] a username; [`Device::claimed`] reads the answer.
 //! 2. [`Device::register`] the device with its mailbox and key packages;
 //!    [`key_package_count`] reads the answer.
-//! 3. [`lookup`] a contact; [`contact`] reads the answer; then
+//! 3. [`lookup`] a contact; [`directory_entry`] reads the answer; then
 //!    [`Device::start_chat`].
-//! 4. For every item in [`Device::outbox`], send [`delivery`] and, when
+//! 4. For each of [`Device::unconfirmed_contacts`], send [`key_lookup`] and
+//!    pass [`directory_entry`] to [`Device::confirm_contact`].
+//! 5. For every item in [`Device::outbox`], send [`delivery`] and, when
 //!    [`delivered`] accepts the answer, call [`Device::confirm_sent`].
-//! 5. Connect to [`Device::mailbox_access`] over WebSocket. Pass every
+//! 6. Connect to [`Device::mailbox_access`] over WebSocket. Pass every
 //!    binary message to [`Device::open_envelope`], then send
 //!    [`acknowledgement`] for it unless [`Opened::keep`] says to keep it.
 
@@ -78,12 +80,15 @@ impl std::fmt::Debug for MailboxAccess {
     }
 }
 
-/// A contact as the directory describes it.
+/// What the directory says about a username.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Contact {
-    /// The account behind the username.
+pub struct DirectoryEntry {
+    /// The username, normalized.
+    pub username: String,
+    /// The account that holds it.
     pub account: AccountId,
-    /// One key package per device, certified by `account`.
+    /// One key package per device, certified by `account`. Empty for a
+    /// [`key_lookup`].
     pub key_packages: Vec<Vec<u8>>,
 }
 
@@ -194,18 +199,36 @@ pub fn lookup(username: &str) -> Result<Request> {
     })
 }
 
-/// Reads the answer to [`lookup`]. Every certificate must verify under the
-/// returned account key; [`Device::start_chat`] verifies everything else.
+/// Asks the directory which account holds `username`, without taking any
+/// key package: for confirming a name someone claims.
+///
+/// # Errors
+///
+/// [`CoreError::Malformed`] for a bad username.
+pub fn key_lookup(username: &str) -> Result<Request> {
+    Ok(Request {
+        method: "GET",
+        path: format!("/v0/accounts/{}/key", normalize_username(username)?),
+        headers: Vec::new(),
+        body: Vec::new(),
+    })
+}
+
+/// Reads the answer to [`lookup`] or [`key_lookup`] for `requested`. The
+/// answer must be about that very username, and every certificate must
+/// verify under the account key; [`Device::start_chat`] verifies the rest.
 ///
 /// # Errors
 ///
 /// [`CoreError::Service`] (`unknown_account`, ...),
 /// [`CoreError::Unauthenticated`] for a device the account did not certify,
 /// or [`CoreError::Malformed`].
-pub fn contact(status: u16, body: &[u8]) -> Result<Contact> {
+pub fn directory_entry(requested: &str, status: u16, body: &[u8]) -> Result<DirectoryEntry> {
     #[derive(Deserialize)]
     struct Found {
+        username: String,
         account: String,
+        #[serde(default)]
         devices: Vec<FoundDevice>,
     }
     #[derive(Deserialize)]
@@ -216,6 +239,12 @@ pub fn contact(status: u16, body: &[u8]) -> Result<Contact> {
 
     expect_success(status, body, &[200])?;
     let found: Found = parse(body)?;
+    if found.username != normalize_username(requested)? {
+        return Err(CoreError::malformed(
+            "directory answer",
+            "about another username",
+        ));
+    }
     let account = AccountId::from_bytes(
         unb64(&found.account)?
             .try_into()
@@ -235,7 +264,8 @@ pub fn contact(status: u16, body: &[u8]) -> Result<Contact> {
             unb64(&device.key_package)
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok(Contact {
+    Ok(DirectoryEntry {
+        username: found.username,
         account,
         key_packages,
     })
@@ -324,6 +354,36 @@ pub fn key_package_count(status: u16, body: &[u8]) -> Result<u64> {
 }
 
 impl Device {
+    /// Claims `username` for this device's account (see [`claim`]).
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Unauthenticated`] on a device without the account key,
+    /// or as [`claim`].
+    pub fn claim(
+        &self,
+        username: &str,
+        invite: &str,
+        now_ms: u64,
+        work_bits: u8,
+    ) -> Result<Request> {
+        let account = self.account_key().ok_or(CoreError::Unauthenticated(
+            "only the device holding the account key can claim a username",
+        ))?;
+        claim(account, username, invite, now_ms, work_bits)
+    }
+
+    /// Reads the answer to [`Device::claim`] and remembers the username.
+    ///
+    /// # Errors
+    ///
+    /// As [`claimed`], or a storage error.
+    pub fn claimed(&mut self, status: u16, body: &[u8]) -> Result<String> {
+        let username = claimed(status, body)?;
+        self.set_username(&username)?;
+        Ok(username)
+    }
+
     /// Registers this device under `username`: its certificate, mailbox
     /// and [`KEY_PACKAGES_AT_REGISTRATION`] key packages plus a last-resort
     /// one. Repeating it is harmless.
@@ -592,21 +652,27 @@ mod tests {
         };
         let answer = |certificate: &DeviceCertificate| {
             serde_json::to_vec(&json!({
+                "username": "alice",
                 "account": b64(alice.id().as_bytes()),
                 "devices": [{ "certificate": b64(&certificate.encode()), "key_package": b64(b"kp") }],
             }))
             .expect("json")
         };
 
-        let found = contact(200, &answer(&device_of(&alice))).expect("contact");
+        let found = directory_entry("Alice", 200, &answer(&device_of(&alice))).expect("entry");
+        assert_eq!(found.username, "alice");
         assert_eq!(found.account, alice.id());
         assert_eq!(found.key_packages, vec![b"kp".to_vec()]);
         assert!(matches!(
-            contact(200, &answer(&device_of(&mallory))),
+            directory_entry("alice", 200, &answer(&device_of(&mallory))),
             Err(CoreError::Unauthenticated(_))
         ));
         assert!(matches!(
-            contact(404, br#"{"error":"unknown_account"}"#),
+            directory_entry("bob", 200, &answer(&device_of(&alice))),
+            Err(CoreError::Malformed { .. })
+        ));
+        assert!(matches!(
+            directory_entry("alice", 404, br#"{"error":"unknown_account"}"#),
             Err(CoreError::Service { status: 404, .. })
         ));
     }

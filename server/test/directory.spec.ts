@@ -21,6 +21,7 @@ import {
 const keyPackage = (label: string): Uint8Array => utf8(`key-package-${label}`);
 
 interface Lookup {
+  username: string;
   account: string;
   devices: { certificate: string; key_package: string }[];
 }
@@ -114,6 +115,7 @@ describe('devices and key packages', () => {
     const { name, account, device: phone } = await registered([keyPackage('1'), keyPackage('2')]);
 
     const first = await lookup(name);
+    expect(first.username).toBe(name);
     expect(first.account).toBe(b64(account.publicKey));
     expect(first.devices).toEqual([
       { certificate: b64(phone.certificate), key_package: b64(keyPackage('1')) },
@@ -127,6 +129,17 @@ describe('devices and key packages', () => {
       const later = await lookup(name);
       expect(later.devices[0]?.key_package).toBe(lastResort);
     }
+  });
+
+  it('tells whose a name is without handing out key packages', async () => {
+    const { name, account } = await registered([keyPackage('only')]);
+    for (let i = 0; i < 3; i++) {
+      const key = await get(`/v0/accounts/${name.toUpperCase()}/key`);
+      expect(await key.json()).toEqual({ username: name, account: b64(account.publicKey) });
+    }
+    // The one key package is still there for whoever starts a chat.
+    expect((await lookup(name)).devices[0]?.key_package).toBe(b64(keyPackage('only')));
+    expect((await get(`/v0/accounts/${username()}/key`)).status).toBe(404);
   });
 
   it('ignores duplicate key packages and stops at the limit', async () => {

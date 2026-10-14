@@ -12,7 +12,7 @@
 //! one transaction; on failure the in-memory state is rolled back to the last
 //! persisted state, so a device is never left half-way through a change.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -23,11 +23,13 @@ use openmls_traits::{OpenMlsProvider, random::OpenMlsRand, signatures::Signer};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use crate::content::{AppMessage, MessageId};
+use crate::contacts::{self, Contact, Contacts};
+use crate::content::{AppMessage, Body, MessageId};
 use crate::envelope::{EnvelopeId, MailboxId};
 use crate::error::{CoreError, Result};
 use crate::history::{self, HistoryEntry, HistoryReader, SendStatus, StoredMessage};
 use crate::identity::{AccountId, AccountKey, DeviceCertificate, DeviceId};
+use crate::service::DirectoryEntry;
 use crate::store::{Batch, MasterKey, Store};
 
 /// The one ciphersuite Zelamar speaks: hybrid post-quantum key exchange
@@ -49,6 +51,9 @@ const RECORD_ACCOUNT_KEY: &str = "account.key";
 const RECORD_MAILBOX: &str = "device.mailbox";
 const RECORD_MAILBOX_SECRET: &str = "device.mailbox_secret";
 const RECORD_CHATS: &str = "device.chats";
+const RECORD_USERNAME: &str = "account.username";
+const RECORD_CONTACTS: &str = "device.contacts";
+const RECORD_INTRODUCED: &str = "device.introduced";
 
 /// Identifier of a chat: the MLS group id (16 random bytes).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -132,6 +137,17 @@ pub enum Received {
     },
 }
 
+/// One chat as the chat list shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatSummary {
+    /// The chat.
+    pub chat: ChatId,
+    /// Everyone else in it, one entry per account.
+    pub members: Vec<Contact>,
+    /// Its newest message, if any.
+    pub last: Option<HistoryEntry>,
+}
+
 /// One Zelamar device: its keys and the chats it takes part in.
 pub struct Device {
     provider: OpenMlsRustCrypto,
@@ -153,6 +169,14 @@ pub struct Device {
     persisted_chats: HashSet<ChatId>,
     /// History and outbox writes of the operation in progress.
     pending: Pending,
+    /// The username this account holds, once claimed.
+    username: Option<String>,
+    /// Who is who, in memory and exactly as on disk.
+    contacts: Contacts,
+    persisted_contacts: Contacts,
+    /// Chats this device has sent its profile to, in memory and as on disk.
+    introduced: BTreeSet<ChatId>,
+    persisted_introduced: BTreeSet<ChatId>,
 }
 
 /// Freshly built key packages, TLS-encoded.
@@ -250,6 +274,11 @@ impl Device {
             persisted: HashMap::new(),
             persisted_chats: HashSet::new(),
             pending: Pending::default(),
+            username: None,
+            contacts: Contacts::new(),
+            persisted_contacts: Contacts::new(),
+            introduced: BTreeSet::new(),
+            persisted_introduced: BTreeSet::new(),
         };
         device.persist()?;
         Ok(device)
@@ -291,6 +320,22 @@ impl Device {
             .map_err(|_| CoreError::malformed("store", "mailbox secret is malformed"))?,
         );
         let chat_ids = decode_chat_list(&store.record(RECORD_CHATS)?.unwrap_or_default())?;
+        let username = store
+            .record(RECORD_USERNAME)?
+            .map(|bytes| {
+                String::from_utf8(bytes.to_vec())
+                    .map_err(|_| CoreError::malformed("store", "username is not UTF-8"))
+            })
+            .transpose()?;
+        let contacts = store
+            .record(RECORD_CONTACTS)?
+            .map(|bytes| contacts::decode(&bytes))
+            .transpose()?
+            .unwrap_or_default();
+        let introduced: BTreeSet<ChatId> =
+            decode_chat_list(&store.record(RECORD_INTRODUCED)?.unwrap_or_default())?
+                .into_iter()
+                .collect();
 
         let provider = OpenMlsRustCrypto::default();
         let persisted = store.load_mls_state()?;
@@ -325,6 +370,11 @@ impl Device {
             persisted,
             persisted_chats: chat_ids,
             pending: Pending::default(),
+            username,
+            persisted_contacts: contacts.clone(),
+            contacts,
+            persisted_introduced: introduced.clone(),
+            introduced,
         })
     }
 
@@ -345,6 +395,111 @@ impl Device {
     #[must_use]
     pub const fn holds_account_key(&self) -> bool {
         self.account_key.is_some()
+    }
+
+    /// The username this account holds, once claimed through this device.
+    #[must_use]
+    pub fn username(&self) -> Option<&str> {
+        self.username.as_deref()
+    }
+
+    /// Remembers the username the service granted.
+    pub(crate) fn set_username(&mut self, username: &str) -> Result<()> {
+        self.store.apply(&Batch {
+            records: vec![(RECORD_USERNAME, username.as_bytes().to_vec())],
+            ..Batch::default()
+        })?;
+        self.username = Some(username.to_owned());
+        Ok(())
+    }
+
+    /// The account's root key, on the device that created the account.
+    pub(crate) const fn account_key(&self) -> Option<&AccountKey> {
+        self.account_key.as_ref()
+    }
+
+    /// Everyone this device knows.
+    #[must_use]
+    pub fn contacts(&self) -> Vec<Contact> {
+        self.contacts.values().cloned().collect()
+    }
+
+    /// Contacts whose username only they themselves claim. Look each one up
+    /// ([`crate::service::key_lookup`]) and pass the answer to
+    /// [`Device::confirm_contact`].
+    #[must_use]
+    pub fn unconfirmed_contacts(&self) -> Vec<Contact> {
+        self.contacts
+            .values()
+            .filter(|contact| !contact.verified && contact.username.is_some())
+            .cloned()
+            .collect()
+    }
+
+    /// Confirms a contact's claimed username with a directory answer.
+    /// Returns whether the directory agreed with the claim.
+    ///
+    /// # Errors
+    ///
+    /// A storage error.
+    pub fn confirm_contact(&mut self, entry: &DirectoryEntry) -> Result<bool> {
+        let agrees = self
+            .contacts
+            .get(&entry.account)
+            .is_some_and(|contact| contact.username.as_deref() == Some(entry.username.as_str()));
+        if agrees {
+            self.transact(|device| {
+                contacts::confirmed(&mut device.contacts, entry.account, &entry.username);
+                Ok(())
+            })?;
+        }
+        Ok(agrees)
+    }
+
+    /// Every chat for the chat list, most recently active first.
+    ///
+    /// # Errors
+    ///
+    /// A storage or integrity error.
+    pub fn chat_list(&self) -> Result<Vec<ChatSummary>> {
+        let own = self.account();
+        let mut list = self
+            .chats
+            .iter()
+            .map(|(chat, group)| {
+                let accounts = group
+                    .members()
+                    .map(|member| certificate_of(&member.credential).map(|c| c.account()))
+                    .collect::<Result<BTreeSet<AccountId>>>()?;
+                let members = accounts
+                    .into_iter()
+                    .filter(|account| *account != own)
+                    .map(|account| {
+                        self.contacts
+                            .get(&account)
+                            .cloned()
+                            .unwrap_or_else(|| Contact::unknown(account))
+                    })
+                    .collect();
+                Ok(ChatSummary {
+                    chat: chat.clone(),
+                    members,
+                    last: self.history(chat, None, 1)?.into_iter().next(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let activity = |summary: &ChatSummary| {
+            summary
+                .last
+                .as_ref()
+                .map(|entry| entry.message.received_at_ms)
+        };
+        list.sort_by(|a, b| {
+            activity(b)
+                .cmp(&activity(a))
+                .then_with(|| a.chat.cmp(&b.chat))
+        });
+        Ok(list)
     }
 
     /// The mailbox this device receives at.
@@ -508,23 +663,20 @@ impl Device {
         self.transact(Self::new_chat)
     }
 
-    /// Starts a chat with every device of `account` behind `key_packages`
-    /// (as the directory hands them out), in one commit.
+    /// Starts a chat with every device in `entry`, as the directory handed
+    /// it out, in one commit, and introduces this device there.
     ///
-    /// Each device must be certified by `account` itself, so the directory
-    /// cannot slip in someone else's device. Whether `account` is really the
-    /// person the user means is what safety codes confirm.
+    /// Each device must be certified by the entry's account itself, so the
+    /// directory cannot slip in someone else's device. Whether that account is
+    /// really the person the user means is what safety codes confirm.
     ///
     /// # Errors
     ///
     /// [`CoreError::Unauthenticated`] for a device of another account,
     /// [`CoreError::Malformed`] for no or broken key packages,
     /// [`CoreError::Mls`] or a storage error.
-    pub fn start_chat(
-        &mut self,
-        account: AccountId,
-        key_packages: &[Vec<u8>],
-    ) -> Result<(ChatId, Invitation)> {
+    pub fn start_chat(&mut self, entry: &DirectoryEntry) -> Result<(ChatId, Invitation)> {
+        let (account, key_packages) = (entry.account, &entry.key_packages);
         if key_packages.is_empty() {
             return Err(CoreError::malformed("contact", "has no reachable device"));
         }
@@ -544,6 +696,8 @@ impl Device {
             }
             let chat = device.new_chat()?;
             let invitation = device.add(&chat, &packages, newcomers)?;
+            contacts::confirmed(&mut device.contacts, account, &entry.username);
+            device.introduce(&chat)?;
             Ok((chat, invitation))
         })
     }
@@ -694,27 +848,52 @@ impl Device {
     pub fn send(&mut self, chat: &ChatId, message: &AppMessage) -> Result<Outgoing> {
         let plaintext = message.encode()?;
         self.transact(|device| {
-            let group = device.chats.get_mut(chat).ok_or(CoreError::UnknownChat)?;
-            let others = recipients(group)?;
-            let out = group
-                .create_message(&device.provider, &device.signer, &plaintext)
-                .map_err(|e| CoreError::mls("encrypting a message", e))?;
-            let outgoing = Outgoing {
-                id: EnvelopeId::random()?,
-                recipients: others,
-                payload: encode(&out, "encoding a message")?,
-            };
-            // Alone in a chat, there is no one to deliver to: already "sent".
-            let status = if outgoing.recipients.is_empty() {
-                SendStatus::Sent
-            } else {
-                SendStatus::Queued
-            };
-            device.fold(chat, device.author(), message, status)?;
-            let tracked = history::inserts(&message.body).then(|| (chat.clone(), message.id));
-            device.queue(&outgoing, tracked)?;
-            Ok(outgoing)
+            device.introduce(chat)?;
+            device.send_now(chat, message, &plaintext)
         })
+    }
+
+    fn send_now(
+        &mut self,
+        chat: &ChatId,
+        message: &AppMessage,
+        plaintext: &[u8],
+    ) -> Result<Outgoing> {
+        let group = self.chats.get_mut(chat).ok_or(CoreError::UnknownChat)?;
+        let others = recipients(group)?;
+        let out = group
+            .create_message(&self.provider, &self.signer, plaintext)
+            .map_err(|e| CoreError::mls("encrypting a message", e))?;
+        let outgoing = Outgoing {
+            id: EnvelopeId::random()?,
+            recipients: others,
+            payload: encode(&out, "encoding a message")?,
+        };
+        // Alone in a chat, there is no one to deliver to: already "sent".
+        let status = if outgoing.recipients.is_empty() {
+            SendStatus::Sent
+        } else {
+            SendStatus::Queued
+        };
+        self.fold(chat, self.author(), message, status)?;
+        let tracked = history::inserts(&message.body).then(|| (chat.clone(), message.id));
+        self.queue(&outgoing, tracked)?;
+        Ok(outgoing)
+    }
+
+    /// Sends this device's profile into `chat`, once, before its first
+    /// message there, so the others learn which username it goes by.
+    fn introduce(&mut self, chat: &ChatId) -> Result<()> {
+        let Some(username) = self.username.clone() else {
+            return Ok(());
+        };
+        if self.introduced.contains(chat) {
+            return Ok(());
+        }
+        let profile = AppMessage::new(MessageId::random()?, now_ms(), Body::Profile { username });
+        self.send_now(chat, &profile, &profile.encode()?)?;
+        self.introduced.insert(chat.clone());
+        Ok(())
     }
 
     /// Decrypts and authenticates an incoming MLS message, and folds it into
@@ -758,6 +937,11 @@ impl Device {
                     device: certificate.device(),
                 };
                 self.fold(&chat, author, &message, SendStatus::Sent)?;
+                if let Body::Profile { username } = &message.body
+                    && author.account != self.account()
+                {
+                    contacts::claimed(&mut self.contacts, author.account, username);
+                }
                 Ok(Received::Message {
                     chat,
                     author,
@@ -888,6 +1072,17 @@ impl Device {
         if chats != self.persisted_chats {
             batch.records.push((RECORD_CHATS, encode_chat_list(&chats)));
         }
+        if self.contacts != self.persisted_contacts {
+            batch
+                .records
+                .push((RECORD_CONTACTS, contacts::encode(&self.contacts)?));
+        }
+        if self.introduced != self.persisted_introduced {
+            let introduced: HashSet<ChatId> = self.introduced.iter().cloned().collect();
+            batch
+                .records
+                .push((RECORD_INTRODUCED, encode_chat_list(&introduced)));
+        }
         let pending = std::mem::take(&mut self.pending);
         for (chat, record) in &pending.messages {
             batch
@@ -912,6 +1107,8 @@ impl Device {
             self.persisted.remove(key);
         }
         self.persisted_chats = chats;
+        self.persisted_contacts.clone_from(&self.contacts);
+        self.persisted_introduced.clone_from(&self.introduced);
         Ok(())
     }
 
@@ -925,6 +1122,8 @@ impl Device {
             .clone_from(&self.persisted);
         self.chats = load_chats(&self.provider, &self.persisted_chats)?;
         self.pending = Pending::default();
+        self.contacts.clone_from(&self.persisted_contacts);
+        self.introduced.clone_from(&self.persisted_introduced);
         Ok(())
     }
 }
