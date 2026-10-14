@@ -7,8 +7,8 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `chat_key`, `claim_with`, `failure`, `find_chat`, `master`, `message_view`, `now_ms`, `preview`, `store_path`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
+// These functions are ignored because they are not marked as `pub`: `chat_key`, `claim_with`, `failure`, `find_chat`, `master`, `message_view`, `notice`, `now_ms`, `preview`, `store_path`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
 
 /// A fresh random master key for a new session. Keep it in the platform's
 /// secure storage; it opens the session's store.
@@ -248,11 +248,24 @@ class InboxEvent {
   /// Why the envelope was refused, if it was.
   final String? refused;
 
-  const InboxEvent({this.ack, this.chat, required this.joined, this.refused});
+  /// A new message from someone else, worth a notification.
+  final Notice? notice;
+
+  const InboxEvent({
+    this.ack,
+    this.chat,
+    required this.joined,
+    this.refused,
+    this.notice,
+  });
 
   @override
   int get hashCode =>
-      ack.hashCode ^ chat.hashCode ^ joined.hashCode ^ refused.hashCode;
+      ack.hashCode ^
+      chat.hashCode ^
+      joined.hashCode ^
+      refused.hashCode ^
+      notice.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -262,7 +275,8 @@ class InboxEvent {
           ack == other.ack &&
           chat == other.chat &&
           joined == other.joined &&
-          refused == other.refused;
+          refused == other.refused &&
+          notice == other.notice;
 }
 
 /// How to read the device's mailbox: a WebSocket to `path` with this
@@ -364,6 +378,28 @@ class MessageView {
           edited == other.edited &&
           sentAtMs == other.sentAtMs &&
           status == other.status;
+}
+
+/// What a notification about a new message says.
+class Notice {
+  /// Who wrote: `@name`, or "Someone new" before their name is known.
+  final String title;
+
+  /// The text, shortened to fit a notification.
+  final String body;
+
+  const Notice({required this.title, required this.body});
+
+  @override
+  int get hashCode => title.hashCode ^ body.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Notice &&
+          runtimeType == other.runtimeType &&
+          title == other.title &&
+          body == other.body;
 }
 
 /// One item waiting in the outbox, and the request that delivers it.

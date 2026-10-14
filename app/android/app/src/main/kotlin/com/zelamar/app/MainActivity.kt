@@ -1,5 +1,14 @@
 package com.zelamar.app
 
+import android.Manifest
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import io.flutter.embedding.android.FlutterActivity
@@ -12,7 +21,9 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
- * Hosts the app and seals Zelamar's master key with the Android Keystore
+ * Hosts the app; shows notifications for new messages ("zelamar/notify",
+ * lib/src/messenger/notifier.dart); and seals Zelamar's master key with the
+ * Android Keystore
  * (lib/src/messenger/os_vault.dart): a hardware-backed AES-256-GCM key that
  * never leaves the device. Sealed bytes are `IV (12) || ciphertext || tag`.
  */
@@ -33,6 +44,71 @@ class MainActivity : FlutterActivity() {
                     result.error("keystore", error.message ?: error.javaClass.simpleName, null)
                 }
             }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, NOTIFY_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "show" -> {
+                        notify(
+                            call.argument<String>("title").orEmpty(),
+                            call.argument<String>("body").orEmpty(),
+                        )
+                        result.success(null)
+                    }
+                    "inFront" -> result.success(hasWindowFocus())
+                    "requestPermission" -> {
+                        requestNotificationPermission()
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), PERMISSION_REQUEST)
+        }
+    }
+
+    /** One notification per sender would be next; for now, the latest message. */
+    private fun notify(title: String, body: String) {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    MESSAGES,
+                    "Messages",
+                    NotificationManager.IMPORTANCE_HIGH,
+                ).apply { description = "New messages" },
+            )
+        }
+        val open = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, MESSAGES)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this).setPriority(Notification.PRIORITY_HIGH)
+        }
+        val notification = builder
+            .setSmallIcon(R.drawable.ic_stat_zelamar)
+            .setColor(BRONZE)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(Notification.BigTextStyle().bigText(body))
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .setCategory(Notification.CATEGORY_MESSAGE)
+            .build()
+        manager.notify(MESSAGE_NOTIFICATION, notification)
     }
 
     private fun keyStore(): KeyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
@@ -73,6 +149,11 @@ class MainActivity : FlutterActivity() {
     }
 
     private companion object {
+        const val NOTIFY_CHANNEL = "zelamar/notify"
+        const val MESSAGES = "messages"
+        const val MESSAGE_NOTIFICATION = 1
+        const val PERMISSION_REQUEST = 7
+        const val BRONZE = 0xFF8A5A30.toInt()
         const val CHANNEL = "zelamar/keystore"
         const val KEYSTORE = "AndroidKeyStore"
         const val TRANSFORMATION = "AES/GCM/NoPadding"

@@ -94,6 +94,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MessageView dco_decode_box_autoadd_message_view(dynamic raw);
 
   @protected
+  Notice dco_decode_box_autoadd_notice(dynamic raw);
+
+  @protected
   ChatPreview dco_decode_chat_preview(dynamic raw);
 
   @protected
@@ -160,6 +163,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MessageView dco_decode_message_view(dynamic raw);
 
   @protected
+  Notice dco_decode_notice(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
@@ -167,6 +173,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   MessageView? dco_decode_opt_box_autoadd_message_view(dynamic raw);
+
+  @protected
+  Notice? dco_decode_opt_box_autoadd_notice(dynamic raw);
 
   @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw);
@@ -256,6 +265,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MessageView sse_decode_box_autoadd_message_view(SseDeserializer deserializer);
 
   @protected
+  Notice sse_decode_box_autoadd_notice(SseDeserializer deserializer);
+
+  @protected
   ChatPreview sse_decode_chat_preview(SseDeserializer deserializer);
 
   @protected
@@ -324,6 +336,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MessageView sse_decode_message_view(SseDeserializer deserializer);
 
   @protected
+  Notice sse_decode_notice(SseDeserializer deserializer);
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
@@ -333,6 +348,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MessageView? sse_decode_opt_box_autoadd_message_view(
     SseDeserializer deserializer,
   );
+
+  @protected
+  Notice? sse_decode_opt_box_autoadd_notice(SseDeserializer deserializer);
 
   @protected
   Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer);
@@ -436,6 +454,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_notice(Notice self, SseSerializer serializer);
+
+  @protected
   void sse_encode_chat_preview(ChatPreview self, SseSerializer serializer);
 
   @protected
@@ -523,6 +544,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_message_view(MessageView self, SseSerializer serializer);
 
   @protected
+  void sse_encode_notice(Notice self, SseSerializer serializer);
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
@@ -534,6 +558,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_message_view(
     MessageView? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_notice(
+    Notice? self,
     SseSerializer serializer,
   );
 

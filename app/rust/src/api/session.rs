@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use zelamar_core::content::{AppMessage, MessageId};
+use zelamar_core::content::{AppMessage, Body, MessageId};
 use zelamar_core::device::{ChatId, ChatSummary, Device, Received};
 use zelamar_core::history::{HistoryEntry, SendStatus, StoredContent};
 use zelamar_core::identity::AccountKey;
@@ -127,7 +127,21 @@ pub struct InboxEvent {
     pub joined: bool,
     /// Why the envelope was refused, if it was.
     pub refused: Option<String>,
+    /// A new message from someone else, worth a notification.
+    pub notice: Option<Notice>,
 }
+
+/// What a notification about a new message says.
+#[derive(Debug, Clone)]
+pub struct Notice {
+    /// Who wrote: `@name`, or "Someone new" before their name is known.
+    pub title: String,
+    /// The text, shortened to fit a notification.
+    pub body: String,
+}
+
+/// Longest notification text, in characters.
+const NOTICE_CHARS: usize = 180;
 
 /// Where an outgoing message is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -343,28 +357,41 @@ impl Session {
                 chat: Some(chat_key(&chat)),
                 joined: true,
                 refused: None,
+                notice: None,
             },
-            Ok(
-                Received::Message { chat, .. }
-                | Received::ChatUpdated { chat }
-                | Received::OwnEcho { chat },
-            ) => InboxEvent {
+            Ok(Received::Message {
+                chat,
+                author,
+                message,
+            }) => InboxEvent {
                 ack,
                 chat: Some(chat_key(&chat)),
                 joined: false,
                 refused: None,
+                notice: (author.account != self.device.account())
+                    .then(|| self.notice(author.account, &message.body))
+                    .flatten(),
+            },
+            Ok(Received::ChatUpdated { chat } | Received::OwnEcho { chat }) => InboxEvent {
+                ack,
+                chat: Some(chat_key(&chat)),
+                joined: false,
+                refused: None,
+                notice: None,
             },
             Ok(_) => InboxEvent {
                 ack,
                 chat: None,
                 joined: false,
                 refused: None,
+                notice: None,
             },
             Err(error) => InboxEvent {
                 ack,
                 chat: None,
                 joined: false,
                 refused: Some(SessionError::from(error).code),
+                notice: None,
             },
         })
     }
@@ -440,6 +467,26 @@ impl Session {
             .iter()
             .map(message_view)
             .collect())
+    }
+
+    /// The notification for a new text from `account`, if it is one.
+    fn notice(&self, account: zelamar_core::identity::AccountId, body: &Body) -> Option<Notice> {
+        let text = match body {
+            Body::Text { text } | Body::Reply { text, .. } => text,
+            _ => return None,
+        };
+        let title = self
+            .device
+            .contacts()
+            .into_iter()
+            .find(|contact| contact.account == account)
+            .and_then(|contact| contact.username)
+            .map_or_else(|| "Someone new".to_owned(), |name| format!("@{name}"));
+        let mut body: String = text.chars().take(NOTICE_CHARS).collect();
+        if text.chars().count() > NOTICE_CHARS {
+            body.push('…');
+        }
+        Some(Notice { title, body })
     }
 
     fn find_chat(&self, key: &str) -> Result<ChatId, SessionError> {
@@ -678,6 +725,13 @@ mod tests {
 
         let events = read(&mut stub, &mut bob);
         assert!(events[0].joined);
+        let notice = events
+            .iter()
+            .find_map(|event| event.notice.clone())
+            .expect("a notice for Alice's text");
+        assert_eq!(notice.title, "@alice");
+        assert_eq!(notice.body, "Hello Bob");
+        assert_eq!(events.iter().filter(|e| e.notice.is_some()).count(), 1);
         assert!(events
             .iter()
             .all(|event| event.ack.is_some() && event.refused.is_none()));

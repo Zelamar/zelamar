@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:zelamar/src/messenger/key_vault.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
+import 'package:zelamar/src/messenger/notifier.dart';
 import 'package:zelamar/src/messenger/os_vault.dart';
 import 'package:zelamar/src/messenger/transport.dart';
 import 'package:zelamar/src/rust/api/session.dart';
@@ -18,12 +19,20 @@ import 'package:zelamar/src/rust/api/session.dart'
 /// the service is reachable. The mailbox connection delivers incoming
 /// envelopes, which the core opens one at a time, in order.
 class LiveMessenger extends Messenger {
-  new({required this.directory, required this.vault, required this.transport});
+  new({
+    required this.directory,
+    required this.vault,
+    required this.transport,
+    Notifier? notifier,
+  }) : notifier = notifier ?? Notifier.forPlatform();
 
   /// Where the encrypted store lives.
   final String directory;
   final KeyVault vault;
   final ServiceTransport transport;
+
+  /// Tells the user about new messages while the app is not in front.
+  final Notifier notifier;
 
   Session? _session;
   MessengerPhase _phase = MessengerPhase.starting;
@@ -188,6 +197,7 @@ class LiveMessenger extends Messenger {
 
   Future<void> _becomeReady() async {
     _setPhase(MessengerPhase.ready);
+    unawaited(notifier.requestPermission());
     await _refreshChats(null);
     unawaited(_runMailbox());
     unawaited(_flush());
@@ -233,6 +243,10 @@ class LiveMessenger extends Messenger {
     if (event.chat != null) {
       await _refreshChats(event.chat);
       unawaited(_confirmNames());
+    }
+    final notice = event.notice;
+    if (notice != null && !await notifier.inFront()) {
+      await notifier.show(title: notice.title, body: notice.body);
     }
   }
 

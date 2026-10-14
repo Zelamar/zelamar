@@ -1,11 +1,13 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:zelamar/src/app.dart';
 import 'package:zelamar/src/messenger/key_vault.dart';
 import 'package:zelamar/src/messenger/live_messenger.dart';
+import 'package:zelamar/src/messenger/notifier.dart';
 import 'package:zelamar/src/messenger/transport.dart';
 import 'package:zelamar/src/rust/frb_generated.dart';
 
@@ -40,6 +42,14 @@ void main() {
     await binding.takeScreenshot('android-$name');
   }
 
+  testWidgets('the native notifier is wired in this build', (tester) async {
+    // A real channel to the runner (C++ on Windows, Kotlin on Android): a
+    // missing implementation would throw MissingPluginException here.
+    const channel = MethodChannel('zelamar/notify');
+    final inFront = await channel.invokeMethod<bool>('inFront');
+    expect(inFront, isA<bool>());
+  });
+
   testWidgets('welcome, onboarding, then an encrypted exchange in the lab', (
     tester,
   ) async {
@@ -53,6 +63,7 @@ void main() {
       directory: directory.path,
       vault: KeyVault(directory.path, profile: 'integration'),
       transport: ServiceTransport(Uri.parse('http://127.0.0.1:9')),
+      notifier: const SilentNotifier(),
     );
     await tester.pumpWidget(ZelamarApp(messenger: messenger));
     await messenger.start();

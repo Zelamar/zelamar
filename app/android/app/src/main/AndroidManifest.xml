@@ -2,6 +2,8 @@
     <!-- The delivery service. Flutter adds this only to debug and profile
          builds; a release build without it cannot reach the network. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 13+: asked once, after the account is created. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- No cloud backups: messages must not leave the device, and a
          restored sealed key could not be opened on another phone anyway. -->
     <application

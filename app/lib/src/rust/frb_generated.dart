@@ -1408,6 +1408,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  Notice dco_decode_box_autoadd_notice(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_notice(raw);
+  }
+
+  @protected
   ChatPreview dco_decode_chat_preview(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -1477,13 +1483,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   InboxEvent dco_decode_inbox_event(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return InboxEvent(
       ack: dco_decode_opt_list_prim_u_8_strict(arr[0]),
       chat: dco_decode_opt_String(arr[1]),
       joined: dco_decode_bool(arr[2]),
       refused: dco_decode_opt_String(arr[3]),
+      notice: dco_decode_opt_box_autoadd_notice(arr[4]),
     );
   }
 
@@ -1619,6 +1626,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  Notice dco_decode_notice(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return Notice(
+      title: dco_decode_String(arr[0]),
+      body: dco_decode_String(arr[1]),
+    );
+  }
+
+  @protected
   String? dco_decode_opt_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_String(raw);
@@ -1634,6 +1653,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   MessageView? dco_decode_opt_box_autoadd_message_view(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_message_view(raw);
+  }
+
+  @protected
+  Notice? dco_decode_opt_box_autoadd_notice(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_notice(raw);
   }
 
   @protected
@@ -1827,6 +1852,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  Notice sse_decode_box_autoadd_notice(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_notice(deserializer));
+  }
+
+  @protected
   ChatPreview sse_decode_chat_preview(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_id = sse_decode_String(deserializer);
@@ -1895,11 +1926,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_chat = sse_decode_opt_String(deserializer);
     var var_joined = sse_decode_bool(deserializer);
     var var_refused = sse_decode_opt_String(deserializer);
+    var var_notice = sse_decode_opt_box_autoadd_notice(deserializer);
     return InboxEvent(
       ack: var_ack,
       chat: var_chat,
       joined: var_joined,
       refused: var_refused,
+      notice: var_notice,
     );
   }
 
@@ -2082,6 +2115,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  Notice sse_decode_notice(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_title = sse_decode_String(deserializer);
+    var var_body = sse_decode_String(deserializer);
+    return Notice(title: var_title, body: var_body);
+  }
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -2111,6 +2152,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_box_autoadd_message_view(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  Notice? sse_decode_opt_box_autoadd_notice(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_notice(deserializer));
     } else {
       return null;
     }
@@ -2318,6 +2370,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_notice(Notice self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_notice(self, serializer);
+  }
+
+  @protected
   void sse_encode_chat_preview(ChatPreview self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.id, serializer);
@@ -2370,6 +2428,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_String(self.chat, serializer);
     sse_encode_bool(self.joined, serializer);
     sse_encode_opt_String(self.refused, serializer);
+    sse_encode_opt_box_autoadd_notice(self.notice, serializer);
   }
 
   @protected
@@ -2527,6 +2586,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_notice(Notice self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.title, serializer);
+    sse_encode_String(self.body, serializer);
+  }
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -2559,6 +2625,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_box_autoadd_message_view(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_notice(
+    Notice? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_notice(self, serializer);
     }
   }
 

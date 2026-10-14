@@ -6,6 +6,7 @@ import 'package:integration_test/integration_test.dart';
 import 'package:zelamar/src/messenger/key_vault.dart';
 import 'package:zelamar/src/messenger/live_messenger.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
+import 'package:zelamar/src/messenger/notifier.dart';
 import 'package:zelamar/src/messenger/transport.dart';
 import 'package:zelamar/src/rust/frb_generated.dart';
 
@@ -56,6 +57,7 @@ void main() {
           directory: directory.path,
           vault: KeyVault(directory.path, profile: 'live-$name-$run'),
           transport: ServiceTransport(Uri.parse(service)),
+          notifier: const SilentNotifier(),
         );
         addTearDown(messenger.dispose);
         await messenger.start();

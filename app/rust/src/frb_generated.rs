@@ -1634,11 +1634,13 @@ impl SseDecode for crate::api::session::InboxEvent {
         let mut var_chat = <Option<String>>::sse_decode(deserializer);
         let mut var_joined = <bool>::sse_decode(deserializer);
         let mut var_refused = <Option<String>>::sse_decode(deserializer);
+        let mut var_notice = <Option<crate::api::session::Notice>>::sse_decode(deserializer);
         return crate::api::session::InboxEvent {
             ack: var_ack,
             chat: var_chat,
             joined: var_joined,
             refused: var_refused,
+            notice: var_notice,
         };
     }
 }
@@ -1839,6 +1841,18 @@ impl SseDecode for crate::api::session::MessageView {
     }
 }
 
+impl SseDecode for crate::api::session::Notice {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_title = <String>::sse_decode(deserializer);
+        let mut var_body = <String>::sse_decode(deserializer);
+        return crate::api::session::Notice {
+            title: var_title,
+            body: var_body,
+        };
+    }
+}
+
 impl SseDecode for Option<String> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1866,6 +1880,17 @@ impl SseDecode for Option<crate::api::session::MessageView> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<crate::api::session::MessageView>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<crate::api::session::Notice> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::session::Notice>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -2146,6 +2171,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::session::InboxEvent {
             self.chat.into_into_dart().into_dart(),
             self.joined.into_into_dart().into_dart(),
             self.refused.into_into_dart().into_dart(),
+            self.notice.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -2308,6 +2334,24 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::session::MessageView>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::session::Notice {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.title.into_into_dart().into_dart(),
+            self.body.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::session::Notice {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::session::Notice>
+    for crate::api::session::Notice
+{
+    fn into_into_dart(self) -> crate::api::session::Notice {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::session::PendingSend {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -2458,6 +2502,7 @@ impl SseEncode for crate::api::session::InboxEvent {
         <Option<String>>::sse_encode(self.chat, serializer);
         <bool>::sse_encode(self.joined, serializer);
         <Option<String>>::sse_encode(self.refused, serializer);
+        <Option<crate::api::session::Notice>>::sse_encode(self.notice, serializer);
     }
 }
 
@@ -2618,6 +2663,14 @@ impl SseEncode for crate::api::session::MessageView {
     }
 }
 
+impl SseEncode for crate::api::session::Notice {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.title, serializer);
+        <String>::sse_encode(self.body, serializer);
+    }
+}
+
 impl SseEncode for Option<String> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -2644,6 +2697,16 @@ impl SseEncode for Option<crate::api::session::MessageView> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <crate::api::session::MessageView>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<crate::api::session::Notice> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::session::Notice>::sse_encode(value, serializer);
         }
     }
 }
