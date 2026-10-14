@@ -71,6 +71,10 @@ jobs:
           apk=build/app/outputs/flutter-apk/app-release.apk
           "$apksigner" verify --print-certs "$apk" | tee signature.txt
           grep -qi "SHA-256 digest: $UPLOAD_CERT_SHA256" signature.txt
+          # A release build without INTERNET cannot reach the service.
+          aapt2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)
+          "$aapt2" dump permissions "$apk" | tee permissions.txt
+          grep -q "android.permission.INTERNET" permissions.txt
           version=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | tr '+' '-')
           mkdir -p dist
           cp "$apk" "dist/zelamar-$version-android-arm64.apk"
