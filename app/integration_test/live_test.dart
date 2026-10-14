@@ -75,8 +75,8 @@ void main() {
 
       final alice = await person('alice');
       final bob = await person('bob');
-      final aliceName = 'alice_$run';
-      final bobName = 'bob_$run';
+      final aliceName = 'qa_${run}_a';
+      final bobName = 'qa_${run}_b';
       await alice.createAccount(username: aliceName, invite: codes[0]);
       await bob.createAccount(username: bobName, invite: codes[1]);
       expect(alice.phase, MessengerPhase.ready);
