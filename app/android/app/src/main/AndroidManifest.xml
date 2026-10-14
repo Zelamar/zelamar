@@ -1,5 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- No cloud backups: messages must not leave the device, and a
+         restored sealed key could not be opened on another phone anyway. -->
     <application
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:label="Zelamar"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">

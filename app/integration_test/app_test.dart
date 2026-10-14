@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:zelamar/src/app.dart';
-import 'package:zelamar/src/rust/api/diagnostics.dart' as core;
+import 'package:zelamar/src/messenger/key_vault.dart';
+import 'package:zelamar/src/messenger/live_messenger.dart';
+import 'package:zelamar/src/messenger/transport.dart';
 import 'package:zelamar/src/rust/frb_generated.dart';
 
 /// Pumps frames until [finder] matches, for work that completes off the UI
@@ -38,29 +40,35 @@ void main() {
     await binding.takeScreenshot('android-$name');
   }
 
-  testWidgets('hello screen, then an encrypted exchange in the Crypto Lab', (
+  testWidgets('welcome, onboarding, then an encrypted exchange in the lab', (
     tester,
   ) async {
     if (Platform.isAndroid) await binding.convertFlutterSurfaceToImage();
 
-    final info = core.coreInfo();
-    await tester.pumpWidget(
-      ZelamarApp(
-        coreInfo: info,
-        greeting: core.greet(name: ''),
-      ),
+    // The real messenger on a fresh directory: no account yet. No service
+    // is reachable in CI, and none is needed to get this far.
+    final directory = await Directory.systemTemp.createTemp('zelamar-it-');
+    addTearDown(() => directory.delete(recursive: true));
+    final messenger = LiveMessenger(
+      directory: directory.path,
+      vault: KeyVault(directory.path, profile: 'integration'),
+      transport: ServiceTransport(Uri.parse('http://127.0.0.1:9')),
     );
+    await tester.pumpWidget(ZelamarApp(messenger: messenger));
+    await messenger.start();
+    await pumpUntil(tester, find.text('Private by design.'));
+    await screenshot(tester, 'welcome');
+
+    await tester.tap(find.byKey(const Key('welcome.create')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('account.username')), 'ada');
+    await tester.pumpAndSettle();
+    await screenshot(tester, 'choose-name');
+    await tester.pageBack();
     await tester.pumpAndSettle();
 
-    expect(find.text('Hello, Zelamar'), findsOneWidget);
-    expect(
-      find.text('Core ${info.version} · Protocol ${info.protocolVersion}'),
-      findsOneWidget,
-    );
-    await screenshot(tester, 'hello');
-
     // Open the lab: two real devices start on real encrypted stores.
-    await tester.tap(find.byKey(const Key('hello.openLab')));
+    await tester.tap(find.byKey(const Key('welcome.lab')));
     final aliceComposer = find.descendant(
       of: find.byKey(const Key('lab.composer.alice')),
       matching: find.byType(TextField),

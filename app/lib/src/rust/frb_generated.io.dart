@@ -5,6 +5,7 @@
 
 import 'api/diagnostics.dart';
 import 'api/lab.dart';
+import 'api/session.dart';
 
 import 'dart:async';
 import 'dart:convert';
@@ -26,9 +27,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   get rust_arc_decrement_strong_count_CryptoLabPtr => wire
       ._rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCryptoLabPtr;
 
+  CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_SessionPtr => wire
+      ._rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionPtr;
+
   @protected
   CryptoLab
   dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCryptoLab(
+    dynamic raw,
+  );
+
+  @protected
+  Session
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     dynamic raw,
   );
 
@@ -39,8 +50,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  Session
+  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+    dynamic raw,
+  );
+
+  @protected
   CryptoLab
   dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCryptoLab(
+    dynamic raw,
+  );
+
+  @protected
+  Session
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     dynamic raw,
   );
 
@@ -51,16 +74,43 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  Session
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+    dynamic raw,
+  );
+
+  @protected
   String dco_decode_String(dynamic raw);
 
   @protected
   bool dco_decode_bool(dynamic raw);
 
   @protected
+  PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
+
+  @protected
+  MessageView dco_decode_box_autoadd_message_view(dynamic raw);
+
+  @protected
+  ChatPreview dco_decode_chat_preview(dynamic raw);
+
+  @protected
   CoreInfo dco_decode_core_info(dynamic raw);
 
   @protected
+  HttpCall dco_decode_http_call(dynamic raw);
+
+  @protected
+  HttpHeader dco_decode_http_header(dynamic raw);
+
+  @protected
   int dco_decode_i_32(dynamic raw);
+
+  @protected
+  PlatformInt64 dco_decode_i_64(dynamic raw);
+
+  @protected
+  InboxEvent dco_decode_inbox_event(dynamic raw);
 
   @protected
   LabError dco_decode_lab_error(dynamic raw);
@@ -75,10 +125,55 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LabSide dco_decode_lab_side(dynamic raw);
 
   @protected
+  List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
+  List<ChatPreview> dco_decode_list_chat_preview(dynamic raw);
+
+  @protected
+  List<HttpHeader> dco_decode_list_http_header(dynamic raw);
+
+  @protected
   List<LabParticipant> dco_decode_list_lab_participant(dynamic raw);
 
   @protected
+  List<MessageView> dco_decode_list_message_view(dynamic raw);
+
+  @protected
+  List<PendingSend> dco_decode_list_pending_send(dynamic raw);
+
+  @protected
+  List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  MailboxLink dco_decode_mailbox_link(dynamic raw);
+
+  @protected
+  MessageStatus dco_decode_message_status(dynamic raw);
+
+  @protected
+  MessageView dco_decode_message_view(dynamic raw);
+
+  @protected
+  String? dco_decode_opt_String(dynamic raw);
+
+  @protected
+  PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
+
+  @protected
+  MessageView? dco_decode_opt_box_autoadd_message_view(dynamic raw);
+
+  @protected
+  Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  PendingSend dco_decode_pending_send(dynamic raw);
+
+  @protected
+  SessionError dco_decode_session_error(dynamic raw);
 
   @protected
   int dco_decode_u_16(dynamic raw);
@@ -105,8 +200,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  Session
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   CryptoLab
   sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCryptoLab(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  Session
+  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     SseDeserializer deserializer,
   );
 
@@ -117,8 +224,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  Session
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   CryptoLab
   sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCryptoLab(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  Session
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     SseDeserializer deserializer,
   );
 
@@ -129,10 +248,31 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
+  PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
+
+  @protected
+  MessageView sse_decode_box_autoadd_message_view(SseDeserializer deserializer);
+
+  @protected
+  ChatPreview sse_decode_chat_preview(SseDeserializer deserializer);
+
+  @protected
   CoreInfo sse_decode_core_info(SseDeserializer deserializer);
 
   @protected
+  HttpCall sse_decode_http_call(SseDeserializer deserializer);
+
+  @protected
+  HttpHeader sse_decode_http_header(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer);
+
+  @protected
+  PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
+
+  @protected
+  InboxEvent sse_decode_inbox_event(SseDeserializer deserializer);
 
   @protected
   LabError sse_decode_lab_error(SseDeserializer deserializer);
@@ -147,12 +287,59 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LabSide sse_decode_lab_side(SseDeserializer deserializer);
 
   @protected
+  List<String> sse_decode_list_String(SseDeserializer deserializer);
+
+  @protected
+  List<ChatPreview> sse_decode_list_chat_preview(SseDeserializer deserializer);
+
+  @protected
+  List<HttpHeader> sse_decode_list_http_header(SseDeserializer deserializer);
+
+  @protected
   List<LabParticipant> sse_decode_list_lab_participant(
     SseDeserializer deserializer,
   );
 
   @protected
+  List<MessageView> sse_decode_list_message_view(SseDeserializer deserializer);
+
+  @protected
+  List<PendingSend> sse_decode_list_pending_send(SseDeserializer deserializer);
+
+  @protected
+  List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
+
+  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  MailboxLink sse_decode_mailbox_link(SseDeserializer deserializer);
+
+  @protected
+  MessageStatus sse_decode_message_status(SseDeserializer deserializer);
+
+  @protected
+  MessageView sse_decode_message_view(SseDeserializer deserializer);
+
+  @protected
+  String? sse_decode_opt_String(SseDeserializer deserializer);
+
+  @protected
+  PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
+
+  @protected
+  MessageView? sse_decode_opt_box_autoadd_message_view(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  PendingSend sse_decode_pending_send(SseDeserializer deserializer);
+
+  @protected
+  SessionError sse_decode_session_error(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_16(SseDeserializer deserializer);
@@ -181,8 +368,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+    Session self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
   sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCryptoLab(
     CryptoLab self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+    Session self,
     SseSerializer serializer,
   );
 
@@ -195,8 +396,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+    Session self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
   sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCryptoLab(
     CryptoLab self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+    Session self,
     SseSerializer serializer,
   );
 
@@ -207,10 +422,37 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_i_64(
+    PlatformInt64 self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_message_view(
+    MessageView self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_chat_preview(ChatPreview self, SseSerializer serializer);
+
+  @protected
   void sse_encode_core_info(CoreInfo self, SseSerializer serializer);
 
   @protected
+  void sse_encode_http_call(HttpCall self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_http_header(HttpHeader self, SseSerializer serializer);
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_inbox_event(InboxEvent self, SseSerializer serializer);
 
   @protected
   void sse_encode_lab_error(LabError self, SseSerializer serializer);
@@ -228,16 +470,82 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_lab_side(LabSide self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_chat_preview(
+    List<ChatPreview> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_http_header(
+    List<HttpHeader> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_lab_participant(
     List<LabParticipant> self,
     SseSerializer serializer,
   );
 
   @protected
+  void sse_encode_list_message_view(
+    List<MessageView> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_pending_send(
+    List<PendingSend> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_mailbox_link(MailboxLink self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_message_status(MessageStatus self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_message_view(MessageView self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_String(String? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_i_64(
+    PlatformInt64? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_message_view(
+    MessageView? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_list_prim_u_8_strict(
+    Uint8List? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_pending_send(PendingSend self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_session_error(SessionError self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_16(int self, SseSerializer serializer);
@@ -304,5 +612,39 @@ class RustLibWire implements BaseWire {
       );
   late final _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCryptoLab =
       _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCryptoLabPtr
+          .asFunction<void Function(ffi.Pointer<ffi.Void>)>();
+
+  void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+    ffi.Pointer<ffi.Void> ptr,
+  ) {
+    return _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+      ptr,
+    );
+  }
+
+  late final _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>(
+        'frbgen_zelamar_rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession',
+      );
+  late final _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession =
+      _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionPtr
+          .asFunction<void Function(ffi.Pointer<ffi.Void>)>();
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+    ffi.Pointer<ffi.Void> ptr,
+  ) {
+    return _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+      ptr,
+    );
+  }
+
+  late final _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>(
+        'frbgen_zelamar_rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession',
+      );
+  late final _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession =
+      _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionPtr
           .asFunction<void Function(ffi.Pointer<ffi.Void>)>();
 }

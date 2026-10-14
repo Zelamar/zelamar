@@ -3299,7 +3299,9 @@ dependencies = [
 name = "zelamar_bridge"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "flutter_rust_bridge",
+ "serde_json",
  "tempfile",
  "zelamar-core",
 ]

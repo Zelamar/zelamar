@@ -24,7 +24,9 @@ abstract class CryptoLab implements RustOpaqueInterface {
   /// if the app had been restarted.
   Future<void> restart();
 
-  /// Sends `text` from one side to the other through a real envelope.
+  /// Sends `text` from one side to the other through a real envelope. The
+  /// lab plays the transport: it delivers to the address the sender's
+  /// device chose, then confirms delivery so the outbox empties.
   Future<LabExchange> send({required LabSide from, required String text});
 }
 

@@ -5,3 +5,4 @@
 pub mod diagnostics;
 pub mod lab;
 pub mod lifecycle;
+pub mod session;

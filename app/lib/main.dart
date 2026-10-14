@@ -1,14 +1,29 @@
+import 'dart:io';
+
 import 'package:flutter/widgets.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:zelamar/src/app.dart';
-import 'package:zelamar/src/rust/api/diagnostics.dart' as core;
+import 'package:zelamar/src/messenger/config.dart';
+import 'package:zelamar/src/messenger/key_vault.dart';
+import 'package:zelamar/src/messenger/live_messenger.dart';
+import 'package:zelamar/src/messenger/transport.dart';
 import 'package:zelamar/src/rust/frb_generated.dart';
 
-Future<void> main() async {
+Future<void> main(List<String> arguments) async {
+  WidgetsFlutterBinding.ensureInitialized();
   await RustLib.init();
-  runApp(
-    ZelamarApp(
-      coreInfo: core.coreInfo(),
-      greeting: core.greet(name: ''),
-    ),
+
+  final config = MessengerConfig.from(arguments);
+  final support = await getApplicationSupportDirectory();
+  final separator = Platform.pathSeparator;
+  final directory =
+      '${support.path}${separator}profiles$separator${config.profile}';
+  final messenger = LiveMessenger(
+    directory: directory,
+    vault: KeyVault(directory, profile: config.profile),
+    transport: ServiceTransport(config.service),
   );
+
+  runApp(ZelamarApp(messenger: messenger));
+  await messenger.start();
 }
