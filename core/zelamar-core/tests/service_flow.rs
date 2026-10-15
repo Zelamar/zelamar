@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use zelamar_core::CoreError;
 use zelamar_core::contacts::Contact;
 use zelamar_core::content::{AppMessage, Body, MessageId};
-use zelamar_core::device::{Author, ChatId, Device, Outgoing, Received};
+use zelamar_core::device::{Author, ChatId, Device, Outgoing, Received, Settled};
 use zelamar_core::envelope::{Envelope, EnvelopeId, MailboxId};
 use zelamar_core::history::{SendStatus, StoredContent};
 use zelamar_core::identity::AccountKey;
@@ -47,6 +47,25 @@ struct Listed {
 struct Service {
     accounts: HashMap<String, (String, Vec<Listed>)>,
     mailboxes: HashMap<[u8; 32], VecDeque<Vec<u8>>>,
+    /// The sequencer: per chat, the current epoch and the last winner.
+    groups: HashMap<String, (u64, [u8; 16])>,
+}
+
+/// One delivery frame read from the start of `frame`, and its length.
+fn read_frame(frame: &[u8]) -> (EnvelopeId, Vec<[u8; 32]>, Vec<u8>, usize) {
+    let id = EnvelopeId(frame[3..19].try_into().expect("id"));
+    let count = usize::from(frame[19]);
+    let recipients = (0..count)
+        .map(|at| {
+            frame[20 + 32 * at..52 + 32 * at]
+                .try_into()
+                .expect("mailbox")
+        })
+        .collect();
+    let length_at = 20 + 32 * count;
+    let length = u32::from_be_bytes(frame[length_at..length_at + 4].try_into().expect("u32"));
+    let end = length_at + 4 + length as usize;
+    (id, recipients, frame[length_at + 4..end].to_vec(), end)
 }
 
 impl Service {
@@ -118,28 +137,54 @@ impl Service {
                 None => unknown(),
             },
             ("POST", ["deliver"]) => {
-                let frame = &request.body;
-                let id = EnvelopeId(frame[3..19].try_into().expect("id"));
-                let count = usize::from(frame[19]);
-                let payload = frame[20 + 32 * count + 4..].to_vec();
-                let mut delivered = 0;
-                for at in 0..count {
-                    let start = 20 + 32 * at;
-                    let to: [u8; 32] = frame[start..start + 32].try_into().expect("mailbox");
-                    if let Some(queue) = self.mailboxes.get_mut(&to) {
-                        let envelope = Envelope {
-                            id,
-                            to: MailboxId(to),
-                            payload: payload.clone(),
-                        };
-                        queue.push_back(envelope.encode().expect("envelope"));
-                        delivered += 1;
+                let (id, recipients, payload, _) = read_frame(&request.body);
+                let delivered = self.fan_out(id, &recipients, &payload);
+                answer(202, &json!({ "delivered": delivered }))
+            }
+            ("POST", ["groups", group, "commits"]) => {
+                let body = &request.body;
+                let epoch = u64::from_be_bytes(body[3..11].try_into().expect("epoch"));
+                let (id, recipients, payload, used) = read_frame(&body[11..]);
+                let welcome = (11 + used < body.len()).then(|| read_frame(&body[11 + used..]));
+                let state = self.groups.get(*group).copied();
+                match state {
+                    Some((current, last)) if current == epoch + 1 && last == id.0 => {}
+                    Some((current, _)) if current != epoch => {
+                        return answer(
+                            409,
+                            &json!({ "error": "epoch_mismatch", "epoch": current }),
+                        );
+                    }
+                    _ => {
+                        self.groups.insert((*group).to_owned(), (epoch + 1, id.0));
                     }
                 }
-                answer(202, &json!({ "delivered": delivered }))
+                let delivered = self.fan_out(id, &recipients, &payload);
+                let welcomed =
+                    welcome.map_or(0, |(id, to, payload, _)| self.fan_out(id, &to, &payload));
+                answer(
+                    202,
+                    &json!({ "epoch": epoch + 1, "delivered": delivered, "welcomed": welcomed }),
+                )
             }
             other => panic!("the stand-in service does not route {other:?}"),
         }
+    }
+
+    fn fan_out(&mut self, id: EnvelopeId, recipients: &[[u8; 32]], payload: &[u8]) -> usize {
+        let mut delivered = 0;
+        for to in recipients {
+            if let Some(queue) = self.mailboxes.get_mut(to) {
+                let envelope = Envelope {
+                    id,
+                    to: MailboxId(*to),
+                    payload: payload.to_vec(),
+                };
+                queue.push_back(envelope.encode().expect("envelope"));
+                delivered += 1;
+            }
+        }
+        delivered
     }
 
     /// Everything waiting in the mailbox the device reads.
@@ -210,16 +255,26 @@ impl Person {
     }
 
     /// Sends everything in the outbox and confirms what the service took.
-    fn flush(&mut self, service: &mut Service) {
-        for outgoing in self.device.outbox().expect("outbox") {
-            let (status, body) = service.handle(&service::delivery(&outgoing).expect("frame"));
-            service::delivered(status, &body).expect("delivered");
-            self.device.confirm_sent(outgoing.id).expect("confirm");
-        }
+    /// Sends everything in the outbox and settles each answer.
+    fn flush(&mut self, service: &mut Service) -> Vec<Settled> {
+        let settled = self
+            .device
+            .outbox()
+            .expect("outbox")
+            .into_iter()
+            .map(|outgoing| {
+                let (status, body) =
+                    service.handle(&service::delivery(&outgoing).expect("request"));
+                self.device
+                    .settle(outgoing.id, status, &body)
+                    .expect("settle")
+            })
+            .collect();
         assert_eq!(
             self.device.outbox().expect("outbox"),
             Vec::<Outgoing>::new()
         );
+        settled
     }
 
     /// Opens everything in the mailbox; every envelope is acknowledged.
@@ -513,4 +568,85 @@ fn a_chat_request_can_be_declined_without_a_trace_or_accepted() {
         matches!(&introduced[..], [Received::Message { message, .. }]
         if message.body == Body::Profile { username: "bob".into() })
     );
+}
+
+#[test]
+fn rival_changes_to_a_chat_are_sequenced_and_nobody_forks() {
+    let mut service = Service::default();
+    let mut alice = Person::join(&mut service, "alice");
+    let mut bob = Person::join(&mut service, "bob");
+    let mut carol = Person::join(&mut service, "carol");
+    let mut dave = Person::join(&mut service, "dave");
+
+    let chat = alice.start_chat_with(&mut service, "bob");
+    alice.flush(&mut service);
+    bob.read(&mut service);
+
+    let invite = |person: &mut Person, service: &mut Service, name: &str| {
+        let (status, body) = service.handle(&service::lookup(name).expect("lookup"));
+        let entry = service::directory_entry(name, status, &body).expect("entry");
+        person
+            .device
+            .invite(&chat, &entry.key_packages[0])
+            .expect("invite")
+    };
+
+    // Both change the chat in the same epoch.
+    let carols = invite(&mut alice, &mut service, "carol");
+    let daves = invite(&mut bob, &mut service, "dave");
+    assert!(carols.commit.commit.is_some() && daves.commit.commit.is_some());
+    // A message written while Alice's commit waits goes out in the old epoch.
+    alice
+        .device
+        .send(&chat, &text(1, "while waiting"))
+        .expect("send");
+
+    // Alice reaches the sequencer first; Bob is refused.
+    assert_eq!(
+        alice.flush(&mut service),
+        vec![Settled::Applied, Settled::Delivered]
+    );
+    assert_eq!(bob.flush(&mut service), vec![Settled::Refused]);
+    assert!(
+        dave.read(&mut service).is_empty(),
+        "Dave was never welcomed"
+    );
+
+    // Bob applies the winner and still reads the message from the old epoch.
+    let bobs = bob.read(&mut service);
+    assert!(matches!(bobs[0], Received::ChatUpdated { .. }));
+    assert!(is_text(&bobs[1], alice.author(), "while waiting"));
+    assert!(matches!(
+        carol.read(&mut service)[0],
+        Received::Joined { .. }
+    ));
+
+    // Bob tries again, on top: now it wins, and everyone follows.
+    invite(&mut bob, &mut service, "dave");
+    assert_eq!(bob.flush(&mut service), vec![Settled::Applied]);
+    for person in [&mut alice, &mut carol] {
+        assert!(matches!(
+            person.read(&mut service)[0],
+            Received::ChatUpdated { .. }
+        ));
+    }
+    assert!(matches!(
+        dave.read(&mut service)[0],
+        Received::Joined { .. }
+    ));
+
+    // One chat, four members, one epoch: a message reaches all of them.
+    alice
+        .device
+        .send(&chat, &text(2, "Welcome, both of you"))
+        .expect("send");
+    alice.flush(&mut service);
+    for person in [&mut bob, &mut carol, &mut dave] {
+        let got = person.read(&mut service);
+        assert!(
+            got.iter()
+                .any(|r| is_text(r, alice.author(), "Welcome, both of you")),
+            "{got:?}"
+        );
+    }
 }

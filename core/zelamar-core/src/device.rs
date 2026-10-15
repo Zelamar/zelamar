@@ -29,7 +29,7 @@ use crate::envelope::{EnvelopeId, MailboxId};
 use crate::error::{CoreError, Result};
 use crate::history::{self, HistoryEntry, HistoryReader, SendStatus, StoredMessage};
 use crate::identity::{AccountId, AccountKey, DeviceCertificate, DeviceId};
-use crate::service::DirectoryEntry;
+use crate::service::{self, CommitAnswer, DirectoryEntry};
 use crate::store::{Batch, MasterKey, Store};
 
 /// The one ciphersuite Zelamar speaks: hybrid post-quantum key exchange
@@ -42,6 +42,10 @@ pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_MLKEM768X25519_AES256G
 /// Messages are padded to a multiple of this many bytes so their length
 /// leaks less about their content.
 const PADDING: usize = 64;
+
+/// Past epochs whose keys are kept, so a message sent just before a change
+/// in the chat (and delivered just after) still opens.
+const MAX_PAST_EPOCHS: usize = 4;
 
 /// Leaf-node extension carrying a device's mailbox id (private-use range).
 const MAILBOX_EXTENSION: u16 = 0xF5A1;
@@ -88,13 +92,41 @@ pub struct Author {
 /// in `recipients`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Outgoing {
-    /// Deduplication id, and the handle for [`Device::confirm_sent`].
+    /// Deduplication id, and the handle for [`Device::settle`].
     pub id: EnvelopeId,
     /// The other members' devices; never this one.
     pub recipients: Vec<MailboxId>,
     /// The MLS message.
     #[serde(with = "serde_bytes")]
     pub payload: Vec<u8>,
+    /// Set for a commit others must apply: it goes through the chat's
+    /// sequencer (`protocol/delivery.md`) instead of straight to mailboxes.
+    #[serde(default)]
+    pub commit: Option<CommitTicket>,
+}
+
+/// What the sequencer needs to know about a commit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommitTicket {
+    /// The chat's MLS group id.
+    #[serde(with = "serde_bytes")]
+    pub group: Vec<u8>,
+    /// The epoch the commit was made in.
+    pub epoch: u64,
+    /// The welcome for added devices, sent once the commit wins.
+    pub welcome: Option<Box<Outgoing>>,
+}
+
+/// What became of an outbox item once the service answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Settled {
+    /// Delivered to the mailboxes.
+    Delivered,
+    /// A commit that won its epoch: applied here too.
+    Applied,
+    /// A commit another member beat: dropped. The winner arrives in the
+    /// mailbox; whatever the commit was for has to be done again on top.
+    Refused,
 }
 
 /// Result of an invitation: the commit for existing members and the welcome
@@ -608,25 +640,77 @@ impl Device {
     ///
     /// A storage or integrity error.
     pub fn confirm_sent(&mut self, id: EnvelopeId) -> Result<()> {
+        self.transact(|device| device.confirm(id))
+    }
+
+    /// Reads the service's answer to the outbox item `id` and acts on it.
+    /// A delivery is confirmed. A commit the sequencer accepted is applied
+    /// here; one it refused is dropped (the winning commit arrives in the
+    /// mailbox). An answer for an item already settled changes nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Service`] for any other answer (retry it later if
+    /// [`CoreError::is_transient`]), or an MLS or storage error.
+    pub fn settle(&mut self, id: EnvelopeId, status: u16, body: &[u8]) -> Result<Settled> {
+        let Some(bytes) = self.store.outbox_item(&id.0)? else {
+            return Ok(Settled::Delivered);
+        };
+        let item = Queued::decode(&bytes)?;
+        let Some(ticket) = item.outgoing.commit else {
+            service::delivered(status, body)?;
+            self.confirm_sent(id)?;
+            return Ok(Settled::Delivered);
+        };
+        let answer = service::commit_answer(status, body)?;
+        let chat = ChatId(ticket.group);
         self.transact(|device| {
-            let Some(bytes) = device.store.outbox_item(&id.0)? else {
-                return Ok(());
-            };
-            let item = Queued::decode(&bytes)?;
             device.pending.confirmed.push(id);
-            if let Some((chat, message)) = item.message {
-                let reader = ChatHistory {
-                    store: &device.store,
-                    chat: &chat,
-                    pending: &device.pending.messages,
-                };
-                if let Some(mut record) = reader.load(message)? {
-                    record.status = SendStatus::Sent;
-                    device.pending.messages.push((chat, record));
+            // Act only on the commit this answer is about: one made in this
+            // very epoch and still pending here.
+            if let Some(group) = device.chats.get_mut(&chat)
+                && group.pending_commit().is_some()
+                && group.epoch().as_u64() == ticket.epoch
+            {
+                match answer {
+                    CommitAnswer::Accepted { .. } => {
+                        group
+                            .merge_pending_commit(&device.provider)
+                            .map_err(|e| CoreError::mls("applying an accepted commit", e))?;
+                    }
+                    CommitAnswer::Refused { .. } => {
+                        group
+                            .clear_pending_commit(device.provider.storage())
+                            .map_err(|e| CoreError::mls("dropping a refused commit", e))?;
+                    }
                 }
             }
-            Ok(())
+            Ok(match answer {
+                CommitAnswer::Accepted { .. } => Settled::Applied,
+                CommitAnswer::Refused { .. } => Settled::Refused,
+            })
         })
+    }
+
+    /// Removes a delivered item from the outbox and marks its message sent.
+    fn confirm(&mut self, id: EnvelopeId) -> Result<()> {
+        let Some(bytes) = self.store.outbox_item(&id.0)? else {
+            return Ok(());
+        };
+        let item = Queued::decode(&bytes)?;
+        self.pending.confirmed.push(id);
+        if let Some((chat, message)) = item.message {
+            let reader = ChatHistory {
+                store: &self.store,
+                chat: &chat,
+                pending: &self.pending.messages,
+            };
+            if let Some(mut record) = reader.load(message)? {
+                record.status = SendStatus::Sent;
+                self.pending.messages.push((chat, record));
+            }
+        }
+        Ok(())
     }
 
     /// Publishes a one-time `KeyPackage`: lets others add this device to a chat
@@ -805,29 +889,42 @@ impl Device {
     ) -> Result<Invitation> {
         let group = self.chats.get_mut(chat).ok_or(CoreError::UnknownChat)?;
         let existing = recipients(group)?;
+        let epoch = group.epoch().as_u64();
         let (commit, welcome, _group_info) = group
             .add_members(&self.provider, &self.signer, packages)
             .map_err(|e| CoreError::mls("adding a member", e))?;
-        group
-            .merge_pending_commit(&self.provider)
-            .map_err(|e| CoreError::mls("applying an invitation", e))?;
         newcomers.sort_unstable();
         newcomers.dedup();
-        let invitation = Invitation {
-            commit: Outgoing {
-                id: EnvelopeId::random()?,
-                recipients: existing,
-                payload: encode(&commit, "encoding a commit")?,
-            },
-            welcome: Outgoing {
-                id: EnvelopeId::random()?,
-                recipients: newcomers,
-                payload: encode(&welcome, "encoding a welcome")?,
-            },
+        let welcome = Outgoing {
+            id: EnvelopeId::random()?,
+            recipients: newcomers,
+            payload: encode(&welcome, "encoding a welcome")?,
+            commit: None,
         };
-        self.queue(&invitation.commit, None)?;
-        self.queue(&invitation.welcome, None)?;
-        Ok(invitation)
+        let mut commit = Outgoing {
+            id: EnvelopeId::random()?,
+            recipients: existing,
+            payload: encode(&commit, "encoding a commit")?,
+            commit: None,
+        };
+        if commit.recipients.is_empty() {
+            // Nobody else is here: nothing can race this commit, so it
+            // applies at once (a new chat works offline, too).
+            group
+                .merge_pending_commit(&self.provider)
+                .map_err(|e| CoreError::mls("applying an invitation", e))?;
+            self.queue(&welcome, None)?;
+        } else {
+            // Others may be changing the chat too: the sequencer decides,
+            // and the commit applies here once it wins (`settle`).
+            commit.commit = Some(CommitTicket {
+                group: chat.0.clone(),
+                epoch,
+                welcome: Some(Box::new(welcome.clone())),
+            });
+            self.queue(&commit, None)?;
+        }
+        Ok(Invitation { commit, welcome })
     }
 
     /// Joins a chat from a welcome addressed to this device.
@@ -910,6 +1007,7 @@ impl Device {
             id: EnvelopeId::random()?,
             recipients: others,
             payload: encode(&out, "encoding a message")?,
+            commit: None,
         };
         // Alone in a chat, there is no one to deliver to: already "sent".
         let status = if outgoing.recipients.is_empty() {
@@ -1059,6 +1157,9 @@ impl Device {
             _ => return Err(CoreError::malformed("MLS message", "not a chat message")),
         };
         let chat = ChatId::of(protocol.group_id());
+        if protocol.content_type() == ContentType::Commit {
+            self.resolve_pending_commit(&chat, protocol.epoch().as_u64())?;
+        }
         let group = self.chats.get_mut(&chat).ok_or(CoreError::UnknownChat)?;
         let processed = group
             .process_message(&self.provider, protocol)
@@ -1121,6 +1222,41 @@ impl Device {
         }
     }
 
+    /// Another member's commit for `epoch` arrived while one of ours waits
+    /// for the sequencer. Every commit that reaches a mailbox has won its
+    /// epoch, so: for our own epoch, ours lost and is dropped; for the next
+    /// one, ours must have won (that commit builds on it) and applies first.
+    fn resolve_pending_commit(&mut self, chat: &ChatId, epoch: u64) -> Result<()> {
+        let Some(group) = self.chats.get_mut(chat) else {
+            return Ok(());
+        };
+        if group.pending_commit().is_none() {
+            return Ok(());
+        }
+        let ours = group.epoch().as_u64();
+        if epoch == ours {
+            group
+                .clear_pending_commit(self.provider.storage())
+                .map_err(|e| CoreError::mls("dropping a lost commit", e))?;
+            for bytes in self.store.outbox()? {
+                let item = Queued::decode(&bytes)?;
+                if item
+                    .outgoing
+                    .commit
+                    .as_ref()
+                    .is_some_and(|ticket| ticket.group == chat.0 && ticket.epoch == ours)
+                {
+                    self.pending.confirmed.push(item.outgoing.id);
+                }
+            }
+        } else if epoch == ours + 1 {
+            group
+                .merge_pending_commit(&self.provider)
+                .map_err(|e| CoreError::mls("applying a commit that won", e))?;
+        }
+        Ok(())
+    }
+
     const fn author(&self) -> Author {
         Author {
             account: self.account(),
@@ -1158,7 +1294,7 @@ impl Device {
     /// Queues `outgoing` in the outbox, as part of the operation in progress.
     /// With no recipients there is nothing to deliver, so nothing is queued.
     fn queue(&mut self, outgoing: &Outgoing, message: Option<(ChatId, MessageId)>) -> Result<()> {
-        if outgoing.recipients.is_empty() {
+        if outgoing.recipients.is_empty() && outgoing.commit.is_none() {
             return Ok(());
         }
         let item = Queued {
@@ -1323,6 +1459,7 @@ fn create_config(mailbox: MailboxId) -> Result<MlsGroupCreateConfig> {
         .use_ratchet_tree_extension(true)
         .wire_format_policy(PURE_CIPHERTEXT_WIRE_FORMAT_POLICY)
         .padding_size(PADDING)
+        .max_past_epochs(MAX_PAST_EPOCHS)
         .build())
 }
 
@@ -1331,6 +1468,7 @@ fn join_config() -> MlsGroupJoinConfig {
         .use_ratchet_tree_extension(true)
         .wire_format_policy(PURE_CIPHERTEXT_WIRE_FORMAT_POLICY)
         .padding_size(PADDING)
+        .max_past_epochs(MAX_PAST_EPOCHS)
         .build()
 }
 

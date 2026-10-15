@@ -39,9 +39,12 @@ Signal, but never its sender (sealed sender).
   encrypted `outbox` table in the **same transaction** as the MLS state
   change that produced it. Either the ratchet advanced and the ciphertext is
   queued, or neither happened.
-- A transport takes items from `Device::outbox()` and calls
-  `confirm_sent(id)` after the delivery service acknowledges. Items are
-  retried in order until then. Confirming twice is harmless.
+- A transport takes items from `Device::outbox()`, sends each with
+  `service::delivery`, and hands the answer to `settle(id, status, body)`.
+  A message is then confirmed; a commit is applied or dropped as its chat's
+  sequencer decided (see `protocol/delivery.md`, "Ordered commits"). A
+  transient failure leaves the item queued, and items are retried in order.
+  Settling twice is harmless.
 - An `Outgoing` with no recipients (a chat with no one else in it) is not
   queued; a message sent there is `Sent` at once.
 
@@ -79,7 +82,7 @@ Signal, but never its sender (sealed sender).
   routing metadata Signal's server sees. Hiding it needs per-chat mailboxes
   rotated after joining plus unlinkable connections. That is a later ADR,
   not v1.
-- The transport layer is simple: drain the outbox, confirm, feed received
-  bytes to `receive`.
+- The transport layer is simple: drain the outbox, settle each answer,
+  feed received bytes to `receive`.
 - Breaking changes for protocol version 0 (pre-release): key packages
   without a mailbox extension are refused.

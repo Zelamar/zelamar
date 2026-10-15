@@ -112,3 +112,15 @@ commit's id. It does not keep members or content.
 A device applies its own commit only after the `202`. After a `409`, it
 drops the commit, applies the winning one from its mailbox, and retries if
 it still needs to.
+
+Client rules:
+
+- A commit in a chat with no one else in it is applied at once and never
+  sent; its welcome goes out as an ordinary delivery.
+- While a device's own commit waits for an answer, messages it sends still
+  use the current epoch. Receivers keep the last 4 epochs' keys, so these
+  messages stay readable after the commit lands.
+- If the winning commit arrives before the answer, the device resolves its
+  own from the epoch alone: a commit for the same epoch means it lost (its
+  commit is dropped, together with its queued copy); one for the next epoch
+  means it won and the answer was lost (its commit is applied first).

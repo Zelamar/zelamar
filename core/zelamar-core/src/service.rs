@@ -46,6 +46,7 @@ const CLAIM_CONTEXT: &[u8] = b"zelamar/claim/v0";
 const WORK_CONTEXT: &[u8] = b"zelamar/work/v0";
 const REQUEST_CONTEXT: &[u8] = b"zelamar/request/v0";
 const DELIVERY_MAGIC: &[u8] = b"ZD";
+const COMMIT_MAGIC: &[u8] = b"ZC";
 const DELIVERY_VERSION: u8 = 0;
 const ACK: u8 = 0x01;
 
@@ -278,9 +279,35 @@ pub fn directory_entry(requested: &str, status: u16, body: &[u8]) -> Result<Dire
 /// [`CoreError::Malformed`] without recipients or with more than
 /// [`MAX_RECIPIENTS`]; [`CoreError::TooLarge`] for an oversized payload.
 pub fn delivery(outgoing: &Outgoing) -> Result<Request> {
+    if let Some(ticket) = &outgoing.commit {
+        let mut body = Vec::new();
+        body.extend_from_slice(COMMIT_MAGIC);
+        body.push(DELIVERY_VERSION);
+        body.extend_from_slice(&ticket.epoch.to_be_bytes());
+        body.extend_from_slice(&delivery_frame(outgoing, true)?);
+        if let Some(welcome) = &ticket.welcome {
+            body.extend_from_slice(&delivery_frame(welcome, false)?);
+        }
+        return Ok(Request {
+            method: "POST",
+            path: format!("/v0/groups/{}/commits", b64(&ticket.group)),
+            headers: vec![("content-type", "application/octet-stream".to_owned())],
+            body,
+        });
+    }
+    Ok(Request {
+        method: "POST",
+        path: "/v0/deliver".to_owned(),
+        headers: vec![("content-type", "application/octet-stream".to_owned())],
+        body: delivery_frame(outgoing, false)?,
+    })
+}
+
+/// One delivery frame; a commit's may have no recipients.
+fn delivery_frame(outgoing: &Outgoing, allow_empty: bool) -> Result<Vec<u8>> {
     let count = u8::try_from(outgoing.recipients.len())
         .ok()
-        .filter(|&count| count > 0)
+        .filter(|&count| count > 0 || allow_empty)
         .ok_or(CoreError::malformed(
             "delivery",
             "needs 1 to 255 recipients",
@@ -303,11 +330,47 @@ pub fn delivery(outgoing: &Outgoing) -> Result<Request> {
     }
     body.extend_from_slice(&length.to_be_bytes());
     body.extend_from_slice(&outgoing.payload);
-    Ok(Request {
-        method: "POST",
-        path: "/v0/deliver".to_owned(),
-        headers: vec![("content-type", "application/octet-stream".to_owned())],
-        body,
+    Ok(body)
+}
+
+/// The sequencer's answer to a commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitAnswer {
+    /// The commit won; `epoch` is the chat's new epoch.
+    Accepted {
+        /// The new epoch.
+        epoch: u64,
+    },
+    /// Another commit won this epoch; `epoch` is the chat's current one.
+    Refused {
+        /// The current epoch.
+        epoch: u64,
+    },
+}
+
+/// Reads the sequencer's answer to a commit request.
+///
+/// # Errors
+///
+/// [`CoreError::Service`] for anything but acceptance or `epoch_mismatch`,
+/// or [`CoreError::Malformed`].
+pub fn commit_answer(status: u16, body: &[u8]) -> Result<CommitAnswer> {
+    #[derive(Deserialize)]
+    struct Answer {
+        epoch: u64,
+        error: Option<String>,
+    }
+    if status == 409
+        && let Ok(answer) = serde_json::from_slice::<Answer>(body)
+        && answer.error.as_deref() == Some("epoch_mismatch")
+    {
+        return Ok(CommitAnswer::Refused {
+            epoch: answer.epoch,
+        });
+    }
+    expect_success(status, body, &[202])?;
+    parse::<Answer>(body).map(|answer| CommitAnswer::Accepted {
+        epoch: answer.epoch,
     })
 }
 
@@ -618,6 +681,7 @@ mod tests {
             id: EnvelopeId([1; 16]),
             recipients: vec![MailboxId([2; 32]); recipients],
             payload: vec![0; payload],
+            commit: None,
         };
         assert!(delivery(&outgoing(0, 1)).is_err());
         assert!(delivery(&outgoing(256, 1)).is_err());
@@ -626,6 +690,23 @@ mod tests {
             delivery(&outgoing(1, MAX_PAYLOAD + 1)),
             Err(CoreError::TooLarge { .. })
         ));
+    }
+
+    #[test]
+    fn the_sequencer_answers_accept_or_refuse_and_nothing_else() {
+        assert_eq!(
+            commit_answer(202, br#"{"epoch":8,"delivered":1,"welcomed":1}"#).expect("ok"),
+            CommitAnswer::Accepted { epoch: 8 }
+        );
+        assert_eq!(
+            commit_answer(409, br#"{"error":"epoch_mismatch","epoch":9}"#).expect("ok"),
+            CommitAnswer::Refused { epoch: 9 }
+        );
+        assert!(matches!(
+            commit_answer(409, br#"{"error":"something_else"}"#),
+            Err(CoreError::Service { status: 409, .. })
+        ));
+        assert!(commit_answer(503, b"").expect_err("busy").is_transient());
     }
 
     #[test]
@@ -704,6 +785,7 @@ mod tests {
         claim: ClaimVector,
         request: RequestVector,
         delivery: DeliveryVector,
+        commit: CommitVector,
         envelope: EnvelopeVector,
         acknowledgement: AcknowledgementVector,
     }
@@ -732,6 +814,17 @@ mod tests {
         id: String,
         recipients: Vec<String>,
         payload: String,
+        frame: String,
+    }
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct CommitVector {
+        group: String,
+        epoch: u64,
+        commit_id: String,
+        welcome_id: String,
+        welcome_recipients: Vec<String>,
+        path: String,
         frame: String,
     }
 
@@ -781,6 +874,25 @@ mod tests {
             id: EnvelopeId([0x11; 16]),
             recipients: vec![MailboxId([0x22; 32]), MailboxId([0x33; 32])],
             payload: b"opaque MLS message".to_vec(),
+            commit: None,
+        }
+    }
+
+    fn fixed_commit() -> Outgoing {
+        Outgoing {
+            id: EnvelopeId([0x88; 16]),
+            recipients: vec![],
+            payload: b"opaque MLS commit".to_vec(),
+            commit: Some(crate::device::CommitTicket {
+                group: vec![0x99; 16],
+                epoch: 7,
+                welcome: Some(Box::new(Outgoing {
+                    id: EnvelopeId([0xAA; 16]),
+                    recipients: vec![MailboxId([0xBB; 32])],
+                    payload: b"opaque MLS welcome".to_vec(),
+                    commit: None,
+                })),
+            }),
         }
     }
 
@@ -819,6 +931,7 @@ mod tests {
 
         let outgoing = fixed_delivery();
         let envelope = fixed_envelope();
+        let commit_request = delivery(&fixed_commit()).expect("commit");
         Vectors {
             about: "Zelamar protocol v0 test vectors. Generated by zelamar-core \
                     (ZELAMAR_WRITE_VECTORS=1 cargo test -p zelamar-core vectors), \
@@ -849,6 +962,15 @@ mod tests {
                 recipients: outgoing.recipients.iter().map(|r| b64(&r.0)).collect(),
                 payload: b64(&outgoing.payload),
                 frame: b64(&delivery(&outgoing).expect("frame").body),
+            },
+            commit: CommitVector {
+                group: b64(&[0x99; 16]),
+                epoch: 7,
+                commit_id: b64(&[0x88; 16]),
+                welcome_id: b64(&[0xAA; 16]),
+                welcome_recipients: vec![b64(&[0xBB; 32])],
+                path: commit_request.path,
+                frame: b64(&commit_request.body),
             },
             envelope: EnvelopeVector {
                 id: b64(&envelope.id.0),
@@ -922,6 +1044,9 @@ mod tests {
             vectors.delivery.frame,
             b64(&delivery(&fixed_delivery()).expect("frame").body)
         );
+        let commit_request = delivery(&fixed_commit()).expect("commit");
+        assert_eq!(vectors.commit.frame, b64(&commit_request.body));
+        assert_eq!(vectors.commit.path, commit_request.path);
         assert_eq!(
             vectors.envelope.encoded,
             b64(&fixed_envelope().encode().expect("envelope"))

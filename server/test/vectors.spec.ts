@@ -5,10 +5,10 @@
 import { describe, expect, it } from 'vitest';
 
 import vectors from '../../protocol/vectors/v0.json';
-import { buffer, concat, fromBase64Url } from '../src/bytes';
+import { buffer, concat, fromBase64Url, utf8 } from '../src/bytes';
 import { decodeCertificate } from '../src/certificate';
 import { checkClaim } from '../src/claim';
-import { decodeDelivery, encodeEnvelope } from '../src/frames';
+import { decodeCommit, decodeDelivery, encodeEnvelope } from '../src/frames';
 import { checkSignedRequest, type SignedRequest } from '../src/signed';
 import { normalizeUsername } from '../src/username';
 
@@ -71,6 +71,21 @@ describe('vectors written by the core', () => {
       id: bytes(vector.id),
       recipients: vector.recipients.map(bytes),
       payload: bytes(vector.payload),
+    });
+  });
+
+  it('give a commit frame the sequencer reads as intended', () => {
+    const vector = vectors.commit;
+    expect(vector.path).toBe(`/v0/groups/${vector.group}/commits`);
+    const frame = decodeCommit(bytes(vector.frame));
+    expect(frame).toEqual({
+      epoch: vector.epoch,
+      commit: { id: bytes(vector.commit_id), recipients: [], payload: utf8('opaque MLS commit') },
+      welcome: {
+        id: bytes(vector.welcome_id),
+        recipients: vector.welcome_recipients.map(bytes),
+        payload: utf8('opaque MLS welcome'),
+      },
     });
   });
 

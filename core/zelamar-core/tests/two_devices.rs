@@ -8,7 +8,7 @@
 
 use zelamar_core::CoreError;
 use zelamar_core::content::{AppMessage, Body, MessageId, ReceiptStatus};
-use zelamar_core::device::{Author, ChatId, Device, Received};
+use zelamar_core::device::{Author, ChatId, Device, Received, Settled};
 use zelamar_core::envelope::{Envelope, EnvelopeId, MailboxId};
 use zelamar_core::history::StoredContent;
 use zelamar_core::identity::AccountKey;
@@ -153,6 +153,19 @@ fn a_newcomer_cannot_read_messages_sent_before_joining() {
 
     let key_package = carol.device.key_package().expect("key package");
     let invitation = alice.device.invite(&chat, &key_package).expect("invite");
+    // Bob is in the chat, so the commit waits for the sequencer; it accepts.
+    assert!(invitation.commit.commit.is_some());
+    assert_eq!(
+        alice
+            .device
+            .settle(
+                invitation.commit.id,
+                202,
+                br#"{"epoch":2,"delivered":1,"welcomed":1}"#
+            )
+            .expect("settle"),
+        Settled::Applied
+    );
     assert_eq!(
         bob.device
             .receive(&invitation.commit.payload)

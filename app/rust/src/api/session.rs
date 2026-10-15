@@ -437,13 +437,14 @@ impl Session {
     /// Reads the service's answer to a [`PendingSend`]; on success the item
     /// leaves the outbox and its message counts as sent.
     pub fn sent(&mut self, id: Vec<u8>, status: u16, body: Vec<u8>) -> Result<(), SessionError> {
-        service::delivered(status, &body)?;
         let id: [u8; 16] = id
             .try_into()
             .map_err(|_| failure("malformed", "an outbox id is 16 bytes"))?;
-        Ok(self
-            .device
-            .confirm_sent(zelamar_core::envelope::EnvelopeId(id))?)
+        // A delivery is confirmed; a commit is applied or dropped as the
+        // sequencer decided. Either way the item leaves the outbox.
+        self.device
+            .settle(zelamar_core::envelope::EnvelopeId(id), status, &body)?;
+        Ok(())
     }
 
     /// How to read this device's mailbox.
