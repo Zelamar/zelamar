@@ -188,6 +188,8 @@ class LiveMessenger extends Messenger {
       final (status, body) = await transport.send(joiner.requestCall());
       joiner.requested(status: status, body: body);
       onMatch(joiner.matchCode());
+      // Finishing uses the joiner up; the slot is cleared afterwards.
+      final close = joiner.closeCall();
       final key = newMasterKey();
       // As for a new account: the key is safe before the store exists.
       await vault.storeMasterKey(key);
@@ -218,7 +220,7 @@ class LiveMessenger extends Messenger {
         if (session != null) {
           _session = session;
           _username = session.username();
-          unawaited(_sendQuietly(joiner.closeCall()));
+          unawaited(_sendQuietly(close));
         }
       }
     } finally {
