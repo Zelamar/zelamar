@@ -10,9 +10,9 @@ import 'package:zelamar/src/messenger/notifier.dart';
 import 'package:zelamar/src/messenger/transport.dart';
 import 'package:zelamar/src/rust/frb_generated.dart';
 
-/// The whole stack, for real: two app instances, each with its own Rust
-/// core, encrypted store and secure key, meet through a running delivery
-/// service over HTTP and WebSocket.
+/// The whole stack, for real: app instances, each with its own Rust core,
+/// encrypted store and secure key, meet through a running delivery service
+/// over HTTP and WebSocket; then one of them links a second device.
 ///
 /// Needs a service and two fresh invite codes:
 ///
@@ -33,7 +33,7 @@ void main() {
   const invites = String.fromEnvironment('ZELAMAR_TEST_INVITES');
 
   test(
-    'two people meet by username and talk through the service',
+    'two people meet by username, talk, and one adds a second device',
     () async {
       final codes = invites.split(',');
       final run = Random().nextInt(1 << 30).toRadixString(36);
@@ -58,6 +58,7 @@ void main() {
           vault: KeyVault(directory.path, profile: 'live-$name-$run'),
           transport: ServiceTransport(Uri.parse(service)),
           notifier: const SilentNotifier(),
+          linkPoll: const Duration(milliseconds: 300),
         );
         addTearDown(messenger.dispose);
         await messenger.start();
@@ -110,6 +111,48 @@ void main() {
       final mine = await alice.messages(chat);
       expect(mine.map((m) => m.text), ['Hello Alice!', 'Hi Bob, it is Alice.']);
       expect(mine.last.outgoing, isTrue);
+
+      // Alice links her phone with the code her first device shows.
+      final phone = await person('phone');
+      expect(alice.canLinkDevices, isTrue);
+      final code = await alice.offerLink();
+      final asked = alice.nextApplicant();
+      String? shown;
+      final joined = phone.joinAccount(
+        code: code,
+        onMatch: (match) => shown = match,
+      );
+      final applicant = await asked;
+      expect(applicant, isNotNull);
+      expect(applicant!.matchCode, shown);
+      await alice.approveLink();
+      await joined;
+      expect(phone.phase, MessengerPhase.ready);
+      expect(phone.username, aliceName);
+      expect(phone.fingerprint, alice.fingerprint);
+      expect(phone.canLinkDevices, isFalse);
+
+      // Her first device brings the phone into the chat with Bob.
+      await until(
+        () => phone.chats.any((c) => c.id == chat && !c.request),
+        'the phone joins the chat with Bob',
+      );
+      await bob.sendText(chat, 'Two devices now?');
+      await until(
+        () => phone.chats.single.last?.text == 'Two devices now?',
+        'the phone receives Bob’s message',
+      );
+      await phone.sendText(chat, 'Yes, this is my phone.');
+      await until(
+        () => bob.chats.single.last?.text == 'Yes, this is my phone.',
+        'Bob receives the phone’s message',
+      );
+      expect(bob.chats.single.title, '@$aliceName');
+      await until(
+        () => alice.chats.single.last?.text == 'Yes, this is my phone.',
+        'Alice’s first device sees what the phone wrote',
+      );
+      expect((await alice.messages(chat)).first.outgoing, isTrue);
     },
     skip: invites.isEmpty ? 'needs a running service and invites' : false,
     timeout: const Timeout(Duration(minutes: 3)),

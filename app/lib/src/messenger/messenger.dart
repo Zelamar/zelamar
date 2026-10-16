@@ -79,6 +79,36 @@ abstract class Messenger extends ChangeNotifier {
     required String invite,
   });
 
+  /// Whether this device can link new devices: only the one that created
+  /// the account holds its key.
+  bool get canLinkDevices;
+
+  /// Joins an existing account as a new device, by the [code] its other
+  /// device shows. Once the request is in, [onMatch] gets six digits the
+  /// other device shows too. Completes when the other device approved and
+  /// this one is ready; [cancelJoin] ends it with `cancelled`.
+  Future<void> joinAccount({
+    required String code,
+    required void Function(String matchCode) onMatch,
+  });
+
+  /// Stops [joinAccount] waiting.
+  void cancelJoin();
+
+  /// Starts linking a new device; returns the code to show.
+  Future<String> offerLink();
+
+  /// Waits until a new device answers the code from [offerLink]; `null`
+  /// once the offer is cancelled or expired.
+  Future<LinkApplicant?> nextApplicant();
+
+  /// Lets the device that answered join the account. It is added to every
+  /// chat as soon as it has registered.
+  Future<void> approveLink();
+
+  /// Stops offering a link.
+  void cancelLink();
+
   /// Starts a chat with [username]; returns its id.
   Future<String> startChat(String username);
 

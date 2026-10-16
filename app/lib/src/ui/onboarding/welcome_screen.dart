@@ -6,6 +6,7 @@ import 'package:zelamar/src/lab/crypto_lab_screen.dart';
 import 'package:zelamar/src/lab/lab_engine.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/ui/onboarding/account_screen.dart';
+import 'package:zelamar/src/ui/onboarding/join_screen.dart';
 
 /// The first thing anyone sees: the emblem, the name, one promise, and one
 /// way forward.
@@ -52,6 +53,19 @@ class WelcomeScreen extends StatelessWidget {
                         ),
                       ),
                       child: const Text('Create your account'),
+                    ),
+                  ),
+                  const SizedBox(height: ZSpace.sm),
+                  SizedBox(
+                    width: double.infinity,
+                    child: TextButton(
+                      key: const Key('welcome.join'),
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => JoinScreen(messenger: messenger),
+                        ),
+                      ),
+                      child: const Text('I already use Zelamar'),
                     ),
                   ),
                   const SizedBox(height: ZSpace.md),

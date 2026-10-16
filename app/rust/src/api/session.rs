@@ -11,9 +11,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use zelamar_core::content::{AppMessage, Body, MessageId};
-use zelamar_core::device::{ChatId, ChatSummary, Device, Received};
+use zelamar_core::device::{ChatId, ChatSummary, Device, Received, Settled};
 use zelamar_core::history::{HistoryEntry, SendStatus, StoredContent};
-use zelamar_core::identity::{AccountKey, SafetyCode};
+use zelamar_core::identity::{AccountKey, DeviceId, SafetyCode};
+use zelamar_core::link::{self, Applicant, Joining, Offer};
 use zelamar_core::service::{self, Request, CLAIM_WORK_BITS};
 use zelamar_core::store::MasterKey;
 use zelamar_core::CoreError;
@@ -224,9 +225,131 @@ pub struct ChatPreview {
     pub request: bool,
 }
 
+/// The service's answer to one [`HttpCall`].
+#[derive(Debug, Clone)]
+pub struct HttpAnswer {
+    pub status: u16,
+    pub body: Vec<u8>,
+}
+
+/// A device asking to join this account (ADR-0014).
+#[derive(Debug, Clone)]
+pub struct LinkApplicant {
+    /// What the device calls itself ("Android phone").
+    pub label: String,
+    /// Six digits, `482 913`; the new device shows the same.
+    pub match_code: String,
+}
+
+/// One chat that lacks some of this account's devices.
+#[derive(Debug, Clone)]
+pub struct DeviceGap {
+    /// Chat id, base64url.
+    pub chat: String,
+    /// Device ids, base64url: look each up with
+    /// [`Session::device_lookup_call`].
+    pub devices: Vec<String>,
+}
+
+/// What healing found: every registered device of the account, and the
+/// chats that lack some of them.
+#[derive(Debug, Clone)]
+pub struct HealPlan {
+    /// Device ids, base64url.
+    pub devices: Vec<String>,
+    pub gaps: Vec<DeviceGap>,
+}
+
 /// One device of one account, stored encrypted in a directory.
 pub struct Session {
     device: Device,
+    /// The link this device is offering, while it shows a code.
+    offer: Option<Offer>,
+    /// The device that answered the offer, once one did.
+    applicant: Option<Applicant>,
+}
+
+/// A new device joining an existing account by its link code, before it
+/// has a session of its own (ADR-0014).
+#[flutter_rust_bridge::frb(opaque)]
+pub struct Joiner {
+    joining: Option<Joining>,
+}
+
+impl Joiner {
+    /// Prepares to join the account whose device shows `code`; this
+    /// device calls itself `label`.
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn new(code: String, label: String) -> Result<Self, SessionError> {
+        Ok(Self {
+            joining: Some(Joining::new(&code, &label)?),
+        })
+    }
+
+    fn joining(&self) -> Result<&Joining, SessionError> {
+        self.joining
+            .as_ref()
+            .ok_or_else(|| failure("already_linked", "this link is finished"))
+    }
+
+    /// Six digits the other device must show too.
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn match_code(&self) -> Result<String, SessionError> {
+        Ok(self.joining()?.match_code())
+    }
+
+    /// Leaves this device's sealed request for the other device.
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn request_call(&self) -> Result<HttpCall, SessionError> {
+        Ok(self.joining()?.request()?.into())
+    }
+
+    /// Reads the answer to [`Joiner::request_call`]. `link_taken` means
+    /// another device used this code first.
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn requested(&self, status: u16, body: Vec<u8>) -> Result<(), SessionError> {
+        Ok(link::stored(status, &body)?)
+    }
+
+    /// Asks whether the other device approved.
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn check_call(&self) -> Result<HttpCall, SessionError> {
+        Ok(self.joining()?.check().into())
+    }
+
+    /// Clears the meeting place on the service; send it once done.
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn close_call(&self) -> Result<HttpCall, SessionError> {
+        Ok(self.joining()?.close().into())
+    }
+
+    /// Reads the answer to [`Joiner::check_call`]. Once the other device
+    /// approved, creates this device's session in `directory`, under
+    /// `master_key`; then register it with [`Session::register`].
+    pub fn finish(
+        &mut self,
+        status: u16,
+        body: Vec<u8>,
+        directory: String,
+        master_key: Vec<u8>,
+    ) -> Result<Option<Session>, SessionError> {
+        let Some(linked) = self.joining()?.linked(status, &body)? else {
+            return Ok(None);
+        };
+        let joining = self
+            .joining
+            .take()
+            .ok_or_else(|| failure("already_linked", "this link is finished"))?;
+        std::fs::create_dir_all(&directory)
+            .map_err(|e| failure("storage", &format!("creating the directory: {e}")))?;
+        let device = Device::create_linked(
+            &store_path(&directory),
+            &master(&master_key)?,
+            joining,
+            linked,
+        )?;
+        Ok(Some(Session::with(device)))
+    }
 }
 
 /// A fresh random master key for a new session. Keep it in the platform's
@@ -241,6 +364,24 @@ pub fn new_master_key() -> Result<Vec<u8>, SessionError> {
 #[must_use]
 pub fn session_exists(directory: String) -> bool {
     store_path(&directory).exists()
+}
+
+/// Deletes the store in `directory`: for an account that never got a name,
+/// before this device joins another account instead. Dispose its session
+/// first.
+#[flutter_rust_bridge::frb(sync)]
+pub fn remove_store(directory: String) -> Result<(), SessionError> {
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let path = PathBuf::from(&directory).join(format!("{STORE_FILE}{suffix}"));
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(failure("storage", &format!("removing the store: {error}")));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Looks up `username` with one key package per device, to start a chat.
@@ -269,13 +410,160 @@ impl Session {
             .map_err(|e| failure("storage", &format!("creating the directory: {e}")))?;
         let account = AccountKey::generate()?;
         let device = Device::create(&store_path(&directory), &master(&master_key)?, &account)?;
-        Ok(Self { device })
+        Ok(Self::with(device))
     }
 
     /// Opens the session stored in `directory`.
     pub fn open(directory: String, master_key: Vec<u8>) -> Result<Self, SessionError> {
         let device = Device::open(&store_path(&directory), &master(&master_key)?)?;
-        Ok(Self { device })
+        Ok(Self::with(device))
+    }
+
+    const fn with(device: Device) -> Self {
+        Self {
+            device,
+            offer: None,
+            applicant: None,
+        }
+    }
+
+    /// Whether this device can link others: only the one holding the
+    /// account key can.
+    #[flutter_rust_bridge::frb(sync)]
+    #[must_use]
+    pub fn can_link(&self) -> bool {
+        self.device.holds_account_key()
+    }
+
+    /// Starts linking a new device: returns the code to show,
+    /// `xxxxx-xxxxx-xxxxx-xxxxx`. A new offer replaces any earlier one.
+    pub fn offer_link(&mut self) -> Result<String, SessionError> {
+        if !self.device.holds_account_key() {
+            return Err(failure(
+                "unauthenticated",
+                "only the device that created the account can link devices",
+            ));
+        }
+        let offer = Offer::new()?;
+        let code = offer.code();
+        self.offer = Some(offer);
+        self.applicant = None;
+        Ok(code)
+    }
+
+    fn offer(&self) -> Result<&Offer, SessionError> {
+        self.offer
+            .as_ref()
+            .ok_or_else(|| failure("no_link", "no link is being offered"))
+    }
+
+    /// Asks whether a new device answered the code.
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn link_check_call(&self) -> Result<HttpCall, SessionError> {
+        Ok(self.offer()?.check().into())
+    }
+
+    /// Reads the answer to [`Session::link_check_call`]: the device that
+    /// asked to join, once one did.
+    pub fn link_applicant(
+        &mut self,
+        status: u16,
+        body: Vec<u8>,
+    ) -> Result<Option<LinkApplicant>, SessionError> {
+        let applicant = self.offer()?.applicant(status, &body)?;
+        self.applicant.clone_from(&applicant);
+        Ok(applicant.map(|applicant| LinkApplicant {
+            label: applicant.label,
+            match_code: applicant.match_code,
+        }))
+    }
+
+    /// Approves the device that asked: its certificate, this account's
+    /// name and contacts go to it, sealed.
+    pub fn approve_link(&mut self) -> Result<HttpCall, SessionError> {
+        let applicant = self
+            .applicant
+            .as_ref()
+            .ok_or_else(|| failure("no_link", "no device asked to join"))?;
+        Ok(self.device.approve_link(self.offer()?, applicant)?.into())
+    }
+
+    /// Reads the answer to [`Session::approve_link`]; returns the new
+    /// device's id, base64url. Then heal the chats once it registered.
+    pub fn link_approved(&mut self, status: u16, body: Vec<u8>) -> Result<String, SessionError> {
+        link::stored(status, &body)?;
+        let applicant = self
+            .applicant
+            .take()
+            .ok_or_else(|| failure("no_link", "no device asked to join"))?;
+        self.offer = None;
+        Ok(URL_SAFE_NO_PAD.encode(applicant.device.as_bytes()))
+    }
+
+    /// Stops offering a link.
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn cancel_link(&mut self) {
+        self.offer = None;
+        self.applicant = None;
+    }
+
+    fn own_name(&self) -> Result<String, SessionError> {
+        self.device
+            .username()
+            .map(str::to_owned)
+            .ok_or_else(|| failure("no_username", "claim a username first"))
+    }
+
+    /// Lists this account's devices, to heal chats (ADR-0014).
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn devices_call(&self) -> Result<HttpCall, SessionError> {
+        Ok(service::devices(&self.own_name()?)?.into())
+    }
+
+    /// Reads the answer to [`Session::devices_call`]: which chats lack
+    /// which of this account's devices.
+    pub fn heal_plan(&self, status: u16, body: Vec<u8>) -> Result<HealPlan, SessionError> {
+        let (_, registered) = service::device_list(&self.own_name()?, status, &body)?;
+        let gaps = self
+            .device
+            .missing_devices(&registered)?
+            .into_iter()
+            .map(|(chat, devices)| DeviceGap {
+                chat: chat_key(&chat),
+                devices: devices.iter().map(device_key).collect(),
+            })
+            .collect();
+        Ok(HealPlan {
+            devices: registered
+                .iter()
+                .map(|certificate| device_key(&certificate.device()))
+                .collect(),
+            gaps,
+        })
+    }
+
+    /// Takes one key package of one of this account's devices.
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn device_lookup_call(&self, device: String) -> Result<HttpCall, SessionError> {
+        Ok(service::device_lookup(&self.own_name()?, device_id(&device)?)?.into())
+    }
+
+    /// Adds this account's devices to `chat` in one change, from the
+    /// answers to [`Session::device_lookup_call`]. It goes out with the
+    /// next [`Session::pending_sends`].
+    pub fn add_own_devices(
+        &mut self,
+        chat: String,
+        answers: Vec<HttpAnswer>,
+    ) -> Result<(), SessionError> {
+        let name = self.own_name()?;
+        let entries = answers
+            .iter()
+            .map(|answer| service::directory_entry(&name, answer.status, &answer.body))
+            .collect::<Result<Vec<_>, _>>()?;
+        let chat = self.find_chat(&chat)?;
+        self.device.add_own_devices(&chat, &entries)?;
+        Ok(())
     }
 
     /// The account key's fingerprint, for "this is me" screens:
@@ -355,16 +643,26 @@ impl Session {
         Ok(u32::try_from(count).unwrap_or(u32::MAX))
     }
 
-    /// Starts a chat from the answer to [`lookup_call`] for `username`.
-    /// Returns the chat id.
+    /// Starts a chat from the answer to [`lookup_call`] for `username`, and
+    /// `own`, the answer to a lookup of this account's own name, so its
+    /// other devices are in from the start. Returns the chat id.
     pub fn start_chat(
         &mut self,
         username: String,
         status: u16,
         body: Vec<u8>,
+        own: Option<HttpAnswer>,
     ) -> Result<String, SessionError> {
         let entry = service::directory_entry(&username, status, &body)?;
-        let (chat, _) = self.device.start_chat(&entry)?;
+        let siblings = match own {
+            Some(answer) => vec![service::directory_entry(
+                &self.own_name()?,
+                answer.status,
+                &answer.body,
+            )?],
+            None => Vec::new(),
+        };
+        let (chat, _) = self.device.start_chat(&entry, &siblings)?;
         Ok(chat_key(&chat))
     }
 
@@ -435,16 +733,19 @@ impl Session {
     }
 
     /// Reads the service's answer to a [`PendingSend`]; on success the item
-    /// leaves the outbox and its message counts as sent.
-    pub fn sent(&mut self, id: Vec<u8>, status: u16, body: Vec<u8>) -> Result<(), SessionError> {
+    /// leaves the outbox and its message counts as sent. Returns `true` when
+    /// it was a change to a chat that lost to someone else's: whatever it
+    /// was for must be done again (healing does so by itself).
+    pub fn sent(&mut self, id: Vec<u8>, status: u16, body: Vec<u8>) -> Result<bool, SessionError> {
         let id: [u8; 16] = id
             .try_into()
             .map_err(|_| failure("malformed", "an outbox id is 16 bytes"))?;
         // A delivery is confirmed; a commit is applied or dropped as the
         // sequencer decided. Either way the item leaves the outbox.
-        self.device
+        let settled = self
+            .device
             .settle(zelamar_core::envelope::EnvelopeId(id), status, &body)?;
-        Ok(())
+        Ok(settled == Settled::Refused)
     }
 
     /// How to read this device's mailbox.
@@ -708,6 +1009,19 @@ fn chat_key(chat: &ChatId) -> String {
     URL_SAFE_NO_PAD.encode(chat.as_bytes())
 }
 
+fn device_key(device: &DeviceId) -> String {
+    URL_SAFE_NO_PAD.encode(device.as_bytes())
+}
+
+fn device_id(text: &str) -> Result<DeviceId, SessionError> {
+    URL_SAFE_NO_PAD
+        .decode(text)
+        .ok()
+        .and_then(|bytes| <[u8; 16]>::try_from(bytes).ok())
+        .map(DeviceId::from_bytes)
+        .ok_or_else(|| failure("malformed", "not a device id"))
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -767,6 +1081,7 @@ mod tests {
         names: HashMap<String, String>,
         registrations: HashMap<String, (String, Vec<String>)>,
         mailboxes: HashMap<String, Vec<Vec<u8>>>,
+        links: HashMap<String, (Vec<u8>, Option<Vec<u8>>)>,
     }
 
     fn json(value: &serde_json::Value) -> Vec<u8> {
@@ -842,6 +1157,25 @@ mod tests {
                     }
                     (202, json(&serde_json::json!({ "delivered": count })))
                 }
+                ("PUT", ["links", slot, "request"]) => {
+                    self.links
+                        .insert((*slot).to_owned(), (call.body.clone(), None));
+                    (201, json(&serde_json::json!({})))
+                }
+                ("PUT", ["links", slot, "answer"]) => {
+                    self.links.get_mut(*slot).expect("slot").1 = Some(call.body.clone());
+                    (201, json(&serde_json::json!({})))
+                }
+                ("GET", ["links", slot]) => match self.links.get(*slot) {
+                    None => (404, json(&serde_json::json!({ "error": "unknown_link" }))),
+                    Some((request, answer)) => (
+                        200,
+                        json(&serde_json::json!({
+                            "request": URL_SAFE_NO_PAD.encode(request),
+                            "answer": answer.as_ref().map(|a| URL_SAFE_NO_PAD.encode(a)),
+                        })),
+                    ),
+                },
                 other => panic!("unrouted {other:?}"),
             }
         }
@@ -882,6 +1216,53 @@ mod tests {
     }
 
     #[test]
+    fn a_new_device_joins_the_account_through_the_app_api() {
+        let dir = tempfile::tempdir().expect("dir");
+        let mut stub = Stub::default();
+        let mut alice = person(&mut stub, &dir, "alice");
+        assert!(alice.can_link());
+        let code = alice.offer_link().expect("offer");
+        let (status, body) = stub.call(&alice.link_check_call().expect("check"));
+        assert!(alice.link_applicant(status, body).expect("slot").is_none());
+
+        let mut joiner = Joiner::new(code.to_uppercase(), "Android phone".into()).expect("code");
+        let (status, body) = stub.call(&joiner.request_call().expect("request"));
+        joiner.requested(status, body).expect("requested");
+        let directory = dir.path().join("phone").to_string_lossy().into_owned();
+        let key = new_master_key().expect("key");
+        let (status, body) = stub.call(&joiner.check_call().expect("check"));
+        assert!(joiner
+            .finish(status, body, directory.clone(), key.clone())
+            .expect("waiting")
+            .is_none());
+
+        let (status, body) = stub.call(&alice.link_check_call().expect("check"));
+        let applicant = alice
+            .link_applicant(status, body)
+            .expect("applicant")
+            .expect("someone asked");
+        assert_eq!(applicant.label, "Android phone");
+        assert_eq!(applicant.match_code, joiner.match_code().expect("match"));
+        let (status, body) = stub.call(&alice.approve_link().expect("approve"));
+        let device = alice.link_approved(status, body).expect("approved");
+        assert_eq!(device.len(), 22);
+        assert!(alice.link_check_call().is_err(), "the offer is over");
+
+        let (status, body) = stub.call(&joiner.check_call().expect("check"));
+        let phone = joiner
+            .finish(status, body, directory.clone(), key)
+            .expect("finish")
+            .expect("linked");
+        assert_eq!(phone.username().as_deref(), Some("alice"));
+        assert_eq!(phone.fingerprint(), alice.fingerprint());
+        assert!(!phone.can_link());
+        assert!(session_exists(directory));
+        assert!(joiner.check_call().is_err(), "a joiner is used once");
+        let mut phone = phone;
+        assert!(phone.offer_link().is_err());
+    }
+
+    #[test]
     fn two_sessions_meet_and_talk_through_the_app_api() {
         let dir = tempfile::tempdir().expect("dir");
         let mut stub = Stub::default();
@@ -889,7 +1270,9 @@ mod tests {
         let mut bob = person(&mut stub, &dir, "bob");
 
         let (status, body) = stub.call(&lookup_call("Bob".into()).expect("lookup"));
-        let chat = alice.start_chat("bob".into(), status, body).expect("chat");
+        let chat = alice
+            .start_chat("bob".into(), status, body, None)
+            .expect("chat");
         alice
             .send_text(chat.clone(), "Hello Bob".into())
             .expect("send");
@@ -961,7 +1344,9 @@ mod tests {
         let mut alice = person(&mut stub, &dir, "alice");
         let mut bob = person(&mut stub, &dir, "bob");
         let (status, body) = stub.call(&lookup_call("bob".into()).expect("lookup"));
-        let chat = alice.start_chat("bob".into(), status, body).expect("chat");
+        let chat = alice
+            .start_chat("bob".into(), status, body, None)
+            .expect("chat");
         alice
             .send_text(chat.clone(), "Dinner?".into())
             .expect("send");

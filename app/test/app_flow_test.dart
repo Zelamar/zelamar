@@ -27,6 +27,13 @@ Future<FakeMessenger> pumpApp(
   return fake;
 }
 
+/// Lets screens with a spinning indicator move on: [WidgetTester.pumpAndSettle]
+/// would wait for the spinner forever.
+Future<void> pumpAWhile(WidgetTester tester) async {
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 600));
+}
+
 void main() {
   group('onboarding', () {
     testWidgets('welcome leads to a name, and the name to the chats', (
@@ -62,6 +69,63 @@ void main() {
       expect(find.text('Chats'), findsOneWidget);
       expect(find.text('@ada_92'), findsOneWidget);
       expect(find.text('Your conversations live here.'), findsOneWidget);
+    });
+
+    testWidgets('a new device joins with the code its other device shows', (
+      tester,
+    ) async {
+      final messenger = await pumpApp(tester);
+      await tester.tap(find.byKey(const Key('welcome.join')));
+      await tester.pumpAndSettle();
+      expect(find.text('Link this device'), findsOneWidget);
+
+      final next = find.byKey(const Key('join.continue'));
+      await tester.enterText(find.byKey(const Key('join.code')), 'abcde fghij');
+      await tester.pump();
+      expect(tester.widget<FilledButton>(next).onPressed, isNull);
+
+      await tester.enterText(
+        find.byKey(const Key('join.code')),
+        'ABCDE-fghij klmno-pqrst',
+      );
+      await tester.pump();
+      await tester.tap(next);
+      await pumpAWhile(tester);
+      expect(messenger.joinedWith, 'ABCDE-fghij klmno-pqrst');
+      expect(find.byKey(const Key('join.match')), findsOneWidget);
+      expect(find.text('482 913'), findsOneWidget);
+
+      messenger.joinApproved.complete();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('app.chats')), findsOneWidget);
+    });
+
+    testWidgets('a used code is explained, and cancelling goes back', (
+      tester,
+    ) async {
+      final messenger = await pumpApp(tester);
+      await tester.tap(find.byKey(const Key('welcome.join')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('join.code')),
+        'abcdefghijklmnopqrst',
+      );
+      await tester.pump();
+
+      messenger.failNext = const MessengerFailure('link_taken');
+      await tester.tap(find.byKey(const Key('join.continue')));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<Text>(find.byKey(const Key('join.error'))).data,
+        describeFailure('link_taken'),
+      );
+
+      await tester.tap(find.byKey(const Key('join.continue')));
+      await pumpAWhile(tester);
+      await tester.tap(find.byKey(const Key('join.cancel')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('join.form')), findsOneWidget);
+      expect(find.byKey(const Key('join.error')), findsNothing);
     });
 
     testWidgets('a refused name is explained, and the form stays', (
@@ -222,6 +286,72 @@ void main() {
       expect(find.text('@ada'), findsWidgets);
       expect(find.byKey(const Key('profile.fingerprint')), findsOneWidget);
       expect(find.textContaining('Zelamar 0.'), findsOneWidget);
+    });
+
+    testWidgets('a new device is linked once the numbers match', (
+      tester,
+    ) async {
+      final messenger = await pumpApp(
+        tester,
+        messenger: FakeMessenger(
+          phaseValue: MessengerPhase.ready,
+          usernameValue: 'ada',
+        ),
+      );
+      await tester.tap(find.byKey(const Key('chats.profile')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('profile.link')));
+      await pumpAWhile(tester);
+      expect(find.text('abcde-fghij-klmno-pqrst'), findsOneWidget);
+      expect(find.text('Waiting for your new device…'), findsOneWidget);
+
+      messenger.applicantArrives.complete(
+        const LinkApplicant(label: 'Android phone', matchCode: '482 913'),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Link “Android phone”?'), findsOneWidget);
+      expect(find.text('482 913'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('link.approve')));
+      await tester.pumpAndSettle();
+      expect(messenger.linkApproved, isTrue);
+      expect(find.byKey(const Key('link.done')), findsOneWidget);
+      expect(messenger.linkCancelled, isFalse);
+    });
+
+    testWidgets('leaving before approving cancels the code', (tester) async {
+      final messenger = await pumpApp(
+        tester,
+        messenger: FakeMessenger(
+          phaseValue: MessengerPhase.ready,
+          usernameValue: 'ada',
+        ),
+      );
+      await tester.tap(find.byKey(const Key('chats.profile')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('profile.link')));
+      await pumpAWhile(tester);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(messenger.linkCancelled, isTrue);
+      expect(messenger.linkApproved, isFalse);
+    });
+
+    testWidgets('a linked device cannot link others', (tester) async {
+      await pumpApp(
+        tester,
+        messenger: FakeMessenger(
+          phaseValue: MessengerPhase.ready,
+          usernameValue: 'ada',
+        )..canLinkValue = false,
+      );
+      await tester.tap(find.byKey(const Key('chats.profile')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('profile.link')), findsNothing);
+      expect(
+        tester.widget<Text>(find.byKey(const Key('profile.keyNote'))).data,
+        contains('this one is linked'),
+      );
     });
 
     testWidgets('a chat shows its 60-digit safety code', (tester) async {

@@ -2,7 +2,8 @@
  * Zelamar delivery service: delivers everything, knows nothing (ADR-0012).
  *
  * The Worker routes and runs stateless checks; state lives in Durable
- * Objects: `Account` per @username, `Mailbox` per device mailbox, and
+ * Objects: `Account` per @username, `Mailbox` per device mailbox, `Group`
+ * per chat (the commit sequencer), `Link` per device-linking slot, and
  * `Invites` for the closed beta. The service never sees plaintext or who
  * sent a message.
  */
@@ -19,11 +20,13 @@ import {
 } from './frames';
 import { failure, json, parseObject, readBody, respond, type Reply } from './http';
 import { inviteKey, inviteSerial } from './invite';
+import { type LinkPart, linkMessage, MAX_LINK_ANSWER } from './link';
 import type { SignedRequest } from './signed';
 import { normalizeUsername } from './username';
 
 export { Account, Invites } from './account';
 export { Group } from './group';
+export { Link } from './link';
 export { Mailbox } from './mailbox';
 
 const SERVICE_NAME = 'zelamar';
@@ -76,12 +79,26 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (resource === 'accounts' && name !== undefined && sub === 'key' && parts.length === 4) {
     return only(request, 'GET') ?? respond(await lookup(request, env, name, 'key'));
   }
+  if (resource === 'accounts' && name !== undefined && sub === 'devices' && parts.length === 4) {
+    return only(request, 'GET') ?? respond(await lookup(request, env, name, 'list'));
+  }
   if (resource === 'accounts' && name !== undefined && sub === 'devices' && device !== undefined) {
+    if (parts.length === 5 && request.method === 'GET') {
+      return respond(await lookup(request, env, name, { device }));
+    }
     if (parts.length === 5) {
       return only(request, 'PUT') ?? respond(await signed(request, env, name, device, 'register'));
     }
     if (parts.length === 6 && leaf === 'key-packages') {
       return only(request, 'POST') ?? respond(await signed(request, env, name, device, 'publish'));
+    }
+  }
+  if (resource === 'links' && name !== undefined && parts.length === 3) {
+    return linkSlot(request, env, name);
+  }
+  if (resource === 'links' && name !== undefined && parts.length === 4) {
+    if (sub === 'request' || sub === 'answer') {
+      return only(request, 'PUT') ?? respond(await putLink(request, env, name, sub));
     }
   }
   return json({ error: 'not_found' }, 404);
@@ -217,12 +234,16 @@ async function claim(request: Request, env: Env): Promise<Reply> {
     : { status: outcome === 'created' ? 201 : 200, body: { username } };
 }
 
-/** A directory lookup: with one key package per device, or only the account key. */
+/**
+ * A directory lookup: one key package per device (`devices`), only the
+ * account key (`key`), only the devices' certificates (`list`), or one key
+ * package of one device.
+ */
 async function lookup(
   request: Request,
   env: Env,
   name: string,
-  what: 'devices' | 'key',
+  what: 'devices' | 'key' | 'list' | { device: string },
 ): Promise<Reply> {
   const username = normalizeUsername(name);
   if (username === null) {
@@ -232,7 +253,70 @@ async function lookup(
     return failure(429, 'rate_limited');
   }
   const holder = env.ACCOUNT.getByName(username);
-  return what === 'devices' ? holder.lookup() : holder.keyOf();
+  if (what === 'devices') {
+    return holder.lookup();
+  }
+  if (what === 'key') {
+    return holder.keyOf();
+  }
+  if (what === 'list') {
+    return holder.listDevices();
+  }
+  const device = fixedBase64Url(what.device, 16);
+  return device === null ? failure(404, 'unknown_device') : holder.lookupDevice(buffer(device));
+}
+
+/** Reads (GET) or clears (DELETE) a link slot (ADR-0014). */
+async function linkSlot(request: Request, env: Env, slot: string): Promise<Response> {
+  if (request.method !== 'GET' && request.method !== 'DELETE') {
+    return json({ error: 'method_not_allowed' }, 405, { allow: 'GET, DELETE' });
+  }
+  if (fixedBase64Url(slot, 16) === null) {
+    return json({ error: 'unknown_link' }, 404);
+  }
+  if (!(await allowed(env.LINK_LIMITER, request))) {
+    return json({ error: 'rate_limited' }, 429);
+  }
+  const link = env.LINK.getByName(slot);
+  if (request.method === 'DELETE') {
+    await link.clear();
+    return new Response(null, { status: 204 });
+  }
+  const found = await link.read();
+  if (found === null) {
+    return json({ error: 'unknown_link' }, 404);
+  }
+  return json({
+    request: toBase64Url(new Uint8Array(found.request)),
+    answer: found.answer === null ? null : toBase64Url(new Uint8Array(found.answer)),
+  });
+}
+
+/** Leaves a sealed request or answer in a link slot, if it is the first. */
+async function putLink(request: Request, env: Env, slot: string, part: LinkPart): Promise<Reply> {
+  if (fixedBase64Url(slot, 16) === null) {
+    return failure(404, 'unknown_link');
+  }
+  if (!(await allowed(env.LINK_LIMITER, request))) {
+    return failure(429, 'rate_limited');
+  }
+  const body = await readBody(request, MAX_LINK_ANSWER);
+  if (body === null) {
+    return failure(413, 'too_large');
+  }
+  if (!linkMessage(part, body)) {
+    return failure(400, 'malformed');
+  }
+  switch (await env.LINK.getByName(slot).put(part, buffer(body))) {
+    case 'stored':
+      return { status: 201, body: {} };
+    case 'same':
+      return { status: 200, body: {} };
+    case 'taken':
+      return failure(409, 'link_taken');
+    case 'unknown':
+      return failure(404, 'unknown_link');
+  }
 }
 
 async function signed(

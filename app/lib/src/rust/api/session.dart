@@ -7,8 +7,8 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `chat_key`, `claim_with`, `failure`, `find_chat`, `master`, `message_id`, `notice`, `now_ms`, `preview`, `send_body`, `shorten`, `store_path`, `title`, `view`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
+// These functions are ignored because they are not marked as `pub`: `chat_key`, `claim_with`, `device_id`, `device_key`, `failure`, `find_chat`, `joining`, `master`, `message_id`, `notice`, `now_ms`, `offer`, `own_name`, `preview`, `send_body`, `shorten`, `store_path`, `title`, `view`, `with`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
 
 /// A fresh random master key for a new session. Keep it in the platform's
 /// secure storage; it opens the session's store.
@@ -17,6 +17,12 @@ Uint8List newMasterKey() => RustLib.instance.api.crateApiSessionNewMasterKey();
 /// Whether `directory` already holds a session.
 bool sessionExists({required String directory}) =>
     RustLib.instance.api.crateApiSessionSessionExists(directory: directory);
+
+/// Deletes the store in `directory`: for an account that never got a name,
+/// before this device joins another account instead. Dispose its session
+/// first.
+void removeStore({required String directory}) =>
+    RustLib.instance.api.crateApiSessionRemoveStore(directory: directory);
 
 /// Looks up `username` with one key package per device, to start a chat.
 HttpCall lookupCall({required String username}) =>
@@ -30,11 +36,64 @@ HttpCall keyLookupCall({required String username}) =>
 String? normalizeUsername({required String username}) =>
     RustLib.instance.api.crateApiSessionNormalizeUsername(username: username);
 
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Joiner>>
+abstract class Joiner implements RustOpaqueInterface {
+  /// Asks whether the other device approved.
+  HttpCall checkCall();
+
+  /// Clears the meeting place on the service; send it once done.
+  HttpCall closeCall();
+
+  /// Reads the answer to [`Joiner::check_call`]. Once the other device
+  /// approved, creates this device's session in `directory`, under
+  /// `master_key`; then register it with [`Session::register`].
+  Future<Session?> finish({
+    required int status,
+    required List<int> body,
+    required String directory,
+    required List<int> masterKey,
+  });
+
+  /// Six digits the other device must show too.
+  String matchCode();
+
+  /// Prepares to join the account whose device shows `code`; this
+  /// device calls itself `label`.
+  factory Joiner({required String code, required String label}) =>
+      RustLib.instance.api.crateApiSessionJoinerNew(code: code, label: label);
+
+  /// Leaves this device's sealed request for the other device.
+  HttpCall requestCall();
+
+  /// Reads the answer to [`Joiner::request_call`]. `link_taken` means
+  /// another device used this code first.
+  void requested({required int status, required List<int> body});
+}
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Session>>
 abstract class Session implements RustOpaqueInterface {
   /// Accepts a chat request: the people there learn this account's
   /// username and, from now on, get receipts.
   Future<void> acceptChat({required String chat});
+
+  /// Adds this account's devices to `chat` in one change, from the
+  /// answers to [`Session::device_lookup_call`]. It goes out with the
+  /// next [`Session::pending_sends`].
+  Future<void> addOwnDevices({
+    required String chat,
+    required List<HttpAnswer> answers,
+  });
+
+  /// Approves the device that asked: its certificate, this account's
+  /// name and contacts go to it, sealed.
+  Future<HttpCall> approveLink();
+
+  /// Whether this device can link others: only the one holding the
+  /// account key can.
+  bool canLink();
+
+  /// Stops offering a link.
+  void cancelLink();
 
   /// Every chat, most recently active first.
   Future<List<ChatPreview>> chats();
@@ -70,6 +129,12 @@ abstract class Session implements RustOpaqueInterface {
   /// Deletes one of the user's own messages, for everyone.
   Future<void> deleteMessage({required String chat, required String target});
 
+  /// Takes one key package of one of this account's devices.
+  HttpCall deviceLookupCall({required String device});
+
+  /// Lists this account's devices, to heal chats (ADR-0014).
+  HttpCall devicesCall();
+
   /// Replaces the text of one of the user's own messages, for everyone.
   Future<void> editText({
     required String chat,
@@ -80,6 +145,24 @@ abstract class Session implements RustOpaqueInterface {
   /// The account key's fingerprint, for "this is me" screens:
   /// `a1b2 c3d4 e5f6 0718 9a0b c1d2 e3f4 0516`.
   String fingerprint();
+
+  /// Reads the answer to [`Session::devices_call`]: which chats lack
+  /// which of this account's devices.
+  Future<HealPlan> healPlan({required int status, required List<int> body});
+
+  /// Reads the answer to [`Session::link_check_call`]: the device that
+  /// asked to join, once one did.
+  Future<LinkApplicant?> linkApplicant({
+    required int status,
+    required List<int> body,
+  });
+
+  /// Reads the answer to [`Session::approve_link`]; returns the new
+  /// device's id, base64url. Then heal the chats once it registered.
+  Future<String> linkApproved({required int status, required List<int> body});
+
+  /// Asks whether a new device answered the code.
+  HttpCall linkCheckCall();
 
   /// How to read this device's mailbox.
   MailboxLink mailbox();
@@ -100,6 +183,10 @@ abstract class Session implements RustOpaqueInterface {
   /// Usernames that someone in a chat claims but the directory has not
   /// confirmed yet. Look each up with [`key_lookup_call`].
   Future<List<String>> namesToConfirm();
+
+  /// Starts linking a new device: returns the code to show,
+  /// `xxxxx-xxxxx-xxxxx-xxxxx`. A new offer replaces any earlier one.
+  Future<String> offerLink();
 
   /// Opens the session stored in `directory`.
   static Future<Session> open({
@@ -147,19 +234,23 @@ abstract class Session implements RustOpaqueInterface {
   Future<void> sendText({required String chat, required String text});
 
   /// Reads the service's answer to a [`PendingSend`]; on success the item
-  /// leaves the outbox and its message counts as sent.
-  Future<void> sent({
+  /// leaves the outbox and its message counts as sent. Returns `true` when
+  /// it was a change to a chat that lost to someone else's: whatever it
+  /// was for must be done again (healing does so by itself).
+  Future<bool> sent({
     required List<int> id,
     required int status,
     required List<int> body,
   });
 
-  /// Starts a chat from the answer to [`lookup_call`] for `username`.
-  /// Returns the chat id.
+  /// Starts a chat from the answer to [`lookup_call`] for `username`, and
+  /// `own`, the answer to a lookup of this account's own name, so its
+  /// other devices are in from the start. Returns the chat id.
   Future<String> startChat({
     required String username,
     required int status,
     required List<int> body,
+    HttpAnswer? own,
   });
 
   /// The username this account holds, once claimed.
@@ -214,6 +305,69 @@ class ChatPreview {
           last == other.last &&
           unread == other.unread &&
           request == other.request;
+}
+
+/// One chat that lacks some of this account's devices.
+class DeviceGap {
+  /// Chat id, base64url.
+  final String chat;
+
+  /// Device ids, base64url: look each up with
+  /// [`Session::device_lookup_call`].
+  final List<String> devices;
+
+  const DeviceGap({required this.chat, required this.devices});
+
+  @override
+  int get hashCode => chat.hashCode ^ devices.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DeviceGap &&
+          runtimeType == other.runtimeType &&
+          chat == other.chat &&
+          devices == other.devices;
+}
+
+/// What healing found: every registered device of the account, and the
+/// chats that lack some of them.
+class HealPlan {
+  /// Device ids, base64url.
+  final List<String> devices;
+  final List<DeviceGap> gaps;
+
+  const HealPlan({required this.devices, required this.gaps});
+
+  @override
+  int get hashCode => devices.hashCode ^ gaps.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HealPlan &&
+          runtimeType == other.runtimeType &&
+          devices == other.devices &&
+          gaps == other.gaps;
+}
+
+/// The service's answer to one [`HttpCall`].
+class HttpAnswer {
+  final int status;
+  final Uint8List body;
+
+  const HttpAnswer({required this.status, required this.body});
+
+  @override
+  int get hashCode => status.hashCode ^ body.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HttpAnswer &&
+          runtimeType == other.runtimeType &&
+          status == other.status &&
+          body == other.body;
 }
 
 /// An HTTP request for the delivery service, ready to send as is.
@@ -310,6 +464,28 @@ class InboxEvent {
           joined == other.joined &&
           refused == other.refused &&
           notice == other.notice;
+}
+
+/// A device asking to join this account (ADR-0014).
+class LinkApplicant {
+  /// What the device calls itself ("Android phone").
+  final String label;
+
+  /// Six digits, `482 913`; the new device shows the same.
+  final String matchCode;
+
+  const LinkApplicant({required this.label, required this.matchCode});
+
+  @override
+  int get hashCode => label.hashCode ^ matchCode.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LinkApplicant &&
+          runtimeType == other.runtimeType &&
+          label == other.label &&
+          matchCode == other.matchCode;
 }
 
 /// How to read the device's mailbox: a WebSocket to `path` with this

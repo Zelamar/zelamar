@@ -19,6 +19,16 @@ String describeFailure(String code) => switch (code) {
     'Zelamar couldn’t verify that account’s keys, so it stopped here.',
   'key_missing' || 'wrong_key' =>
     'This device’s secure key is missing, so its data can’t be opened.',
+  'bad_link_code' =>
+    'That code doesn’t look right. It has 20 letters and digits.',
+  'link_taken' =>
+    'Another device already used this code. Make a new one on your other '
+        'device.',
+  'unknown_link' =>
+    'This code has expired. Make a new one on your other device.',
+  'too_many_devices' => 'This account already has 5 devices.',
+  'already_initialized' =>
+    'This device already has an account, so it can’t join another one.',
   _ => 'Something went wrong. Please try again.',
 };
 

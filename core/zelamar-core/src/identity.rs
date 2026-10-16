@@ -55,7 +55,7 @@ impl std::fmt::Debug for AccountId {
 }
 
 /// Random identifier of one device of an account.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct DeviceId(#[serde(with = "serde_bytes")] [u8; 16]);
 
 impl DeviceId {
@@ -69,6 +69,12 @@ impl DeviceId {
             .random_array()
             .map(Self)
             .map_err(|e| CoreError::crypto("drawing a device id", e))
+    }
+
+    /// A device id from its raw bytes.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
     }
 
     /// The raw id bytes.

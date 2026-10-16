@@ -29,6 +29,7 @@ use crate::envelope::{EnvelopeId, MailboxId};
 use crate::error::{CoreError, Result};
 use crate::history::{self, HistoryEntry, HistoryReader, SendStatus, StoredMessage};
 use crate::identity::{AccountId, AccountKey, DeviceCertificate, DeviceId};
+use crate::link::{AnswerBody, Applicant, Joining, Linked, Offer};
 use crate::service::{self, CommitAnswer, DirectoryEntry};
 use crate::store::{Batch, MasterKey, Store};
 
@@ -278,20 +279,67 @@ impl Device {
     /// [`CoreError::WrongKey`] if `master` does not open an existing file,
     /// or a crypto, MLS or storage error.
     pub fn create(path: &Path, master: &MasterKey, account: &AccountKey) -> Result<Self> {
+        let store = Self::fresh_store(path, master)?;
+        let signer = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
+            .map_err(|e| CoreError::crypto("generating the device signature key", e))?;
+        let certificate = account.certify_device(DeviceId::random()?, signer.public())?;
+        let account_key = AccountKey::from_secret_bytes(&account.to_secret_bytes()?)?;
+        let mut device = Self::assemble(store, signer, certificate, Some(account_key))?;
+        let records = device.base_records()?;
+        device.persist_with(records)?;
+        Ok(device)
+    }
+
+    /// Creates a device linked to an existing account (ADR-0014): the keys
+    /// `joining` made, and what the account's device answered. It never
+    /// holds the account key.
+    ///
+    /// # Errors
+    ///
+    /// As [`Device::create`].
+    pub fn create_linked(
+        path: &Path,
+        master: &MasterKey,
+        joining: Joining,
+        linked: Linked,
+    ) -> Result<Self> {
+        let store = Self::fresh_store(path, master)?;
+        let mut device = Self::assemble(store, joining.signer, linked.certificate, None)?;
+        let own = device.account();
+        device.contacts.extend(
+            linked
+                .contacts
+                .into_iter()
+                .filter(|contact| contact.account != own)
+                .map(|contact| (contact.account, contact)),
+        );
+        device.introduced.extend(linked.introduced);
+        device.username = Some(linked.username);
+        let records = device.base_records()?;
+        device.persist_with(records)?;
+        Ok(device)
+    }
+
+    fn fresh_store(path: &Path, master: &MasterKey) -> Result<Store> {
         let store = Store::open(path, master)?;
         if store.record(RECORD_CERTIFICATE)?.is_some() {
             return Err(CoreError::AlreadyInitialized);
         }
+        Ok(store)
+    }
 
+    /// A new device around `signer` and its certificate, with a fresh
+    /// mailbox. Nothing is persisted yet.
+    fn assemble(
+        store: Store,
+        signer: SignatureKeyPair,
+        certificate: DeviceCertificate,
+        account_key: Option<AccountKey>,
+    ) -> Result<Self> {
         let provider = OpenMlsRustCrypto::default();
-        let signer = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
-            .map_err(|e| CoreError::crypto("generating the device signature key", e))?;
         signer
             .store(provider.storage())
             .map_err(|e| CoreError::mls("storing the device signature key", e))?;
-        let certificate = account.certify_device(DeviceId::random()?, signer.public())?;
-
-        let account_key = AccountKey::from_secret_bytes(&account.to_secret_bytes()?)?;
         let mailbox = MailboxId::random()?;
         let mailbox_secret = Zeroizing::new(
             provider
@@ -299,22 +347,12 @@ impl Device {
                 .random_array::<32>()
                 .map_err(|e| CoreError::crypto("drawing a mailbox secret", e))?,
         );
-        store.apply(&Batch {
-            records: vec![
-                (RECORD_CERTIFICATE, certificate.encode()),
-                (RECORD_ACCOUNT_KEY, account.to_secret_bytes()?.to_vec()),
-                (RECORD_MAILBOX, mailbox.0.to_vec()),
-                (RECORD_MAILBOX_SECRET, mailbox_secret.to_vec()),
-            ],
-            ..Batch::default()
-        })?;
-
-        let mut device = Self {
+        Ok(Self {
             credential: credential_for(&certificate, &signer),
             provider,
             signer,
             certificate,
-            account_key: Some(account_key),
+            account_key,
             mailbox,
             mailbox_secret,
             chats: HashMap::new(),
@@ -329,9 +367,23 @@ impl Device {
             persisted_introduced: BTreeSet::new(),
             read_marks: BTreeMap::new(),
             persisted_read_marks: BTreeMap::new(),
-        };
-        device.persist()?;
-        Ok(device)
+        })
+    }
+
+    /// What a new device writes once: who it is and where it receives.
+    fn base_records(&self) -> Result<Vec<(&'static str, Vec<u8>)>> {
+        let mut records = vec![
+            (RECORD_CERTIFICATE, self.certificate.encode()),
+            (RECORD_MAILBOX, self.mailbox.0.to_vec()),
+            (RECORD_MAILBOX_SECRET, self.mailbox_secret.to_vec()),
+        ];
+        if let Some(account) = &self.account_key {
+            records.push((RECORD_ACCOUNT_KEY, account.to_secret_bytes()?.to_vec()));
+        }
+        if let Some(username) = &self.username {
+            records.push((RECORD_USERNAME, username.as_bytes().to_vec()));
+        }
+        Ok(records)
     }
 
     /// Opens the device stored at `path`.
@@ -790,34 +842,64 @@ impl Device {
     }
 
     /// Starts a chat with every device in `entry`, as the directory handed
-    /// it out, in one commit, and introduces this device there.
+    /// it out, and with this account's other devices in `siblings`, in one
+    /// commit, and introduces this device there.
     ///
     /// Each device must be certified by the entry's account itself, so the
     /// directory cannot slip in someone else's device. Whether that account is
-    /// really the person the user means is what safety codes confirm.
+    /// really the person the user means is what safety codes confirm. This
+    /// device itself is skipped in `siblings`, so a lookup of one's own name
+    /// does as they are.
     ///
     /// # Errors
     ///
     /// [`CoreError::Unauthenticated`] for a device of another account,
     /// [`CoreError::Malformed`] for no or broken key packages,
     /// [`CoreError::Mls`] or a storage error.
-    pub fn start_chat(&mut self, entry: &DirectoryEntry) -> Result<(ChatId, Invitation)> {
-        let (account, key_packages) = (entry.account, &entry.key_packages);
-        if key_packages.is_empty() {
+    pub fn start_chat(
+        &mut self,
+        entry: &DirectoryEntry,
+        siblings: &[DirectoryEntry],
+    ) -> Result<(ChatId, Invitation)> {
+        let account = entry.account;
+        if entry.key_packages.is_empty() {
             return Err(CoreError::malformed("contact", "has no reachable device"));
         }
+        if siblings
+            .iter()
+            .any(|sibling| sibling.account != self.account())
+        {
+            return Err(CoreError::Unauthenticated(
+                "a sibling entry is about another account",
+            ));
+        }
         self.transact(|device| {
-            let mut packages = Vec::with_capacity(key_packages.len());
-            let mut newcomers = Vec::with_capacity(key_packages.len());
-            for bytes in key_packages {
+            let me = device.id();
+            let mut packages = Vec::new();
+            let mut newcomers = Vec::new();
+            let wanted = entry
+                .key_packages
+                .iter()
+                .map(|bytes| (account, bytes))
+                .chain(siblings.iter().flat_map(|sibling| {
+                    sibling
+                        .key_packages
+                        .iter()
+                        .map(move |bytes| (sibling.account, bytes))
+                }));
+            for (owner, bytes) in wanted {
                 let key_package = device.validate_key_package(bytes)?;
                 let leaf = key_package.leaf_node();
-                newcomers.push(verify_leaf(leaf)?);
-                if certificate_of(leaf.credential())?.account() != account {
+                let certificate = certificate_of(leaf.credential())?;
+                if certificate.account() != owner {
                     return Err(CoreError::Unauthenticated(
                         "a device does not belong to the contact",
                     ));
                 }
+                if certificate.device() == me {
+                    continue;
+                }
+                newcomers.push(verify_leaf(leaf)?);
                 packages.push(key_package);
             }
             let chat = device.new_chat()?;
@@ -862,6 +944,121 @@ impl Device {
             let key_package = device.validate_key_package(key_package)?;
             let newcomer = verify_leaf(key_package.leaf_node())?;
             device.add(chat, &[key_package], vec![newcomer])
+        })
+    }
+
+    /// Certifies the device behind `applicant` for this account and seals
+    /// what it needs into `offer`'s slot: the certificate, the username, the
+    /// contacts and the chats this account has spoken in (ADR-0014).
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Unauthenticated`] on a device without the account key,
+    /// [`CoreError::Malformed`] before the account has a username or for an
+    /// applicant claiming this device's id, or a crypto error.
+    pub fn approve_link(&self, offer: &Offer, applicant: &Applicant) -> Result<service::Request> {
+        let account = self.account_key().ok_or(CoreError::Unauthenticated(
+            "only the device holding the account key can link devices",
+        ))?;
+        let username = self.username.clone().ok_or(CoreError::malformed(
+            "link",
+            "the account has no username yet",
+        ))?;
+        if applicant.device == self.id() {
+            return Err(CoreError::malformed(
+                "link",
+                "the applicant reuses this device's id",
+            ));
+        }
+        let certificate = account.certify_device(applicant.device, &applicant.signature_key)?;
+        offer.answer(&AnswerBody {
+            certificate: certificate.encode(),
+            username,
+            contacts: self.contacts.values().cloned().collect(),
+            introduced: self.introduced.iter().cloned().collect(),
+        })
+    }
+
+    /// Which of this account's devices each chat still lacks, given the
+    /// devices the directory lists for it ([`service::device_list`]). Every
+    /// chat this account has spoken in should hold all of them (ADR-0014);
+    /// chats still waiting for an answer to a commit are left for later.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Unauthenticated`] for a certificate of another account,
+    /// or a malformed member.
+    pub fn missing_devices(
+        &self,
+        registered: &[DeviceCertificate],
+    ) -> Result<Vec<(ChatId, Vec<DeviceId>)>> {
+        let own = self.account();
+        if registered
+            .iter()
+            .any(|certificate| certificate.account() != own)
+        {
+            return Err(CoreError::Unauthenticated(
+                "a listed device belongs to another account",
+            ));
+        }
+        let mut missing = Vec::new();
+        for chat in self.chats() {
+            let group = &self.chats[&chat];
+            if !self.introduced.contains(&chat) || group.pending_commit().is_some() {
+                continue;
+            }
+            let present = group
+                .members()
+                .map(|member| certificate_of(&member.credential).map(|c| c.device()))
+                .collect::<Result<BTreeSet<DeviceId>>>()?;
+            let lacking: Vec<DeviceId> = registered
+                .iter()
+                .map(DeviceCertificate::device)
+                .filter(|device| *device != self.id() && !present.contains(device))
+                .collect();
+            if !lacking.is_empty() {
+                missing.push((chat.clone(), lacking));
+            }
+        }
+        Ok(missing)
+    }
+
+    /// Adds this account's own devices to `chat` in one commit, each from a
+    /// directory answer about that device alone ([`service::device_lookup`]).
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Unauthenticated`] for a device of another account, or as
+    /// [`Device::invite`].
+    pub fn add_own_devices(
+        &mut self,
+        chat: &ChatId,
+        entries: &[DirectoryEntry],
+    ) -> Result<Invitation> {
+        if entries.is_empty() {
+            return Err(CoreError::malformed("device lookup", "no device to add"));
+        }
+        self.transact(|device| {
+            let mut packages = Vec::with_capacity(entries.len());
+            let mut newcomers = Vec::with_capacity(entries.len());
+            for entry in entries {
+                let [bytes] = entry.key_packages.as_slice() else {
+                    return Err(CoreError::malformed(
+                        "device lookup",
+                        "not exactly one device",
+                    ));
+                };
+                let key_package = device.validate_key_package(bytes)?;
+                let leaf = key_package.leaf_node();
+                if entry.account != device.account()
+                    || certificate_of(leaf.credential())?.account() != device.account()
+                {
+                    return Err(CoreError::Unauthenticated("not a device of this account"));
+                }
+                newcomers.push(verify_leaf(leaf)?);
+                packages.push(key_package);
+            }
+            device.add(chat, &packages, newcomers)
         })
     }
 
@@ -1175,6 +1372,11 @@ impl Device {
                     device: certificate.device(),
                 };
                 self.fold(&chat, author, &message, SendStatus::Sent)?;
+                if author.account == self.account() {
+                    // Another of our devices spoke here: the chat is ours on
+                    // this device too (ADR-0014).
+                    self.introduced.insert(chat.clone());
+                }
                 if let Body::Profile { username } = &message.body
                     && author.account != self.account()
                 {
@@ -1328,7 +1530,15 @@ impl Device {
     /// if it changed, and the pending history and outbox writes, in one
     /// transaction.
     fn persist(&mut self) -> Result<()> {
-        let mut batch = Batch::default();
+        self.persist_with(Vec::new())
+    }
+
+    /// As [`Self::persist`], with `records` written in the same transaction.
+    fn persist_with(&mut self, records: Vec<(&'static str, Vec<u8>)>) -> Result<()> {
+        let mut batch = Batch {
+            records,
+            ..Batch::default()
+        };
         {
             let current = self
                 .provider

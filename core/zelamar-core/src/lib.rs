@@ -15,6 +15,7 @@
 //! - [`envelope`]: the transport-agnostic wire unit;
 //! - [`service`]: requests to and answers from the delivery service, without I/O;
 //! - [`history`]: the local history of each chat;
+//! - [`link`]: linking a new device to an account;
 //! - [`store`]: encrypted persistence of a device.
 
 pub mod contacts;
@@ -24,6 +25,7 @@ pub mod envelope;
 pub mod error;
 pub mod history;
 pub mod identity;
+pub mod link;
 pub mod service;
 pub mod store;
 

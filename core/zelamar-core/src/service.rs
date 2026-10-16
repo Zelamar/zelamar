@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use crate::device::{Device, Outgoing, Received};
 use crate::envelope::{Envelope, EnvelopeId, MAX_PAYLOAD};
 use crate::error::{CoreError, Result};
-use crate::identity::{AccountId, AccountKey, DeviceCertificate};
+use crate::identity::{AccountId, AccountKey, DeviceCertificate, DeviceId};
 
 /// Proof-of-work difficulty of the production service, in leading zero bits.
 pub const CLAIM_WORK_BITS: u8 = 21;
@@ -215,6 +215,98 @@ pub fn key_lookup(username: &str) -> Result<Request> {
     })
 }
 
+/// Asks the directory which devices `username` has registered, without
+/// taking any key package (ADR-0014).
+///
+/// # Errors
+///
+/// [`CoreError::Malformed`] for a bad username.
+pub fn devices(username: &str) -> Result<Request> {
+    Ok(Request {
+        method: "GET",
+        path: format!("/v0/accounts/{}/devices", normalize_username(username)?),
+        headers: Vec::new(),
+        body: Vec::new(),
+    })
+}
+
+/// Reads the answer to [`devices`] for `requested`: the account and its
+/// devices' certificates, each verified under it.
+///
+/// # Errors
+///
+/// As [`directory_entry`].
+pub fn device_list(
+    requested: &str,
+    status: u16,
+    body: &[u8],
+) -> Result<(AccountId, Vec<DeviceCertificate>)> {
+    #[derive(Deserialize)]
+    struct Found {
+        username: String,
+        account: String,
+        devices: Vec<Listed>,
+    }
+    #[derive(Deserialize)]
+    struct Listed {
+        certificate: String,
+    }
+
+    expect_success(status, body, &[200])?;
+    let found: Found = parse(body)?;
+    if found.username != normalize_username(requested)? {
+        return Err(CoreError::malformed(
+            "directory answer",
+            "about another username",
+        ));
+    }
+    let account = account_of(&found.account)?;
+    let certificates = found
+        .devices
+        .iter()
+        .map(|device| certified(&device.certificate, account))
+        .collect::<Result<Vec<_>>>()?;
+    Ok((account, certificates))
+}
+
+/// Takes one key package of one device of `username`, for adding that
+/// device to a chat (ADR-0014). The answer reads with [`directory_entry`].
+///
+/// # Errors
+///
+/// [`CoreError::Malformed`] for a bad username.
+pub fn device_lookup(username: &str, device: DeviceId) -> Result<Request> {
+    Ok(Request {
+        method: "GET",
+        path: format!(
+            "/v0/accounts/{}/devices/{}",
+            normalize_username(username)?,
+            b64(device.as_bytes())
+        ),
+        headers: Vec::new(),
+        body: Vec::new(),
+    })
+}
+
+/// An account key as the directory writes it.
+fn account_of(text: &str) -> Result<AccountId> {
+    Ok(AccountId::from_bytes(unb64(text)?.try_into().map_err(
+        |_| CoreError::malformed("contact", "account is not 32 bytes"),
+    )?))
+}
+
+/// A device certificate the directory listed for `account`, verified.
+fn certified(text: &str, account: AccountId) -> Result<DeviceCertificate> {
+    let certificate = DeviceCertificate::decode(&unb64(text)?)?;
+    certificate.verify()?;
+    if certificate.account() != account {
+        return Err(CoreError::Unauthenticated(
+            "the directory listed a device of another account",
+        ));
+    }
+    Ok(certificate)
+}
+
 /// Reads the answer to [`lookup`] or [`key_lookup`] for `requested`. The
 /// answer must be about that very username, and every certificate must
 /// verify under the account key; [`Device::start_chat`] verifies the rest.
@@ -246,22 +338,12 @@ pub fn directory_entry(requested: &str, status: u16, body: &[u8]) -> Result<Dire
             "about another username",
         ));
     }
-    let account = AccountId::from_bytes(
-        unb64(&found.account)?
-            .try_into()
-            .map_err(|_| CoreError::malformed("contact", "account is not 32 bytes"))?,
-    );
+    let account = account_of(&found.account)?;
     let key_packages = found
         .devices
         .iter()
         .map(|device| {
-            let certificate = DeviceCertificate::decode(&unb64(&device.certificate)?)?;
-            certificate.verify()?;
-            if certificate.account() != account {
-                return Err(CoreError::Unauthenticated(
-                    "the directory listed a device of another account",
-                ));
-            }
+            certified(&device.certificate, account)?;
             unb64(&device.key_package)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -609,7 +691,7 @@ fn json_request(method: &'static str, path: String, body: &serde_json::Value) ->
 }
 
 /// `Ok` for an expected status; otherwise the service's error code.
-fn expect_success(status: u16, body: &[u8], expected: &[u16]) -> Result<()> {
+pub(crate) fn expect_success(status: u16, body: &[u8], expected: &[u16]) -> Result<()> {
     #[derive(Deserialize)]
     struct Refusal {
         error: String,
@@ -622,16 +704,16 @@ fn expect_success(status: u16, body: &[u8], expected: &[u16]) -> Result<()> {
     Err(CoreError::Service { status, code })
 }
 
-fn parse<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T> {
+pub(crate) fn parse<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T> {
     serde_json::from_slice(body)
         .map_err(|_| CoreError::malformed("service answer", "unexpected shape"))
 }
 
-fn b64(bytes: &[u8]) -> String {
+pub(crate) fn b64(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
-fn unb64(text: &str) -> Result<Vec<u8>> {
+pub(crate) fn unb64(text: &str) -> Result<Vec<u8>> {
     URL_SAFE_NO_PAD
         .decode(text)
         .map_err(|_| CoreError::malformed("service answer", "invalid base64url"))

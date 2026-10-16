@@ -133,3 +133,9 @@ JSON `{"key_packages": [...], "last_resort": ...?}`.
 `{"username": "alice", "account": "<32 bytes>"}` and hands out no key
 package. Clients use it to confirm a username someone claims in a chat
 (`content.md`, `profile`). It is rate-limited like a lookup.
+
+## Listing devices, and one device's key package
+
+`GET /v0/accounts/{username}/devices` lists the devices' certificates only.
+`GET /v0/accounts/{username}/devices/{id}` hands out one key package of one
+device. Both serve linked devices and are specified in `linking.md`.

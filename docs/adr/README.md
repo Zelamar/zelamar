@@ -19,5 +19,6 @@ decision gets a new ADR that supersedes the old one.
 | [0011](0011-addressing-outbox-and-history.md) | Device addressing in the MLS tree, durable outbox, encrypted history | Accepted |
 | [0012](0012-delivery-service.md) | Delivery service: Durable Objects, sans-IO core, anonymous tokens, ordered commits | Accepted |
 | [0013](0013-app-architecture.md) | App architecture: one Messenger, a bridge session, keys in the OS vault | Accepted |
+| [0014](0014-linked-devices.md) | Linked devices: a typed code, a certificate, chats that heal themselves | Accepted |
 
 New ADRs copy [`template.md`](template.md) and take the next number.

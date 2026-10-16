@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:zelamar/src/messenger/key_vault.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
@@ -11,6 +12,26 @@ import 'package:zelamar/src/rust/api/session.dart';
 import 'package:zelamar/src/rust/api/session.dart'
     as core
     show normalizeUsername;
+
+/// How long a link code works (`protocol/linking.md`).
+const _linkLifetime = Duration(minutes: 10);
+
+/// What this device calls itself when it asks to join an account.
+String _deviceLabel() {
+  if (Platform.isAndroid) {
+    return 'Android phone';
+  }
+  if (Platform.isIOS) {
+    return 'iPhone';
+  }
+  if (Platform.isWindows) {
+    return 'Windows computer';
+  }
+  if (Platform.isMacOS) {
+    return 'Mac';
+  }
+  return 'Computer';
+}
 
 /// The real messenger: the Rust core's [Session] plus the network.
 ///
@@ -24,6 +45,7 @@ class LiveMessenger extends Messenger {
     required this.vault,
     required this.transport,
     Notifier? notifier,
+    this.linkPoll = const Duration(seconds: 2),
   }) : notifier = notifier ?? Notifier.forPlatform();
 
   /// Where the encrypted store lives.
@@ -33,6 +55,9 @@ class LiveMessenger extends Messenger {
 
   /// Tells the user about new messages while the app is not in front.
   final Notifier notifier;
+
+  /// How often both devices look at their link slot while linking.
+  final Duration linkPoll;
 
   Session? _session;
   MessengerPhase _phase = MessengerPhase.starting;
@@ -49,6 +74,16 @@ class LiveMessenger extends Messenger {
   Timer? _retry;
   final _confirmAttempted = <String>{};
 
+  /// Bumped to stop whatever linking loop is waiting.
+  int _joinGeneration = 0;
+  int _linkGeneration = 0;
+
+  bool _healing = false;
+  bool _healAgain = false;
+
+  /// A device just approved: healing waits until it has registered.
+  String? _awaitedDevice;
+
   @override
   MessengerPhase get phase => _phase;
 
@@ -60,6 +95,9 @@ class LiveMessenger extends Messenger {
 
   @override
   String? get fingerprint => _session?.fingerprint();
+
+  @override
+  bool get canLinkDevices => _session?.canLink() ?? false;
 
   @override
   Link get link => _link;
@@ -120,12 +158,141 @@ class LiveMessenger extends Messenger {
       final (status, body) = await transport.send(claim);
       _username = await session.claimed(status: status, body: body);
     }
+    await _register(session);
+  });
+
+  /// Registers this device under its account's name, then opens the chats.
+  Future<void> _register(Session session) async {
     final registration = await session.register();
     final (status, body) = await transport.send(registration);
     await session.registered(status: status, body: body);
     await vault.markRegistered();
     await _becomeReady();
+  }
+
+  @override
+  Future<void> joinAccount({
+    required String code,
+    required void Function(String matchCode) onMatch,
+  }) => _guard(() async {
+    final generation = ++_joinGeneration;
+    bool stopped() => generation != _joinGeneration || _closed;
+    final Joiner joiner;
+    try {
+      joiner = Joiner(code: code, label: _deviceLabel());
+    } on SessionError catch (error) {
+      throw MessengerFailure('bad_link_code', error.message);
+    }
+    try {
+      await _discardUnclaimed();
+      final (status, body) = await transport.send(joiner.requestCall());
+      joiner.requested(status: status, body: body);
+      onMatch(joiner.matchCode());
+      final key = newMasterKey();
+      // As for a new account: the key is safe before the store exists.
+      await vault.storeMasterKey(key);
+      final deadline = DateTime.now().add(_linkLifetime);
+      while (_session == null) {
+        await Future<void>.delayed(linkPoll);
+        if (stopped()) {
+          throw const MessengerFailure('cancelled');
+        }
+        if (DateTime.now().isAfter(deadline)) {
+          throw const MessengerFailure('unknown_link');
+        }
+        final (int, Uint8List) answer;
+        try {
+          answer = await transport.send(joiner.checkCall());
+        } on MessengerFailure catch (failure) {
+          if (failure.code == 'offline') {
+            continue;
+          }
+          rethrow;
+        }
+        final session = await joiner.finish(
+          status: answer.$1,
+          body: answer.$2,
+          directory: directory,
+          masterKey: key,
+        );
+        if (session != null) {
+          _session = session;
+          _username = session.username();
+          unawaited(_sendQuietly(joiner.closeCall()));
+        }
+      }
+    } finally {
+      joiner.dispose();
+    }
+    await _register(_session!);
   });
+
+  @override
+  void cancelJoin() => _joinGeneration++;
+
+  /// Removes an account that never got a name, so this device can join
+  /// another one instead. Nothing in it can be lost.
+  Future<void> _discardUnclaimed() async {
+    final session = _session;
+    if (session == null) {
+      return;
+    }
+    if (session.username() != null) {
+      throw const MessengerFailure('already_initialized');
+    }
+    _session = null;
+    session.dispose();
+    removeStore(directory: directory);
+  }
+
+  @override
+  Future<String> offerLink() => _guard(() async {
+    _linkGeneration++;
+    return await _ready.offerLink();
+  });
+
+  @override
+  Future<LinkApplicant?> nextApplicant() => _guard(() async {
+    final generation = _linkGeneration;
+    final deadline = DateTime.now().add(_linkLifetime);
+    while (DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(linkPoll);
+      if (generation != _linkGeneration || _closed) {
+        return null;
+      }
+      try {
+        final session = _ready;
+        final (status, body) = await transport.send(session.linkCheckCall());
+        final applicant = await session.linkApplicant(
+          status: status,
+          body: body,
+        );
+        if (applicant != null) {
+          return applicant;
+        }
+      } on MessengerFailure catch (failure) {
+        if (failure.code != 'offline') {
+          rethrow;
+        }
+      }
+    }
+    return null;
+  });
+
+  @override
+  Future<void> approveLink() => _guard(() async {
+    final session = _ready;
+    final (status, body) = await transport.send(await session.approveLink());
+    final device = await session.linkApproved(status: status, body: body);
+    _linkGeneration++;
+    unawaited(_heal(waitFor: device));
+  });
+
+  @override
+  void cancelLink() {
+    _linkGeneration++;
+    _session?.cancelLink();
+  }
 
   @override
   Future<String> startChat(String username) => _guard(() async {
@@ -135,11 +302,27 @@ class LiveMessenger extends Messenger {
       username: username,
       status: status,
       body: body,
+      own: await _ownDevices(),
     );
     await _refreshChats(chat);
     unawaited(_flush());
     return chat;
   });
+
+  /// This account's own devices with a key package each, so a new chat
+  /// holds them from the start; `null` when the service cannot say.
+  Future<HttpAnswer?> _ownDevices() async {
+    final name = _username;
+    if (name == null) {
+      return null;
+    }
+    try {
+      final (status, body) = await transport.send(lookupCall(username: name));
+      return status == 200 ? HttpAnswer(status: status, body: body) : null;
+    } on MessengerFailure {
+      return null;
+    }
+  }
 
   @override
   Future<List<MessageView>> messages(
@@ -209,6 +392,8 @@ class LiveMessenger extends Messenger {
     await _ready.acceptChat(chat: chat);
     await _refreshChats(chat);
     unawaited(_flush());
+    // The account has spoken there now: its other devices belong in it.
+    unawaited(_heal());
   });
 
   @override
@@ -257,6 +442,7 @@ class LiveMessenger extends Messenger {
         _setLink(Link.online);
         delay = const Duration(seconds: 1);
         unawaited(_flush());
+        unawaited(_heal());
         // `await for` opens envelopes strictly one after another, in the
         // order the mailbox sends them.
         await for (final data in socket) {
@@ -301,23 +487,88 @@ class LiveMessenger extends Messenger {
       return;
     }
     _flushing = true;
+    var lost = false;
     try {
       do {
         _flushAgain = false;
         final pending = await _ready.pendingSends();
         for (final item in pending) {
           final (status, body) = await transport.send(item.call);
-          await _ready.sent(id: item.id, status: status, body: body);
+          lost |= await _ready.sent(id: item.id, status: status, body: body);
         }
         if (pending.isNotEmpty) {
           await _refreshChats(null);
         }
       } while (_flushAgain);
+      if (lost) {
+        // Someone else changed a chat first; whatever ours was for is
+        // still missing, and healing finds it again.
+        unawaited(_heal());
+      }
     } on Object {
       _retry?.cancel();
       _retry = Timer(const Duration(seconds: 5), () => unawaited(_flush()));
     } finally {
       _flushing = false;
+    }
+  }
+
+  /// Brings this account's devices into every chat that lacks them
+  /// (ADR-0014). With [waitFor], first waits until that device has
+  /// registered.
+  Future<void> _heal({String? waitFor}) async {
+    _awaitedDevice = waitFor ?? _awaitedDevice;
+    if (_healing) {
+      _healAgain = true;
+      return;
+    }
+    _healing = true;
+    final started = DateTime.now();
+    try {
+      do {
+        _healAgain = false;
+        final session = _ready;
+        final (status, body) = await transport.send(session.devicesCall());
+        final plan = await session.healPlan(status: status, body: body);
+        final awaited = _awaitedDevice;
+        if (awaited != null && !plan.devices.contains(awaited)) {
+          if (DateTime.now().difference(started) > _linkLifetime) {
+            _awaitedDevice = null;
+            return;
+          }
+          await Future<void>.delayed(linkPoll);
+          _healAgain = true;
+          continue;
+        }
+        _awaitedDevice = null;
+        for (final gap in plan.gaps) {
+          final answers = <HttpAnswer>[];
+          for (final device in gap.devices) {
+            final (status, body) = await transport.send(
+              session.deviceLookupCall(device: device),
+            );
+            answers.add(HttpAnswer(status: status, body: body));
+          }
+          await session.addOwnDevices(chat: gap.chat, answers: answers);
+        }
+        if (plan.gaps.isNotEmpty) {
+          await _refreshChats(null);
+          unawaited(_flush());
+        }
+      } while (_healAgain && !_closed);
+    } on Object {
+      // The next connection heals again.
+    } finally {
+      _healing = false;
+    }
+  }
+
+  /// Sends [call] and ignores the answer and any failure.
+  Future<void> _sendQuietly(HttpCall call) async {
+    try {
+      await transport.send(call);
+    } on Object {
+      // Nothing depends on it.
     }
   }
 

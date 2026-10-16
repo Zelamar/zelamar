@@ -129,31 +129,49 @@ export class Account extends DurableObject<Env> {
     if (holder === null) {
       return failure(404, 'unknown_account');
     }
-    const sql = this.ctx.storage.sql;
-    const devices = sql
-      .exec<{ device: ArrayBuffer; certificate: ArrayBuffer; last_resort: ArrayBuffer }>(
+    const devices = this.ctx.storage.sql
+      .exec<DeviceRow>(
         'SELECT device, certificate, last_resort FROM devices ORDER BY registered, device',
       )
       .toArray();
-    const found = devices.map((row) => {
-      const oneTime = sql
-        .exec<{ key_package: ArrayBuffer }>(
-          `DELETE FROM key_packages WHERE seq = (
-             SELECT seq FROM key_packages WHERE device = ? ORDER BY seq LIMIT 1
-           ) RETURNING key_package`,
-          row.device,
-        )
-        .toArray();
-      const keyPackage = oneTime[0]?.key_package ?? row.last_resort;
-      return {
-        certificate: toBase64Url(new Uint8Array(row.certificate)),
-        key_package: toBase64Url(new Uint8Array(keyPackage)),
-      };
-    });
-    return {
-      status: 200,
-      body: { username: holder.username, account: toBase64Url(holder.key), devices: found },
-    };
+    return found(
+      holder,
+      devices.map((row) => this.withKeyPackage(row)),
+    );
+  }
+
+  /** One key package of one device, for adding it to a chat (ADR-0014). */
+  lookupDevice(device: ArrayBuffer): Reply {
+    const holder = this.holder();
+    if (holder === null) {
+      return failure(404, 'unknown_account');
+    }
+    const row = this.ctx.storage.sql
+      .exec<DeviceRow>(
+        'SELECT device, certificate, last_resort FROM devices WHERE device = ?',
+        device,
+      )
+      .toArray()[0];
+    return row === undefined
+      ? failure(404, 'unknown_device')
+      : found(holder, [this.withKeyPackage(row)]);
+  }
+
+  /** Every device's certificate, without handing out any key package (ADR-0014). */
+  listDevices(): Reply {
+    const holder = this.holder();
+    if (holder === null) {
+      return failure(404, 'unknown_account');
+    }
+    const devices = this.ctx.storage.sql
+      .exec<{ certificate: ArrayBuffer }>(
+        'SELECT certificate FROM devices ORDER BY registered, device',
+      )
+      .toArray();
+    return found(
+      holder,
+      devices.map((row) => ({ certificate: toBase64Url(new Uint8Array(row.certificate)) })),
+    );
   }
 
   /** Only which account holds the name; hands out no key package. */
@@ -162,6 +180,23 @@ export class Account extends DurableObject<Env> {
     return holder === null
       ? failure(404, 'unknown_account')
       : { status: 200, body: { username: holder.username, account: toBase64Url(holder.key) } };
+  }
+
+  /** A device's certificate and its next key package, which is consumed. */
+  private withKeyPackage(row: DeviceRow): Record<string, string> {
+    const oneTime = this.ctx.storage.sql
+      .exec<{ key_package: ArrayBuffer }>(
+        `DELETE FROM key_packages WHERE seq = (
+           SELECT seq FROM key_packages WHERE device = ? ORDER BY seq LIMIT 1
+         ) RETURNING key_package`,
+        row.device,
+      )
+      .toArray();
+    const keyPackage = oneTime[0]?.key_package ?? row.last_resort;
+    return {
+      certificate: toBase64Url(new Uint8Array(row.certificate)),
+      key_package: toBase64Url(new Uint8Array(keyPackage)),
+    };
   }
 
   /** Checks a signed device request against this account's key. */
@@ -248,6 +283,23 @@ export class Account extends DurableObject<Env> {
       CREATE INDEX IF NOT EXISTS key_packages_by_device ON key_packages (device, seq);
     `);
   }
+}
+
+interface DeviceRow extends Record<string, SqlStorageValue> {
+  device: ArrayBuffer;
+  certificate: ArrayBuffer;
+  last_resort: ArrayBuffer;
+}
+
+/** A directory answer about `holder` listing `devices`. */
+function found(
+  holder: { username: string; key: Uint8Array },
+  devices: Record<string, string>[],
+): Reply {
+  return {
+    status: 200,
+    body: { username: holder.username, account: toBase64Url(holder.key), devices },
+  };
 }
 
 function parseKeyPackage(value: unknown): Uint8Array | null {

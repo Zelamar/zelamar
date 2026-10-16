@@ -30,12 +30,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCryptoLab;
 
   CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_JoinerPtr => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner;
+
+  CrossPlatformFinalizerArg
   get rust_arc_decrement_strong_count_SessionPtr => wire
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession;
 
   @protected
   CryptoLab
   dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCryptoLab(
+    dynamic raw,
+  );
+
+  @protected
+  Joiner
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
     dynamic raw,
   );
 
@@ -52,6 +62,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  Joiner
+  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
+    dynamic raw,
+  );
+
+  @protected
   Session
   dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     dynamic raw,
@@ -60,6 +76,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   CryptoLab
   dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCryptoLab(
+    dynamic raw,
+  );
+
+  @protected
+  Joiner
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
     dynamic raw,
   );
 
@@ -76,6 +98,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  Joiner
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
+    dynamic raw,
+  );
+
+  @protected
   Session
   dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     dynamic raw,
@@ -88,7 +116,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool dco_decode_bool(dynamic raw);
 
   @protected
+  Session
+  dco_decode_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+    dynamic raw,
+  );
+
+  @protected
+  HttpAnswer dco_decode_box_autoadd_http_answer(dynamic raw);
+
+  @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
+
+  @protected
+  LinkApplicant dco_decode_box_autoadd_link_applicant(dynamic raw);
 
   @protected
   MessageView dco_decode_box_autoadd_message_view(dynamic raw);
@@ -104,6 +144,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   CoreInfo dco_decode_core_info(dynamic raw);
+
+  @protected
+  DeviceGap dco_decode_device_gap(dynamic raw);
+
+  @protected
+  HealPlan dco_decode_heal_plan(dynamic raw);
+
+  @protected
+  HttpAnswer dco_decode_http_answer(dynamic raw);
 
   @protected
   HttpCall dco_decode_http_call(dynamic raw);
@@ -133,10 +182,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LabSide dco_decode_lab_side(dynamic raw);
 
   @protected
+  LinkApplicant dco_decode_link_applicant(dynamic raw);
+
+  @protected
   List<String> dco_decode_list_String(dynamic raw);
 
   @protected
   List<ChatPreview> dco_decode_list_chat_preview(dynamic raw);
+
+  @protected
+  List<DeviceGap> dco_decode_list_device_gap(dynamic raw);
+
+  @protected
+  List<HttpAnswer> dco_decode_list_http_answer(dynamic raw);
 
   @protected
   List<HttpHeader> dco_decode_list_http_header(dynamic raw);
@@ -175,7 +233,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
+  Session?
+  dco_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+    dynamic raw,
+  );
+
+  @protected
+  HttpAnswer? dco_decode_opt_box_autoadd_http_answer(dynamic raw);
+
+  @protected
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
+
+  @protected
+  LinkApplicant? dco_decode_opt_box_autoadd_link_applicant(dynamic raw);
 
   @protected
   MessageView? dco_decode_opt_box_autoadd_message_view(dynamic raw);
@@ -229,6 +299,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  Joiner
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   Session
   sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     SseDeserializer deserializer,
@@ -237,6 +313,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   CryptoLab
   sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCryptoLab(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  Joiner
+  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
     SseDeserializer deserializer,
   );
 
@@ -253,6 +335,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  Joiner
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   Session
   sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     SseDeserializer deserializer,
@@ -261,6 +349,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   CryptoLab
   sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCryptoLab(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  Joiner
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
     SseDeserializer deserializer,
   );
 
@@ -277,7 +371,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
+  Session
+  sse_decode_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  HttpAnswer sse_decode_box_autoadd_http_answer(SseDeserializer deserializer);
+
+  @protected
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
+
+  @protected
+  LinkApplicant sse_decode_box_autoadd_link_applicant(
+    SseDeserializer deserializer,
+  );
 
   @protected
   MessageView sse_decode_box_autoadd_message_view(SseDeserializer deserializer);
@@ -293,6 +401,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   CoreInfo sse_decode_core_info(SseDeserializer deserializer);
+
+  @protected
+  DeviceGap sse_decode_device_gap(SseDeserializer deserializer);
+
+  @protected
+  HealPlan sse_decode_heal_plan(SseDeserializer deserializer);
+
+  @protected
+  HttpAnswer sse_decode_http_answer(SseDeserializer deserializer);
 
   @protected
   HttpCall sse_decode_http_call(SseDeserializer deserializer);
@@ -322,10 +439,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LabSide sse_decode_lab_side(SseDeserializer deserializer);
 
   @protected
+  LinkApplicant sse_decode_link_applicant(SseDeserializer deserializer);
+
+  @protected
   List<String> sse_decode_list_String(SseDeserializer deserializer);
 
   @protected
   List<ChatPreview> sse_decode_list_chat_preview(SseDeserializer deserializer);
+
+  @protected
+  List<DeviceGap> sse_decode_list_device_gap(SseDeserializer deserializer);
+
+  @protected
+  List<HttpAnswer> sse_decode_list_http_answer(SseDeserializer deserializer);
 
   @protected
   List<HttpHeader> sse_decode_list_http_header(SseDeserializer deserializer);
@@ -366,7 +492,23 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
+  Session?
+  sse_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  HttpAnswer? sse_decode_opt_box_autoadd_http_answer(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
+
+  @protected
+  LinkApplicant? sse_decode_opt_box_autoadd_link_applicant(
+    SseDeserializer deserializer,
+  );
 
   @protected
   MessageView? sse_decode_opt_box_autoadd_message_view(
@@ -424,6 +566,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
+    Joiner self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
   sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     Session self,
     SseSerializer serializer,
@@ -433,6 +582,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCryptoLab(
     CryptoLab self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
+    Joiner self,
     SseSerializer serializer,
   );
 
@@ -452,6 +608,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
+    Joiner self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
   sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     Session self,
     SseSerializer serializer,
@@ -461,6 +624,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCryptoLab(
     CryptoLab self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
+    Joiner self,
     SseSerializer serializer,
   );
 
@@ -478,8 +648,27 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
+  void
+  sse_encode_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+    Session self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_http_answer(
+    HttpAnswer self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_i_64(
     PlatformInt64 self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_link_applicant(
+    LinkApplicant self,
     SseSerializer serializer,
   );
 
@@ -500,6 +689,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_core_info(CoreInfo self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_device_gap(DeviceGap self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_heal_plan(HealPlan self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_http_answer(HttpAnswer self, SseSerializer serializer);
 
   @protected
   void sse_encode_http_call(HttpCall self, SseSerializer serializer);
@@ -532,11 +730,26 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_lab_side(LabSide self, SseSerializer serializer);
 
   @protected
+  void sse_encode_link_applicant(LinkApplicant self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_chat_preview(
     List<ChatPreview> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_device_gap(
+    List<DeviceGap> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_http_answer(
+    List<HttpAnswer> self,
     SseSerializer serializer,
   );
 
@@ -592,8 +805,27 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
+  void
+  sse_encode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+    Session? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_http_answer(
+    HttpAnswer? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_i_64(
     PlatformInt64? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_link_applicant(
+    LinkApplicant? self,
     SseSerializer serializer,
   );
 
@@ -674,6 +906,22 @@ class RustLibWire implements BaseWire {
       );
 
   void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
+        ptr,
+      );
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
+        ptr,
+      );
+
+  void
   rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     int ptr,
   ) => wasmModule
@@ -703,6 +951,16 @@ extension type RustLibWasmModule._(JSObject _) implements JSObject {
 
   external void
   rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerCryptoLab(
+    int ptr,
+  );
+
+  external void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
+    int ptr,
+  );
+
+  external void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
     int ptr,
   );
 

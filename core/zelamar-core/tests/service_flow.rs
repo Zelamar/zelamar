@@ -19,7 +19,8 @@ use zelamar_core::content::{AppMessage, Body, MessageId};
 use zelamar_core::device::{Author, ChatId, Device, Outgoing, Received, Settled};
 use zelamar_core::envelope::{Envelope, EnvelopeId, MailboxId};
 use zelamar_core::history::{SendStatus, StoredContent};
-use zelamar_core::identity::AccountKey;
+use zelamar_core::identity::{AccountId, AccountKey};
+use zelamar_core::link::{self, Joining, Offer};
 use zelamar_core::service::{self, KEY_PACKAGES_AT_REGISTRATION, Request};
 use zelamar_core::store::MasterKey;
 
@@ -37,6 +38,7 @@ fn unb64(text: &str) -> Vec<u8> {
 
 /// A registered device in the stand-in directory.
 struct Listed {
+    id: String,
     certificate: String,
     key_packages: VecDeque<String>,
     last_resort: String,
@@ -49,6 +51,8 @@ struct Service {
     mailboxes: HashMap<[u8; 32], VecDeque<Vec<u8>>>,
     /// The sequencer: per chat, the current epoch and the last winner.
     groups: HashMap<String, (u64, [u8; 16])>,
+    /// Link slots: the sealed request and, once approved, the answer.
+    links: HashMap<String, (Vec<u8>, Option<Vec<u8>>)>,
 }
 
 /// One delivery frame read from the start of `frame`, and its length.
@@ -69,11 +73,18 @@ fn read_frame(frame: &[u8]) -> (EnvelopeId, Vec<[u8; 32]>, Vec<u8>, usize) {
 }
 
 impl Service {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one match is the routing table, like the service's own"
+    )]
     fn handle(&mut self, request: &Request) -> (u16, Vec<u8>) {
         let parts: Vec<&str> = request.path.split('/').skip(2).collect();
         let json_body = || serde_json::from_slice::<Value>(&request.body).expect("json body");
         let answer = |status: u16, body: &Value| (status, serde_json::to_vec(body).expect("json"));
         let unknown = || answer(404, &json!({ "error": "unknown_account" }));
+        if let ["links", slot @ ..] = parts.as_slice() {
+            return self.link_slot(request, slot);
+        }
         match (request.method, parts.as_slice()) {
             ("POST", ["accounts"]) => {
                 let body = json_body();
@@ -82,7 +93,7 @@ impl Service {
                 self.accounts.insert(name.clone(), (key, Vec::new()));
                 answer(201, &json!({ "username": name }))
             }
-            ("PUT", ["accounts", name, "devices", _]) => {
+            ("PUT", ["accounts", name, "devices", id]) => {
                 let body = json_body();
                 let certificate = request
                     .headers
@@ -104,6 +115,7 @@ impl Service {
                 let count = key_packages.len();
                 let devices = &mut self.accounts.get_mut(*name).expect("account").1;
                 devices.push(Listed {
+                    id: (*id).to_owned(),
                     certificate,
                     key_packages,
                     last_resort: body["last_resort"]
@@ -130,6 +142,37 @@ impl Service {
                 answer(
                     200,
                     &json!({ "username": name, "account": key, "devices": listed }),
+                )
+            }
+            ("GET", ["accounts", name, "devices"]) => {
+                let Some((key, devices)) = self.accounts.get(*name) else {
+                    return unknown();
+                };
+                let listed: Vec<Value> = devices
+                    .iter()
+                    .map(|device| json!({ "certificate": device.certificate }))
+                    .collect();
+                answer(
+                    200,
+                    &json!({ "username": name, "account": key, "devices": listed }),
+                )
+            }
+            ("GET", ["accounts", name, "devices", id]) => {
+                let Some((key, devices)) = self.accounts.get_mut(*name) else {
+                    return unknown();
+                };
+                let Some(device) = devices.iter_mut().find(|device| device.id == *id) else {
+                    return answer(404, &json!({ "error": "unknown_device" }));
+                };
+                let key_package = device
+                    .key_packages
+                    .pop_front()
+                    .unwrap_or_else(|| device.last_resort.clone());
+                let listed =
+                    json!({ "certificate": device.certificate, "key_package": key_package });
+                answer(
+                    200,
+                    &json!({ "username": name, "account": key, "devices": [listed] }),
                 )
             }
             ("GET", ["accounts", name, "key"]) => match self.accounts.get(*name) {
@@ -171,6 +214,45 @@ impl Service {
         }
     }
 
+    /// Link slots: the sealed request, then the answer, first come first
+    /// served (`protocol/linking.md`).
+    fn link_slot(&mut self, request: &Request, parts: &[&str]) -> (u16, Vec<u8>) {
+        let answer = |status: u16, body: &Value| (status, serde_json::to_vec(body).expect("json"));
+        match (request.method, parts) {
+            ("PUT", [slot, "request"]) => match self.links.get(*slot) {
+                Some((stored, _)) if *stored != request.body => {
+                    answer(409, &json!({ "error": "link_taken" }))
+                }
+                Some(_) => answer(200, &json!({})),
+                None => {
+                    self.links
+                        .insert((*slot).to_owned(), (request.body.clone(), None));
+                    answer(201, &json!({}))
+                }
+            },
+            ("PUT", [slot, "answer"]) => match self.links.get_mut(*slot) {
+                None => answer(404, &json!({ "error": "unknown_link" })),
+                Some((_, Some(_))) => answer(409, &json!({ "error": "link_taken" })),
+                Some((_, answered)) => {
+                    *answered = Some(request.body.clone());
+                    answer(201, &json!({}))
+                }
+            },
+            ("GET", [slot]) => match self.links.get(*slot) {
+                None => answer(404, &json!({ "error": "unknown_link" })),
+                Some((request, answered)) => answer(
+                    200,
+                    &json!({ "request": b64(request), "answer": answered.as_deref().map(b64) }),
+                ),
+            },
+            ("DELETE", [slot]) => {
+                self.links.remove(*slot);
+                (204, Vec::new())
+            }
+            other => panic!("the stand-in service does not route {other:?}"),
+        }
+    }
+
     fn fan_out(&mut self, id: EnvelopeId, recipients: &[[u8; 32]], payload: &[u8]) -> usize {
         let mut delivered = 0;
         for to in recipients {
@@ -202,7 +284,7 @@ impl Service {
 }
 
 struct Person {
-    account: AccountKey,
+    account: AccountId,
     device: Device,
     _dir: tempfile::TempDir,
 }
@@ -234,7 +316,7 @@ impl Person {
             KEY_PACKAGES_AT_REGISTRATION as u64
         );
         Self {
-            account,
+            account: account.id(),
             device,
             _dir: dir,
         }
@@ -242,16 +324,98 @@ impl Person {
 
     const fn author(&self) -> Author {
         Author {
-            account: self.account.id(),
+            account: self.account,
             device: self.device.id(),
         }
     }
 
-    /// Looks `name` up and starts a chat with every device found.
+    /// Looks `name` up and starts a chat with every device found, and with
+    /// this account's other devices.
     fn start_chat_with(&mut self, service: &mut Service, name: &str) -> ChatId {
         let (status, body) = service.handle(&service::lookup(name).expect("lookup"));
         let entry = service::directory_entry(name, status, &body).expect("entry");
-        self.device.start_chat(&entry).expect("start chat").0
+        let own = self.device.username().expect("username").to_owned();
+        let (status, body) = service.handle(&service::lookup(&own).expect("lookup"));
+        let siblings = service::directory_entry(&own, status, &body).expect("own entry");
+        self.device
+            .start_chat(&entry, &[siblings])
+            .expect("start chat")
+            .0
+    }
+
+    /// Links a new device to this account, the way the two apps do.
+    fn link(&self, service: &mut Service, label: &str) -> Self {
+        let offer = Offer::new().expect("offer");
+        let (status, body) = service.handle(&offer.check());
+        assert_eq!(offer.applicant(status, &body).expect("slot"), None);
+
+        let joining = Joining::new(&offer.code().to_uppercase(), label).expect("joining");
+        let (status, body) = service.handle(&joining.request().expect("request"));
+        link::stored(status, &body).expect("request stored");
+        let (status, body) = service.handle(&joining.check());
+        assert!(joining.linked(status, &body).expect("waiting").is_none());
+
+        let (status, body) = service.handle(&offer.check());
+        let applicant = offer
+            .applicant(status, &body)
+            .expect("applicant")
+            .expect("someone asked");
+        assert_eq!(applicant.label, label);
+        assert_eq!(applicant.match_code, joining.match_code());
+        let approval = self
+            .device
+            .approve_link(&offer, &applicant)
+            .expect("approve");
+        let (status, body) = service.handle(&approval);
+        link::stored(status, &body).expect("answer stored");
+
+        let (status, body) = service.handle(&joining.check());
+        let linked = joining
+            .linked(status, &body)
+            .expect("answer")
+            .expect("approved");
+        service.handle(&joining.close());
+        let dir = tempfile::tempdir().expect("dir");
+        let mut device = Device::create_linked(
+            &dir.path().join("device.db"),
+            &MasterKey::generate().expect("master key"),
+            joining,
+            linked,
+        )
+        .expect("linked device");
+        let name = device.username().expect("username").to_owned();
+        let (status, body) = service.handle(&device.register(&name, NOW).expect("register"));
+        service::key_package_count(status, &body).expect("registered");
+        Self {
+            account: device.account(),
+            device,
+            _dir: dir,
+        }
+    }
+
+    /// Brings this account's other devices into every chat that lacks them;
+    /// returns how many chats changed.
+    fn heal(&mut self, service: &mut Service) -> usize {
+        let name = self.device.username().expect("username").to_owned();
+        let (status, body) = service.handle(&service::devices(&name).expect("devices"));
+        let (account, registered) =
+            service::device_list(&name, status, &body).expect("device list");
+        assert_eq!(account, self.account);
+        let missing = self.device.missing_devices(&registered).expect("missing");
+        for (chat, devices) in &missing {
+            let entries: Vec<_> = devices
+                .iter()
+                .map(|device| {
+                    let lookup = service::device_lookup(&name, *device).expect("lookup");
+                    let (status, body) = service.handle(&lookup);
+                    service::directory_entry(&name, status, &body).expect("entry")
+                })
+                .collect();
+            self.device
+                .add_own_devices(chat, &entries)
+                .expect("add devices");
+        }
+        missing.len()
     }
 
     /// Sends everything in the outbox and confirms what the service took.
@@ -360,7 +524,7 @@ fn usernames_are_claimed_in_chat_and_confirmed_by_the_directory() {
     assert_eq!(
         alice.device.contacts(),
         vec![Contact {
-            account: bob.account.id(),
+            account: bob.account,
             username: Some("bob".into()),
             verified: true,
         }]
@@ -369,7 +533,7 @@ fn usernames_are_claimed_in_chat_and_confirmed_by_the_directory() {
     assert_eq!(
         unconfirmed,
         vec![Contact {
-            account: alice.account.id(),
+            account: alice.account,
             username: Some("alice".into()),
             verified: false,
         }]
@@ -395,7 +559,7 @@ fn usernames_are_claimed_in_chat_and_confirmed_by_the_directory() {
     assert_eq!(
         chats[0].members,
         vec![Contact {
-            account: alice.account.id(),
+            account: alice.account,
             username: Some("alice".into()),
             verified: true,
         }]
@@ -420,11 +584,11 @@ fn the_directory_cannot_slip_in_someone_elses_device() {
     // Mallory's device.
     let (status, body) = service.handle(&service::lookup("bob").expect("lookup"));
     let mut found = service::directory_entry("bob", status, &body).expect("entry");
-    assert_eq!(found.account, bob.account.id());
+    assert_eq!(found.account, bob.account);
     found.key_packages = vec![mallory.device.key_package().expect("key package")];
 
     assert!(matches!(
-        alice.device.start_chat(&found),
+        alice.device.start_chat(&found, &[]),
         Err(CoreError::Unauthenticated(_))
     ));
     assert_eq!(
@@ -499,19 +663,19 @@ fn receipts_flow_only_once_the_user_has_written_in_the_chat() {
     alice.read(&mut service);
     alice.flush(&mut service);
     bob.read(&mut service);
-    assert_eq!(status(&bob, &chat).delivered_to, vec![alice.account.id()]);
+    assert_eq!(status(&bob, &chat).delivered_to, vec![alice.account]);
 
     assert_eq!(alice.device.mark_read(&chat).expect("read"), 1);
     alice.flush(&mut service);
     bob.read(&mut service);
-    assert_eq!(status(&bob, &chat).read_by, vec![alice.account.id()]);
+    assert_eq!(status(&bob, &chat).read_by, vec![alice.account]);
 
     alice.device.send(&chat, &text(3, "Dinner?")).expect("send");
     alice.flush(&mut service);
     bob.read(&mut service);
     bob.flush(&mut service);
     alice.read(&mut service);
-    assert_eq!(status(&alice, &chat).delivered_to, vec![bob.account.id()]);
+    assert_eq!(status(&alice, &chat).delivered_to, vec![bob.account]);
 }
 
 #[test]
@@ -649,4 +813,231 @@ fn rival_changes_to_a_chat_are_sequenced_and_nobody_forks() {
             "{got:?}"
         );
     }
+}
+
+fn texts(received: &[Received]) -> Vec<(Author, String)> {
+    received
+        .iter()
+        .filter_map(|r| match r {
+            Received::Message {
+                author,
+                message:
+                    AppMessage {
+                        body: Body::Text { text },
+                        ..
+                    },
+                ..
+            } => Some((*author, text.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_linked_device_joins_the_account_and_every_chat() {
+    let mut service = Service::default();
+    let mut alice = Person::join(&mut service, "alice");
+    let mut bob = Person::join(&mut service, "bob");
+    let chat = alice.start_chat_with(&mut service, "bob");
+    alice
+        .device
+        .send(&chat, &text(1, "before the phone"))
+        .expect("send");
+    alice.flush(&mut service);
+    bob.read(&mut service);
+
+    let mut phone = alice.link(&mut service, "Android phone");
+    assert_eq!(phone.device.username(), Some("alice"));
+    assert_eq!(phone.device.account(), alice.device.account());
+    assert!(!phone.device.holds_account_key());
+    assert!(
+        phone
+            .device
+            .contacts()
+            .iter()
+            .any(|c| c.username.as_deref() == Some("bob") && c.verified),
+        "contacts come along"
+    );
+
+    // Alice's first device brings the phone into her chat with Bob.
+    assert_eq!(alice.heal(&mut service), 1);
+    assert_eq!(alice.flush(&mut service), vec![Settled::Applied]);
+    assert!(matches!(
+        bob.read(&mut service)[0],
+        Received::ChatUpdated { .. }
+    ));
+    let joined = phone.read(&mut service);
+    assert!(
+        matches!(&joined[0], Received::Joined { chat: c, by } if *c == chat && *by == alice.author())
+    );
+    let list = phone.device.chat_list().expect("chats");
+    assert_eq!(list.len(), 1);
+    assert!(!list[0].request, "Alice already spoke there");
+    assert!(
+        phone
+            .device
+            .history(&chat, None, 10)
+            .expect("history")
+            .is_empty(),
+        "history starts at linking"
+    );
+    assert_eq!(alice.heal(&mut service), 0, "nothing left to heal");
+    assert_eq!(phone.heal(&mut service), 0);
+
+    // Bob's words reach both of Alice's devices.
+    bob.device.send(&chat, &text(2, "hi both")).expect("send");
+    bob.flush(&mut service);
+    for device in [&mut alice, &mut phone] {
+        assert_eq!(
+            texts(&device.read(&mut service)),
+            vec![(bob.author(), "hi both".to_owned())]
+        );
+    }
+
+    // The phone answers as Alice; her first device keeps it as her own.
+    phone
+        .device
+        .send(&chat, &text(3, "from my phone"))
+        .expect("send");
+    phone.flush(&mut service);
+    let got = texts(&bob.read(&mut service));
+    assert_eq!(got, vec![(phone.author(), "from my phone".to_owned())]);
+    assert_eq!(got[0].0.account, alice.account);
+    alice.read(&mut service);
+    let newest = &alice.device.history(&chat, None, 1).expect("history")[0].message;
+    assert!(newest.outgoing);
+    assert_eq!(
+        newest.content,
+        StoredContent::Text {
+            text: "from my phone".into()
+        }
+    );
+
+    // A chat started on the phone holds Alice's first device from the start.
+    let mut carol = Person::join(&mut service, "carol");
+    let other = phone.start_chat_with(&mut service, "carol");
+    phone
+        .device
+        .send(&other, &text(4, "hello Carol"))
+        .expect("send");
+    phone.flush(&mut service);
+    let carols = carol.read(&mut service);
+    assert!(matches!(carols[0], Received::Joined { .. }));
+    assert_eq!(
+        texts(&carols),
+        vec![(phone.author(), "hello Carol".to_owned())]
+    );
+    let alices = alice.read(&mut service);
+    assert!(matches!(&alices[0], Received::Joined { chat: c, .. } if *c == other));
+    assert_eq!(
+        texts(&alices),
+        vec![(phone.author(), "hello Carol".to_owned())]
+    );
+    assert!(
+        !alice
+            .device
+            .chat_list()
+            .expect("chats")
+            .iter()
+            .any(|summary| summary.request),
+        "both chats are Alice's own on both devices"
+    );
+}
+
+#[test]
+fn linking_needs_the_code_and_the_account_key() {
+    let mut service = Service::default();
+    let alice = Person::join(&mut service, "alice");
+    let offer = Offer::new().expect("offer");
+
+    // A mistyped code is caught before anything is sent.
+    assert!(Joining::new("abcde-fghij", "Laptop").is_err());
+    assert!(Joining::new(&offer.code().replace('-', "1"), "Laptop").is_err());
+
+    // Someone with another code meets in another slot: the offer sees nothing.
+    let stranger = Joining::new(&Offer::new().expect("offer").code(), "Laptop").expect("joining");
+    let (status, body) = service.handle(&stranger.request().expect("request"));
+    link::stored(status, &body).expect("stored");
+    let (status, body) = service.handle(&offer.check());
+    assert_eq!(offer.applicant(status, &body).expect("slot"), None);
+
+    // A request sealed under another code does not open, even in the right slot.
+    let joining = Joining::new(&offer.code(), "Laptop").expect("joining");
+    let request = joining.request().expect("request");
+    let forged = Request {
+        body: stranger.request().expect("request").body,
+        ..request.clone()
+    };
+    let (status, body) = service.handle(&forged);
+    link::stored(status, &body).expect("stored");
+    let (status, body) = service.handle(&offer.check());
+    assert!(matches!(
+        offer.applicant(status, &body),
+        Err(CoreError::Unauthenticated(_))
+    ));
+    // ...and the slot is taken: the real device hears so.
+    let (status, body) = service.handle(&request);
+    assert!(matches!(
+        link::stored(status, &body),
+        Err(CoreError::Service { code, .. }) if code == "link_taken"
+    ));
+
+    // A linked device cannot link others.
+    let mut phone = alice.link(&mut service, "Phone");
+    let offer = Offer::new().expect("offer");
+    let joining = Joining::new(&offer.code(), "Tablet").expect("joining");
+    let (status, body) = service.handle(&joining.request().expect("request"));
+    link::stored(status, &body).expect("stored");
+    let (status, body) = service.handle(&offer.check());
+    let applicant = offer
+        .applicant(status, &body)
+        .expect("applicant")
+        .expect("asked");
+    assert!(matches!(
+        phone.device.approve_link(&offer, &applicant),
+        Err(CoreError::Unauthenticated(_))
+    ));
+    assert_eq!(phone.heal(&mut service), 0);
+}
+
+#[test]
+fn chat_requests_are_not_healed_until_accepted() {
+    let mut service = Service::default();
+    let mut alice = Person::join(&mut service, "alice");
+    let mut bob = Person::join(&mut service, "bob");
+    let mut phone = alice.link(&mut service, "Phone");
+
+    // Bob looks Alice up after she linked the phone: both devices get it.
+    bob.start_chat_with(&mut service, "alice");
+    bob.flush(&mut service);
+    assert!(matches!(
+        alice.read(&mut service)[0],
+        Received::Joined { .. }
+    ));
+    assert!(matches!(
+        phone.read(&mut service)[0],
+        Received::Joined { .. }
+    ));
+
+    // A chat only Alice's first device is in, still a request: Bob learns
+    // nothing about Alice's devices until she accepts.
+    let mut carol = Person::join(&mut service, "carol");
+    let (status, body) = service.handle(&service::lookup("alice").expect("lookup"));
+    let mut entry = service::directory_entry("alice", status, &body).expect("entry");
+    entry.key_packages.truncate(1);
+    let (lone, _) = carol.device.start_chat(&entry, &[]).expect("start");
+    carol.flush(&mut service);
+    alice.read(&mut service);
+    assert_eq!(alice.heal(&mut service), 0, "requests stay as they are");
+
+    alice.device.accept_chat(&lone).expect("accept");
+    alice.flush(&mut service);
+    assert_eq!(alice.heal(&mut service), 1);
+    alice.flush(&mut service);
+    let joined = phone.read(&mut service);
+    assert!(
+        joined
+            .iter()
+            .any(|r| matches!(r, Received::Joined { chat: c, .. } if *c == lone))
+    );
 }

@@ -65,6 +65,63 @@ class FakeMessenger extends Messenger {
     }
   }
 
+  /// Whether this device holds the account key and can link others.
+  bool canLinkValue = true;
+
+  /// [nextApplicant] answers once this completes.
+  final applicantArrives = Completer<LinkApplicant?>();
+  bool linkApproved = false;
+  bool linkCancelled = false;
+
+  /// [joinAccount] finishes once this completes.
+  final joinApproved = Completer<void>();
+
+  /// The code [joinAccount] was given.
+  String? joinedWith;
+
+  @override
+  bool get canLinkDevices => canLinkValue;
+
+  @override
+  Future<void> joinAccount({
+    required String code,
+    required void Function(String matchCode) onMatch,
+  }) async {
+    _maybeFail();
+    joinedWith = code;
+    onMatch('482 913');
+    await joinApproved.future;
+    usernameValue = 'ada';
+    canLinkValue = false;
+    phaseValue = MessengerPhase.ready;
+    notifyListeners();
+  }
+
+  @override
+  void cancelJoin() {
+    if (!joinApproved.isCompleted) {
+      joinApproved.completeError(const MessengerFailure('cancelled'));
+    }
+  }
+
+  @override
+  Future<String> offerLink() async {
+    _maybeFail();
+    return 'abcde-fghij-klmno-pqrst';
+  }
+
+  @override
+  Future<LinkApplicant?> nextApplicant() => applicantArrives.future;
+
+  @override
+  Future<void> approveLink() async {
+    _maybeFail();
+    linkApproved = true;
+  }
+
+  @override
+  void cancelLink() => linkCancelled = true;
+
   @override
   Future<void> createAccount({
     required String username,
