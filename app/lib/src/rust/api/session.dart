@@ -7,8 +7,8 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `chat_key`, `claim_with`, `device_id`, `device_key`, `failure`, `find_chat`, `joining`, `master`, `message_id`, `notice`, `now_ms`, `offer`, `own_name`, `preview`, `send_body`, `shorten`, `store_path`, `title`, `view`, `with`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
+// These functions are ignored because they are not marked as `pub`: `chat_key`, `claim_with`, `device_id`, `device_key`, `entries`, `failure`, `find_chat`, `joining`, `master`, `member_title`, `message_id`, `notice`, `now_ms`, `offer`, `own_name`, `preview`, `send_body`, `shorten`, `store_path`, `title`, `view`, `with`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
 
 /// A fresh random master key for a new session. Keep it in the platform's
 /// secure storage; it opens the session's store.
@@ -76,6 +76,12 @@ abstract class Session implements RustOpaqueInterface {
   /// username and, from now on, get receipts.
   Future<void> acceptChat({required String chat});
 
+  /// Adds the people in `invitees` to `chat`.
+  Future<void> addMembers({
+    required String chat,
+    required List<Invitee> invitees,
+  });
+
   /// Adds this account's devices to `chat` in one change, from the
   /// answers to [`Session::device_lookup_call`]. It goes out with the
   /// next [`Session::pending_sends`].
@@ -122,6 +128,15 @@ abstract class Session implements RustOpaqueInterface {
     masterKey: masterKey,
   );
 
+  /// Starts a group called `name` with the people in `invitees`, and
+  /// this account's other devices from `own` (a lookup of its own name).
+  /// Returns the chat id.
+  Future<String> createGroup({
+    required String name,
+    required List<Invitee> invitees,
+    HttpAnswer? own,
+  });
+
   /// Removes a chat from this device, history and all; declines a request.
   /// Nobody is told.
   Future<void> deleteChat({required String chat});
@@ -160,6 +175,9 @@ abstract class Session implements RustOpaqueInterface {
   /// which of this account's devices, and which still hold removed ones.
   Future<HealPlan> healPlan({required int status, required List<int> body});
 
+  /// Leaves `chat` and erases it here; the others are told.
+  Future<void> leaveChat({required String chat});
+
   /// Reads the answer to [`Session::link_check_call`]: the device that
   /// asked to join, once one did.
   Future<LinkApplicant?> linkApplicant({
@@ -181,6 +199,9 @@ abstract class Session implements RustOpaqueInterface {
   /// get a read receipt (it goes out with the next
   /// [`Session::pending_sends`]). Returns how many messages it covered.
   Future<int> markRead({required String chat});
+
+  /// Everyone else in `chat`.
+  Future<List<MemberView>> members({required String chat});
 
   /// Up to `limit` messages of `chat`, newest first, older than `before`
   /// when given.
@@ -227,6 +248,11 @@ abstract class Session implements RustOpaqueInterface {
   /// Reads the answer to [`Session::register`]: key packages stored.
   Future<int> registered({required int status, required List<int> body});
 
+  /// Takes the devices of people who left out of the chats where this
+  /// device is the one to do it; returns how many chats changed. They go
+  /// out with the next [`Session::pending_sends`].
+  Future<int> removeDeparted();
+
   /// Takes `device` out of the account: this device itself, or, on the
   /// device holding the account key, any other. Heal afterwards.
   Future<HttpCall> removeDeviceCall({required String device});
@@ -237,6 +263,9 @@ abstract class Session implements RustOpaqueInterface {
     required String chat,
     required List<String> devices,
   });
+
+  /// Renames `chat` for everyone in it.
+  Future<void> renameChat({required String chat, required String name});
 
   /// Writes `text` into `chat` as an answer to message `to`.
   Future<void> replyText({
@@ -281,6 +310,36 @@ abstract class Session implements RustOpaqueInterface {
   String? username();
 }
 
+/// Something that happened to a chat.
+class ChatEvent {
+  final ChatEventKind kind;
+
+  /// The new name, for [`ChatEventKind::Named`].
+  final String? name;
+
+  const ChatEvent({required this.kind, this.name});
+
+  @override
+  int get hashCode => kind.hashCode ^ name.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ChatEvent &&
+          runtimeType == other.runtimeType &&
+          kind == other.kind &&
+          name == other.name;
+}
+
+/// What kind of thing happened to a chat (ADR-0015).
+enum ChatEventKind {
+  /// The author named the group.
+  named,
+
+  /// The author left.
+  left,
+}
+
 /// One chat as the chat list shows it.
 class ChatPreview {
   /// Chat id, base64url.
@@ -300,6 +359,9 @@ class ChatPreview {
   /// request to accept or decline.
   final bool request;
 
+  /// A group: named, or with more than one other person.
+  final bool group;
+
   const ChatPreview({
     required this.id,
     required this.title,
@@ -307,6 +369,7 @@ class ChatPreview {
     this.last,
     required this.unread,
     required this.request,
+    required this.group,
   });
 
   @override
@@ -316,7 +379,8 @@ class ChatPreview {
       verified.hashCode ^
       last.hashCode ^
       unread.hashCode ^
-      request.hashCode;
+      request.hashCode ^
+      group.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -328,7 +392,8 @@ class ChatPreview {
           verified == other.verified &&
           last == other.last &&
           unread == other.unread &&
-          request == other.request;
+          request == other.request &&
+          group == other.group;
 }
 
 /// One chat that lacks some of this account's devices.
@@ -540,6 +605,26 @@ class InboxEvent {
           notice == other.notice;
 }
 
+/// Someone to add to a group: the name asked for and the directory's
+/// answer to [`lookup_call`].
+class Invitee {
+  final String username;
+  final HttpAnswer answer;
+
+  const Invitee({required this.username, required this.answer});
+
+  @override
+  int get hashCode => username.hashCode ^ answer.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Invitee &&
+          runtimeType == other.runtimeType &&
+          username == other.username &&
+          answer == other.answer;
+}
+
 /// A device asking to join this account (ADR-0014).
 class LinkApplicant {
   /// What the device calls itself ("Android phone").
@@ -580,6 +665,28 @@ class MailboxLink {
           runtimeType == other.runtimeType &&
           path == other.path &&
           authorization == other.authorization;
+}
+
+/// One person in a chat, for its details screen.
+class MemberView {
+  /// `@bob`, or a short fingerprint for an unknown account.
+  final String title;
+
+  /// Whether the directory confirmed the name.
+  final bool verified;
+
+  const MemberView({required this.title, required this.verified});
+
+  @override
+  int get hashCode => title.hashCode ^ verified.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MemberView &&
+          runtimeType == other.runtimeType &&
+          title == other.title &&
+          verified == other.verified;
 }
 
 /// Where an outgoing message is.
@@ -632,6 +739,13 @@ class MessageView {
   /// The user's own text, still there: it can be edited and deleted.
   final bool editable;
 
+  /// Who wrote it: `@bob`, or a short fingerprint for an unknown account.
+  final String author;
+
+  /// Something that happened to the chat, shown as a line rather than a
+  /// bubble; `text` is empty then.
+  final ChatEvent? event;
+
   const MessageView({
     required this.id,
     required this.seq,
@@ -645,6 +759,8 @@ class MessageView {
     this.replyTo,
     required this.reactions,
     required this.editable,
+    required this.author,
+    this.event,
   });
 
   @override
@@ -660,7 +776,9 @@ class MessageView {
       status.hashCode ^
       replyTo.hashCode ^
       reactions.hashCode ^
-      editable.hashCode;
+      editable.hashCode ^
+      author.hashCode ^
+      event.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -678,7 +796,9 @@ class MessageView {
           status == other.status &&
           replyTo == other.replyTo &&
           reactions == other.reactions &&
-          editable == other.editable;
+          editable == other.editable &&
+          author == other.author &&
+          event == other.event;
 }
 
 /// What a notification about a new message says.

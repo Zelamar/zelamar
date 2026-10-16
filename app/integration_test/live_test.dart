@@ -8,6 +8,7 @@ import 'package:zelamar/src/messenger/live_messenger.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/messenger/notifier.dart';
 import 'package:zelamar/src/messenger/transport.dart';
+import 'package:zelamar/src/rust/api/session.dart';
 import 'package:zelamar/src/rust/frb_generated.dart';
 
 /// The whole stack, for real: app instances, each with its own Rust core,
@@ -172,6 +173,35 @@ void main() {
       expect(phone.chats.single.last?.text, 'Yes, this is my phone.');
       await phone.eraseThisDevice();
       expect(phone.phase, MessengerPhase.needsAccount);
+
+      // A named group: Bob joins, writes, then leaves.
+      final crew = await alice.createGroup('QA crew', [bobName]);
+      ChatPreview crewAt(LiveMessenger who) =>
+          who.chats.firstWhere((c) => c.id == crew);
+      await until(
+        () => bob.chats.any((c) => c.id == crew && c.title == 'QA crew'),
+        'Bob sees the named group',
+      );
+      expect(crewAt(bob).request, isTrue);
+      await bob.acceptChat(crew);
+      await bob.sendText(crew, 'In the crew');
+      await until(
+        () => crewAt(alice).last?.text == 'In the crew',
+        'Alice reads Bob in the group',
+      );
+      await bob.leaveChat(crew);
+      expect(bob.chats.any((c) => c.id == crew), isFalse);
+      await until(
+        () => crewAt(alice).last?.event?.kind == ChatEventKind.left,
+        'Alice sees Bob leave',
+      );
+      final deadline = DateTime.now().add(const Duration(seconds: 30));
+      while ((await alice.members(crew)).isNotEmpty) {
+        if (DateTime.now().isAfter(deadline)) {
+          fail('Timed out waiting until Bob’s devices are out of the group');
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
     },
     skip: invites.isEmpty ? 'needs a running service and invites' : false,
     timeout: const Timeout(Duration(minutes: 3)),

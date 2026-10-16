@@ -28,6 +28,9 @@ pub const MAX_REACTION: usize = 32;
 /// Most message ids one receipt may acknowledge.
 pub const MAX_RECEIPT_IDS: usize = 256;
 
+/// Longest chat name, in characters.
+pub const MAX_NAME: usize = 64;
+
 /// Longest body kind name accepted from the wire.
 const MAX_KIND: usize = 32;
 
@@ -109,6 +112,16 @@ pub enum Body {
         /// The author's username, normalized.
         username: String,
     },
+    /// Names the chat (a group); the newest name wins. Shown as a line in
+    /// the chat, not as a message.
+    Name {
+        /// 1 to [`MAX_NAME`] characters, no surrounding spaces, no control
+        /// characters.
+        name: String,
+    },
+    /// The author leaves the chat; the other members take all of the
+    /// author's devices out of it (ADR-0015).
+    Leave,
     /// A kind this Zelamar does not know yet (sent by a newer version).
     /// Received only; never sent.
     Unknown {
@@ -173,6 +186,14 @@ struct DeleteFields {
 struct ProfileFields {
     username: String,
 }
+
+#[derive(Serialize, Deserialize)]
+struct NameFields {
+    name: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct LeaveFields {}
 
 #[derive(Serialize, Deserialize)]
 struct ReceiptFields {
@@ -243,6 +264,8 @@ impl AppMessage {
                     username: username.clone(),
                 })?,
             ),
+            Body::Name { name } => ("name", fields(&NameFields { name: name.clone() })?),
+            Body::Leave => ("leave", fields(&LeaveFields {})?),
             Body::Unknown { .. } => {
                 return Err(CoreError::malformed(
                     "message content",
@@ -341,6 +364,14 @@ impl AppMessage {
                     username: f.username,
                 }
             }
+            "name" => {
+                let f: NameFields = parse(&wire.c)?;
+                Body::Name { name: f.name }
+            }
+            "leave" => {
+                let _: LeaveFields = parse(&wire.c)?;
+                Body::Leave
+            }
             other => Body::Unknown {
                 kind: other.to_owned(),
             },
@@ -388,6 +419,17 @@ impl AppMessage {
                 Err(CoreError::malformed(
                     "profile",
                     "username is not a normalized username",
+                ))
+            }
+            Body::Name { name }
+                if name.is_empty()
+                    || name.trim() != name
+                    || name.chars().count() > MAX_NAME
+                    || name.chars().any(char::is_control) =>
+            {
+                Err(CoreError::malformed(
+                    "chat name",
+                    "empty, too long, padded or with control characters",
                 ))
             }
             _ => Ok(()),
@@ -449,6 +491,33 @@ mod tests {
             status: ReceiptStatus::Read,
             messages: vec![A, B],
         });
+        round_trip(Body::Name {
+            name: "Zəlamar friends 🌊".into(),
+        });
+        round_trip(Body::Leave);
+    }
+
+    #[test]
+    fn chat_names_are_short_plain_lines() {
+        for bad in [
+            "",
+            " Family",
+            "Family ",
+            "two
+lines",
+            &"x".repeat(MAX_NAME + 1),
+        ] {
+            let message = AppMessage::new(A, 1, Body::Name { name: bad.into() });
+            assert!(message.encode().is_err(), "{bad:?}");
+        }
+        let longest = AppMessage::new(
+            A,
+            1,
+            Body::Name {
+                name: "é".repeat(MAX_NAME),
+            },
+        );
+        assert!(longest.encode().is_ok());
     }
 
     #[test]

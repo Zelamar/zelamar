@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use zelamar_core::contacts::Contact;
 use zelamar_core::content::{AppMessage, Body, MessageId};
 use zelamar_core::device::{ChatId, ChatSummary, Device, Received, Settled};
 use zelamar_core::history::{HistoryEntry, SendStatus, StoredContent};
@@ -206,6 +207,45 @@ pub struct MessageView {
     pub reactions: Vec<Reaction>,
     /// The user's own text, still there: it can be edited and deleted.
     pub editable: bool,
+    /// Who wrote it: `@bob`, or a short fingerprint for an unknown account.
+    pub author: String,
+    /// Something that happened to the chat, shown as a line rather than a
+    /// bubble; `text` is empty then.
+    pub event: Option<ChatEvent>,
+}
+
+/// What kind of thing happened to a chat (ADR-0015).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatEventKind {
+    /// The author named the group.
+    Named,
+    /// The author left.
+    Left,
+}
+
+/// Something that happened to a chat.
+#[derive(Debug, Clone)]
+pub struct ChatEvent {
+    pub kind: ChatEventKind,
+    /// The new name, for [`ChatEventKind::Named`].
+    pub name: Option<String>,
+}
+
+/// One person in a chat, for its details screen.
+#[derive(Debug, Clone)]
+pub struct MemberView {
+    /// `@bob`, or a short fingerprint for an unknown account.
+    pub title: String,
+    /// Whether the directory confirmed the name.
+    pub verified: bool,
+}
+
+/// Someone to add to a group: the name asked for and the directory's
+/// answer to [`lookup_call`].
+#[derive(Debug, Clone)]
+pub struct Invitee {
+    pub username: String,
+    pub answer: HttpAnswer,
 }
 
 /// Longest quote in a reply, in characters.
@@ -226,6 +266,8 @@ pub struct ChatPreview {
     /// Someone else started it and the user has not answered: show it as a
     /// request to accept or decline.
     pub request: bool,
+    /// A group: named, or with more than one other person.
+    pub group: bool,
 }
 
 /// The service's answer to one [`HttpCall`].
@@ -869,7 +911,7 @@ impl Session {
                 left: false,
                 refused: None,
                 notice: (author.account != self.device.account())
-                    .then(|| self.notice(author.account, &message.body))
+                    .then(|| self.notice(&chat, author.account, &message.body))
                     .flatten(),
             },
             Ok(Received::Left { chat }) => InboxEvent {
@@ -953,6 +995,81 @@ impl Session {
         Ok(self.device.delete_chat(&chat)?)
     }
 
+    /// Starts a group called `name` with the people in `invitees`, and
+    /// this account's other devices from `own` (a lookup of its own name).
+    /// Returns the chat id.
+    pub fn create_group(
+        &mut self,
+        name: String,
+        invitees: Vec<Invitee>,
+        own: Option<HttpAnswer>,
+    ) -> Result<String, SessionError> {
+        let members = entries(&invitees)?;
+        let siblings = match own {
+            Some(answer) => vec![service::directory_entry(
+                &self.own_name()?,
+                answer.status,
+                &answer.body,
+            )?],
+            None => Vec::new(),
+        };
+        let (chat, _) = self.device.create_group(&name, &members, &siblings)?;
+        Ok(chat_key(&chat))
+    }
+
+    /// Adds the people in `invitees` to `chat`.
+    pub fn add_members(
+        &mut self,
+        chat: String,
+        invitees: Vec<Invitee>,
+    ) -> Result<(), SessionError> {
+        let members = entries(&invitees)?;
+        let chat = self.find_chat(&chat)?;
+        self.device.add_members(&chat, &members)?;
+        Ok(())
+    }
+
+    /// Renames `chat` for everyone in it.
+    pub fn rename_chat(&mut self, chat: String, name: String) -> Result<(), SessionError> {
+        let chat = self.find_chat(&chat)?;
+        Ok(self.device.rename_chat(&chat, &name)?)
+    }
+
+    /// Leaves `chat` and erases it here; the others are told.
+    pub fn leave_chat(&mut self, chat: String) -> Result<(), SessionError> {
+        let chat = self.find_chat(&chat)?;
+        Ok(self.device.leave_chat(&chat)?)
+    }
+
+    /// Takes the devices of people who left out of the chats where this
+    /// device is the one to do it; returns how many chats changed. They go
+    /// out with the next [`Session::pending_sends`].
+    pub fn remove_departed(&mut self) -> Result<u32, SessionError> {
+        let due = self.device.departures()?;
+        for chat in &due {
+            self.device.remove_departed(chat)?;
+        }
+        Ok(u32::try_from(due.len()).unwrap_or(u32::MAX))
+    }
+
+    /// Everyone else in `chat`.
+    pub fn members(&self, chat: String) -> Result<Vec<MemberView>, SessionError> {
+        let summary = self
+            .device
+            .chat_list()?
+            .into_iter()
+            .find(|summary| chat_key(&summary.chat) == chat)
+            .ok_or_else(|| failure("unknown_chat", "no such chat on this device"))?;
+        Ok(summary
+            .members
+            .iter()
+            .map(|member| MemberView {
+                title: member_title(member),
+                verified: member.verified,
+            })
+            .collect())
+    }
+
     /// Every chat, most recently active first.
     pub fn chats(&self) -> Result<Vec<ChatPreview>, SessionError> {
         self.device
@@ -978,22 +1095,34 @@ impl Session {
             .collect()
     }
 
-    /// The notification for a new text from `account`, if it is one.
-    fn notice(&self, account: zelamar_core::identity::AccountId, body: &Body) -> Option<Notice> {
+    /// The notification for a new text from `account` in `chat`, if it is
+    /// one. In a named group the title is the group, and the text says who.
+    fn notice(
+        &self,
+        chat: &ChatId,
+        account: zelamar_core::identity::AccountId,
+        body: &Body,
+    ) -> Option<Notice> {
         let text = match body {
             Body::Text { text } | Body::Reply { text, .. } => text,
             _ => return None,
         };
-        let title = self
+        let author = self
             .device
             .contacts()
             .into_iter()
             .find(|contact| contact.account == account)
             .and_then(|contact| contact.username)
             .map_or_else(|| "Someone new".to_owned(), |name| format!("@{name}"));
-        Some(Notice {
-            title,
-            body: shorten(text, NOTICE_CHARS),
+        Some(match self.device.chat_name(chat) {
+            Some(group) => Notice {
+                title: group.to_owned(),
+                body: shorten(&format!("{author}: {text}"), NOTICE_CHARS),
+            },
+            None => Notice {
+                title: author,
+                body: shorten(text, NOTICE_CHARS),
+            },
         })
     }
 
@@ -1009,6 +1138,7 @@ impl Session {
                 .transpose()?,
             unread: summary.unread,
             request: summary.request,
+            group: summary.name.is_some() || summary.members.len() > 1,
         })
     }
 
@@ -1019,7 +1149,22 @@ impl Session {
         let (text, unsupported, answers) = match &message.content {
             StoredContent::Text { text } => (text.clone(), false, None),
             StoredContent::Reply { text, to } => (text.clone(), false, Some(*to)),
-            StoredContent::Unknown { .. } => (String::new(), true, None),
+            StoredContent::Unknown { .. } | StoredContent::Named { .. } | StoredContent::Left => (
+                String::new(),
+                matches!(message.content, StoredContent::Unknown { .. }),
+                None,
+            ),
+        };
+        let event = match &message.content {
+            StoredContent::Named { name } => Some(ChatEvent {
+                kind: ChatEventKind::Named,
+                name: Some(name.clone()),
+            }),
+            StoredContent::Left => Some(ChatEvent {
+                kind: ChatEventKind::Left,
+                name: None,
+            }),
+            _ => None,
         };
         let reply_to = answers
             .map(|to| {
@@ -1033,7 +1178,9 @@ impl Session {
                             StoredContent::Text { text } | StoredContent::Reply { text, .. } => {
                                 shorten(text, QUOTE_CHARS)
                             }
-                            StoredContent::Unknown { .. } => "Message unavailable".to_owned(),
+                            StoredContent::Unknown { .. }
+                            | StoredContent::Named { .. }
+                            | StoredContent::Left => "Message unavailable".to_owned(),
                         },
                     },
                     outgoing: quoted.is_some_and(|quoted| quoted.outgoing),
@@ -1080,7 +1227,21 @@ impl Session {
             editable: message.outgoing
                 && message.author.account == own
                 && !message.deleted
-                && !unsupported,
+                && !unsupported
+                && event.is_none(),
+            author: if message.author.account == own {
+                "You".to_owned()
+            } else {
+                member_title(
+                    &self
+                        .device
+                        .contacts()
+                        .into_iter()
+                        .find(|contact| contact.account == message.author.account)
+                        .unwrap_or_else(|| Contact::unknown(message.author.account)),
+                )
+            },
+            event,
         })
     }
 
@@ -1108,6 +1269,20 @@ fn chat_key(chat: &ChatId) -> String {
     URL_SAFE_NO_PAD.encode(chat.as_bytes())
 }
 
+/// The directory entries behind `invitees`.
+fn entries(invitees: &[Invitee]) -> Result<Vec<service::DirectoryEntry>, SessionError> {
+    invitees
+        .iter()
+        .map(|invitee| {
+            Ok(service::directory_entry(
+                &invitee.username,
+                invitee.answer.status,
+                &invitee.answer.body,
+            )?)
+        })
+        .collect()
+}
+
 fn device_key(device: &DeviceId) -> String {
     URL_SAFE_NO_PAD.encode(device.as_bytes())
 }
@@ -1129,24 +1304,32 @@ fn now_ms() -> u64 {
 
 /// `@bob`, `@alice, @bob`, or a short fingerprint for an unknown account.
 fn title(summary: &ChatSummary) -> String {
+    if let Some(name) = &summary.name {
+        return name.clone();
+    }
     if summary.members.is_empty() {
         return "Just you".to_owned();
     }
     summary
         .members
         .iter()
-        .map(|member| match &member.username {
-            Some(name) => format!("@{name}"),
-            None => {
-                let hex: String = member.account.as_bytes()[..4]
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect();
-                format!("Unknown {hex}")
-            }
-        })
+        .map(member_title)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// `@bob`, or a short fingerprint for an account without a known name.
+fn member_title(member: &Contact) -> String {
+    match &member.username {
+        Some(name) => format!("@{name}"),
+        None => {
+            let hex: String = member.account.as_bytes()[..4]
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            format!("Unknown {hex}")
+        }
+    }
 }
 
 /// `text` cut to `limit` characters, with an ellipsis when cut.

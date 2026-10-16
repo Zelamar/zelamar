@@ -21,7 +21,7 @@ use zelamar_core::envelope::{Envelope, EnvelopeId, MailboxId};
 use zelamar_core::history::{SendStatus, StoredContent};
 use zelamar_core::identity::{AccountId, AccountKey};
 use zelamar_core::link::{self, Joining, Offer};
-use zelamar_core::service::{self, KEY_PACKAGES_AT_REGISTRATION, Request};
+use zelamar_core::service::{self, DirectoryEntry, KEY_PACKAGES_AT_REGISTRATION, Request};
 use zelamar_core::store::MasterKey;
 
 const NOW: u64 = 1_760_000_000_000;
@@ -433,26 +433,26 @@ impl Person {
     }
 
     /// Sends everything in the outbox and confirms what the service took.
-    /// Sends everything in the outbox and settles each answer.
+    /// Sends everything in the outbox and settles each answer. Settling may
+    /// queue more (a name for people just added): this sends until the
+    /// outbox is empty.
     fn flush(&mut self, service: &mut Service) -> Vec<Settled> {
-        let settled = self
-            .device
-            .outbox()
-            .expect("outbox")
-            .into_iter()
-            .map(|outgoing| {
+        let mut settled = Vec::new();
+        loop {
+            let outbox = self.device.outbox().expect("outbox");
+            if outbox.is_empty() {
+                return settled;
+            }
+            for outgoing in outbox {
                 let (status, body) =
                     service.handle(&service::delivery(&outgoing).expect("request"));
-                self.device
-                    .settle(outgoing.id, status, &body)
-                    .expect("settle")
-            })
-            .collect();
-        assert_eq!(
-            self.device.outbox().expect("outbox"),
-            Vec::<Outgoing>::new()
-        );
-        settled
+                settled.push(
+                    self.device
+                        .settle(outgoing.id, status, &body)
+                        .expect("settle"),
+                );
+            }
+        }
     }
 
     /// Opens everything in the mailbox; every envelope is acknowledged.
@@ -1159,4 +1159,178 @@ fn a_linked_device_can_unlink_itself() {
             .remove_own_devices(&alice.device.chats()[0], &[alice.device.id()]),
         Err(CoreError::Malformed { .. })
     ));
+}
+
+impl Person {
+    /// A directory entry for `name`, with one key package per device.
+    fn entry(service: &mut Service, name: &str) -> DirectoryEntry {
+        let (status, body) = service.handle(&service::lookup(name).expect("lookup"));
+        service::directory_entry(name, status, &body).expect("entry")
+    }
+
+    /// Takes the devices of people who left out of chats, where this
+    /// device is the one to do it; returns how many chats changed.
+    fn see_off(&mut self, service: &mut Service) -> usize {
+        let due = self.device.departures().expect("departures");
+        for chat in &due {
+            self.device.remove_departed(chat).expect("remove departed");
+        }
+        self.flush(service);
+        due.len()
+    }
+}
+
+fn names(received: &[Received]) -> Vec<String> {
+    received
+        .iter()
+        .filter_map(|r| match r {
+            Received::Message {
+                message:
+                    AppMessage {
+                        body: Body::Name { name },
+                        ..
+                    },
+                ..
+            } => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Alice starts "Pier crew" with Bob and Carol; Bob accepts and writes.
+fn pier_crew(service: &mut Service) -> ([Person; 3], ChatId) {
+    let mut alice = Person::join(service, "alice");
+    let mut bob = Person::join(service, "bob");
+    let mut carol = Person::join(service, "carol");
+    let members = [
+        Person::entry(service, "bob"),
+        Person::entry(service, "carol"),
+    ];
+    let (chat, _) = alice
+        .device
+        .create_group("Pier crew", &members, &[])
+        .expect("group");
+    alice.flush(service);
+    assert_eq!(alice.device.chat_name(&chat), Some("Pier crew"));
+
+    for person in [&mut bob, &mut carol] {
+        let got = person.read(service);
+        assert!(matches!(&got[0], Received::Joined { chat: c, .. } if *c == chat));
+        assert_eq!(names(&got), vec!["Pier crew".to_owned()]);
+        let summary = &person.device.chat_list().expect("chats")[0];
+        assert_eq!(summary.name.as_deref(), Some("Pier crew"));
+        assert_eq!(summary.members.len(), 2, "the two others");
+        assert!(summary.request, "nobody accepted yet");
+    }
+
+    bob.device.accept_chat(&chat).expect("accept");
+    bob.device
+        .send(&chat, &text(1, "Count me in"))
+        .expect("send");
+    bob.flush(service);
+    for person in [&mut alice, &mut carol] {
+        assert_eq!(
+            texts(&person.read(service)),
+            vec![(bob.author(), "Count me in".to_owned())]
+        );
+    }
+    ([alice, bob, carol], chat)
+}
+
+#[test]
+fn a_group_is_named_and_grows() {
+    let mut service = Service::default();
+    let ([mut alice, mut bob, mut carol], chat) = pier_crew(&mut service);
+    let mut dave = Person::join(&mut service, "dave");
+
+    // Alice renames it; the newest name wins everywhere.
+    alice
+        .device
+        .rename_chat(&chat, "Pier crew 🌊")
+        .expect("rename");
+    alice.flush(&mut service);
+    for person in [&mut bob, &mut carol] {
+        assert_eq!(
+            names(&person.read(&mut service)),
+            vec!["Pier crew 🌊".to_owned()]
+        );
+        assert_eq!(person.device.chat_name(&chat), Some("Pier crew 🌊"));
+    }
+
+    // Bob adds Dave: Dave learns the name; the others see only the change.
+    let invitation = bob
+        .device
+        .add_members(&chat, &[Person::entry(&mut service, "dave")])
+        .expect("add");
+    assert!(invitation.commit.commit.is_some(), "sequenced");
+    assert_eq!(
+        bob.flush(&mut service),
+        vec![Settled::Applied, Settled::Delivered],
+        "the change, then the name for Dave"
+    );
+    assert!(matches!(
+        dave.read(&mut service)[0],
+        Received::Joined { .. }
+    ));
+    assert_eq!(dave.device.chat_name(&chat), Some("Pier crew 🌊"));
+    assert_eq!(dave.device.chat_list().expect("chats")[0].members.len(), 3);
+    assert!(matches!(
+        carol.read(&mut service)[0],
+        Received::ChatUpdated { .. }
+    ));
+    let events = carol
+        .device
+        .history(&chat, None, 10)
+        .expect("history")
+        .iter()
+        .filter(|entry| entry.message.content.is_event())
+        .count();
+    assert_eq!(events, 2, "two namings shown, not the repeat for Dave");
+}
+
+#[test]
+fn people_leave_a_group_and_hear_nothing_more() {
+    let mut service = Service::default();
+    let ([mut alice, mut bob, mut carol], chat) = pier_crew(&mut service);
+
+    // Carol leaves: she erases the chat; the member with the lowest leaf
+    // takes her devices out, and only that one.
+    carol.device.accept_chat(&chat).expect("accept");
+    carol.device.leave_chat(&chat).expect("leave");
+    carol.flush(&mut service);
+    assert_eq!(carol.device.chats(), Vec::<ChatId>::new());
+    for person in [&mut alice, &mut bob] {
+        person.read(&mut service);
+    }
+    assert_eq!(bob.see_off(&mut service), 0);
+    assert_eq!(
+        alice.see_off(&mut service),
+        1,
+        "Alice holds the lowest leaf"
+    );
+    // Alice's pending receipts went out first; then her change.
+    assert!(
+        bob.read(&mut service)
+            .iter()
+            .any(|r| matches!(r, Received::ChatUpdated { .. }))
+    );
+    assert_eq!(bob.device.chat_list().expect("chats")[0].members.len(), 1);
+    assert_eq!(alice.see_off(&mut service), 0, "nothing left to do");
+
+    // Carol erased the chat: whatever still arrives for it is refused.
+    let late = service.take(&carol.device);
+    assert_ne!(late, Vec::<Vec<u8>>::new());
+    for bytes in &late {
+        let opened = carol.device.open_envelope(bytes).expect("envelope");
+        assert!(matches!(opened.result, Err(CoreError::UnknownChat)));
+    }
+
+    // Bob writes; Carol is gone.
+    bob.device.send(&chat, &text(2, "Just us")).expect("send");
+    bob.flush(&mut service);
+    assert_eq!(service.take(&carol.device), Vec::<Vec<u8>>::new());
+    assert_eq!(
+        texts(&alice.read(&mut service)),
+        vec![(bob.author(), "Just us".to_owned())]
+    );
 }

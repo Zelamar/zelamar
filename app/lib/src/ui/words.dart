@@ -3,6 +3,8 @@
 /// viewer's own time zone (protocol/content.md, rule 5).
 library;
 
+import 'package:zelamar/src/rust/api/session.dart';
+
 /// What went wrong, in words a person can act on.
 String describeFailure(String code) => switch (code) {
   'username_taken' => 'That name is taken. Try another one.',
@@ -30,6 +32,12 @@ String describeFailure(String code) => switch (code) {
   'already_initialized' =>
     'This device already has an account, so it can’t join another one.',
   _ => 'Something went wrong. Please try again.',
+};
+
+/// A line for something that happened to a chat.
+String describeEvent(String author, ChatEvent event) => switch (event.kind) {
+  ChatEventKind.named => '$author named the group “${event.name ?? ''}”',
+  ChatEventKind.left => '$author left',
 };
 
 const _weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];

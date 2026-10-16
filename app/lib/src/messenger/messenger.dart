@@ -129,6 +129,22 @@ abstract class Messenger extends ChangeNotifier {
   /// Starts a chat with [username]; returns its id.
   Future<String> startChat(String username);
 
+  /// Starts a group called [name] with [usernames]; returns its id.
+  Future<String> createGroup(String name, List<String> usernames);
+
+  /// Adds [usernames] to the group [chat].
+  Future<void> addMembers(String chat, List<String> usernames);
+
+  /// Renames the group [chat] for everyone in it.
+  Future<void> renameChat(String chat, String name);
+
+  /// Leaves the group [chat] and removes it from this device; the others
+  /// are told.
+  Future<void> leaveChat(String chat);
+
+  /// Everyone else in [chat].
+  Future<List<MemberView>> members(String chat);
+
   /// Up to [limit] messages of [chat], newest first, older than [before].
   Future<List<MessageView>> messages(
     String chat, {

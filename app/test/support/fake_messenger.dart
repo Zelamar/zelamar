@@ -182,6 +182,7 @@ class FakeMessenger extends Messenger {
     List<MessageView> messages = const [],
     int unread = 0,
     bool request = false,
+    bool group = false,
   }) {
     conversations[id] = [...messages];
     _chats[id] = ChatPreview(
@@ -191,6 +192,7 @@ class FakeMessenger extends Messenger {
       last: messages.firstOrNull,
       unread: unread,
       request: request,
+      group: group,
     );
     notifyListeners();
   }
@@ -202,6 +204,63 @@ class FakeMessenger extends Messenger {
     addChat(id, '@$username');
     return id;
   }
+
+  /// Members of each chat, by chat id.
+  final membersOf = <String, List<MemberView>>{};
+
+  /// Chats left, by id.
+  final left = <String>[];
+
+  @override
+  Future<String> createGroup(String name, List<String> usernames) async {
+    _maybeFail();
+    final id = 'group-${_chats.length}';
+    membersOf[id] = [
+      for (final username in usernames)
+        MemberView(title: '@$username', verified: true),
+    ];
+    addChat(id, name, group: true);
+    return id;
+  }
+
+  @override
+  Future<void> addMembers(String chat, List<String> usernames) async {
+    _maybeFail();
+    membersOf[chat] = [
+      ...?membersOf[chat],
+      for (final username in usernames)
+        MemberView(title: '@$username', verified: true),
+    ];
+    notifyListeners();
+  }
+
+  @override
+  Future<void> renameChat(String chat, String name) async {
+    _maybeFail();
+    final preview = _chats[chat]!;
+    _chats[chat] = ChatPreview(
+      id: preview.id,
+      title: name,
+      verified: preview.verified,
+      last: preview.last,
+      unread: preview.unread,
+      request: preview.request,
+      group: preview.group,
+    );
+    notifyListeners();
+  }
+
+  @override
+  Future<void> leaveChat(String chat) async {
+    _maybeFail();
+    left.add(chat);
+    _chats.remove(chat);
+    notifyListeners();
+  }
+
+  @override
+  Future<List<MemberView>> members(String chat) async =>
+      membersOf[chat] ?? const [];
 
   @override
   Future<List<MessageView>> messages(
@@ -235,6 +294,7 @@ class FakeMessenger extends Messenger {
       last: message,
       unread: preview.unread,
       request: false,
+      group: preview.group,
     );
     _changes.add(chat);
     notifyListeners();
@@ -326,6 +386,7 @@ class FakeMessenger extends Messenger {
         last: preview.last,
         unread: unread ?? preview.unread,
         request: request ?? preview.request,
+        group: preview.group,
       );
 
   @override
@@ -356,6 +417,8 @@ MessageView view(
   bool edited = false,
   Quote? replyTo,
   List<Reaction> reactions = const [],
+  String author = '@bob',
+  ChatEvent? event,
 }) => MessageView(
   id: 'm$seq',
   seq: seq,
@@ -368,7 +431,9 @@ MessageView view(
   status: status,
   replyTo: replyTo,
   reactions: reactions,
-  editable: outgoing && !deleted,
+  editable: outgoing && !deleted && event == null,
+  author: outgoing ? 'You' : author,
+  event: event,
 );
 
 /// [message] with some fields replaced.
@@ -392,4 +457,6 @@ MessageView copyView(
   replyTo: message.replyTo,
   reactions: reactions ?? message.reactions,
   editable: editable ?? message.editable,
+  author: message.author,
+  event: message.event,
 );

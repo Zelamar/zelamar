@@ -61,6 +61,10 @@ const RECORD_CONTACTS: &str = "device.contacts";
 const RECORD_INTRODUCED: &str = "device.introduced";
 const RECORD_READ_MARKS: &str = "device.read_marks";
 const RECORD_LABELS: &str = "device.labels";
+const RECORD_CHAT_META: &str = "device.chat_meta";
+
+/// Most accounts in one chat (ADR-0015).
+pub const MAX_MEMBERS: usize = 50;
 
 /// Unread counts stop at this many; the app shows "99+".
 const UNREAD_CAP: u32 = 99;
@@ -195,6 +199,19 @@ pub struct ChatSummary {
     /// Someone else started it and the user has not answered yet: show it
     /// as a request to accept or decline.
     pub request: bool,
+    /// The chat's name, for a group someone named.
+    pub name: Option<String>,
+}
+
+/// What a device keeps about a chat beyond MLS and history.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct ChatMeta {
+    /// The newest name: when it was written, by which message, and the name.
+    #[serde(default)]
+    name: Option<(u64, MessageId, String)>,
+    /// Accounts that left, whose devices may still be in the chat.
+    #[serde(default)]
+    departed: BTreeSet<AccountId>,
 }
 
 /// One Zelamar device: its keys and the chats it takes part in.
@@ -235,6 +252,9 @@ pub struct Device {
     /// What this account's devices call themselves, as far as this one
     /// knows (ADR-0014).
     labels: BTreeMap<DeviceId, String>,
+    /// Names and departures per chat, in memory and as on disk.
+    meta: BTreeMap<ChatId, ChatMeta>,
+    persisted_meta: BTreeMap<ChatId, ChatMeta>,
 }
 
 /// Freshly built key packages, TLS-encoded.
@@ -379,6 +399,8 @@ impl Device {
             read_marks: BTreeMap::new(),
             persisted_read_marks: BTreeMap::new(),
             labels: BTreeMap::new(),
+            meta: BTreeMap::new(),
+            persisted_meta: BTreeMap::new(),
         })
     }
 
@@ -444,25 +466,14 @@ impl Device {
                     .map_err(|_| CoreError::malformed("store", "username is not UTF-8"))
             })
             .transpose()?;
-        let contacts = store
-            .record(RECORD_CONTACTS)?
-            .map(|bytes| contacts::decode(&bytes))
-            .transpose()?
-            .unwrap_or_default();
+        let contacts = decoded_or_default(&store, RECORD_CONTACTS, contacts::decode)?;
         let introduced: BTreeSet<ChatId> =
             decode_chat_list(&store.record(RECORD_INTRODUCED)?.unwrap_or_default())?
                 .into_iter()
                 .collect();
-        let read_marks = store
-            .record(RECORD_READ_MARKS)?
-            .map(|bytes| decode_read_marks(&bytes))
-            .transpose()?
-            .unwrap_or_default();
-        let labels = store
-            .record(RECORD_LABELS)?
-            .map(|bytes| decode_labels(&bytes))
-            .transpose()?
-            .unwrap_or_default();
+        let read_marks = decoded_or_default(&store, RECORD_READ_MARKS, decode_read_marks)?;
+        let labels = decoded_or_default(&store, RECORD_LABELS, decode_labels)?;
+        let meta = decoded_or_default(&store, RECORD_CHAT_META, decode_meta)?;
 
         let provider = OpenMlsRustCrypto::default();
         let persisted = store.load_mls_state()?;
@@ -505,6 +516,8 @@ impl Device {
             persisted_read_marks: read_marks.clone(),
             read_marks,
             labels,
+            persisted_meta: meta.clone(),
+            meta,
         })
     }
 
@@ -647,6 +660,7 @@ impl Device {
                     last: self.history(chat, None, 1)?.into_iter().next(),
                     unread: self.unread(chat)?,
                     request: !self.introduced.contains(chat),
+                    name: self.chat_name(chat).map(str::to_owned),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -780,6 +794,9 @@ impl Device {
                         group
                             .merge_pending_commit(&device.provider)
                             .map_err(|e| CoreError::mls("applying an accepted commit", e))?;
+                        if ticket.welcome.is_some() {
+                            device.announce_name(&chat)?;
+                        }
                     }
                     CommitAnswer::Refused { .. } => {
                         group
@@ -912,8 +929,39 @@ impl Device {
         entry: &DirectoryEntry,
         siblings: &[DirectoryEntry],
     ) -> Result<(ChatId, Invitation)> {
-        let account = entry.account;
-        if entry.key_packages.is_empty() {
+        self.open_chat(std::slice::from_ref(entry), siblings, None)
+    }
+
+    /// Starts a group called `name` with every device of every account in
+    /// `members`, and this account's other devices, in one commit
+    /// (ADR-0015). Checks as [`Device::start_chat`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Device::start_chat`]; [`CoreError::Malformed`] for a bad name,
+    /// no members, or more than [`MAX_MEMBERS`].
+    pub fn create_group(
+        &mut self,
+        name: &str,
+        members: &[DirectoryEntry],
+        siblings: &[DirectoryEntry],
+    ) -> Result<(ChatId, Invitation)> {
+        self.open_chat(members, siblings, Some(name))
+    }
+
+    fn open_chat(
+        &mut self,
+        members: &[DirectoryEntry],
+        siblings: &[DirectoryEntry],
+        name: Option<&str>,
+    ) -> Result<(ChatId, Invitation)> {
+        if members.is_empty() || members.len() + 1 > MAX_MEMBERS {
+            return Err(CoreError::malformed(
+                "chat",
+                "no one, or too many, to talk to",
+            ));
+        }
+        if members.iter().any(|entry| entry.key_packages.is_empty()) {
             return Err(CoreError::malformed("contact", "has no reachable device"));
         }
         if siblings
@@ -924,25 +972,82 @@ impl Device {
                 "a sibling entry is about another account",
             ));
         }
+        // The name goes out right after the chat starts; checked first.
+        let named = match name {
+            Some(name) => {
+                let message = AppMessage::new(
+                    MessageId::random()?,
+                    now_ms(),
+                    Body::Name {
+                        name: name.to_owned(),
+                    },
+                );
+                let bytes = message.encode()?;
+                Some((message, bytes))
+            }
+            None => None,
+        };
         self.transact(|device| {
-            let me = device.id();
-            let mut packages = Vec::new();
-            let mut newcomers = Vec::new();
-            let wanted = entry
-                .key_packages
-                .iter()
-                .map(|bytes| (account, bytes))
-                .chain(siblings.iter().flat_map(|sibling| {
-                    sibling
-                        .key_packages
-                        .iter()
-                        .map(move |bytes| (sibling.account, bytes))
-                }));
-            for (owner, bytes) in wanted {
-                let key_package = device.validate_key_package(bytes)?;
+            let (packages, newcomers) = device.checked_packages(members.iter().chain(siblings))?;
+            let chat = device.new_chat()?;
+            let invitation = device.add(&chat, &packages, newcomers)?;
+            for entry in members {
+                contacts::confirmed(&mut device.contacts, entry.account, &entry.username);
+            }
+            device.introduce(&chat)?;
+            if let Some((message, bytes)) = &named {
+                device.send_now(&chat, message, bytes)?;
+            }
+            Ok((chat, invitation))
+        })
+    }
+
+    /// Adds every device of every account in `members` to `chat`, in one
+    /// commit through the sequencer (ADR-0015).
+    ///
+    /// # Errors
+    ///
+    /// As [`Device::start_chat`]; [`CoreError::Malformed`] when the chat
+    /// would hold more than [`MAX_MEMBERS`] accounts.
+    pub fn add_members(&mut self, chat: &ChatId, members: &[DirectoryEntry]) -> Result<Invitation> {
+        let group = self.chats.get(chat).ok_or(CoreError::UnknownChat)?;
+        let mut accounts = group
+            .members()
+            .map(|member| certificate_of(&member.credential).map(|c| c.account()))
+            .collect::<Result<BTreeSet<AccountId>>>()?;
+        accounts.extend(members.iter().map(|entry| entry.account));
+        if members.is_empty() || accounts.len() > MAX_MEMBERS {
+            return Err(CoreError::malformed("chat", "no one, or too many, to add"));
+        }
+        self.transact(|device| {
+            let (packages, newcomers) = device.checked_packages(members.iter())?;
+            let invitation = device.add(chat, &packages, newcomers)?;
+            let meta = device.meta.entry(chat.clone()).or_default();
+            for entry in members {
+                // Someone who left and comes back is a member again.
+                meta.departed.remove(&entry.account);
+                contacts::confirmed(&mut device.contacts, entry.account, &entry.username);
+            }
+            Ok(invitation)
+        })
+    }
+
+    /// Every key package in `entries`, validated and certified by its
+    /// entry's account, with the newcomers' mailboxes. This device itself
+    /// is skipped.
+    fn checked_packages<'a>(
+        &self,
+        entries: impl Iterator<Item = &'a DirectoryEntry>,
+    ) -> Result<(Vec<KeyPackage>, Vec<MailboxId>)> {
+        let me = self.id();
+        let mut packages = Vec::new();
+        let mut newcomers = Vec::new();
+        for entry in entries {
+            for bytes in &entry.key_packages {
+                let key_package = self.validate_key_package(bytes)?;
                 let leaf = key_package.leaf_node();
                 let certificate = certificate_of(leaf.credential())?;
-                if certificate.account() != owner {
+                if certificate.account() != entry.account {
                     return Err(CoreError::Unauthenticated(
                         "a device does not belong to the contact",
                     ));
@@ -953,11 +1058,109 @@ impl Device {
                 newcomers.push(verify_leaf(leaf)?);
                 packages.push(key_package);
             }
-            let chat = device.new_chat()?;
-            let invitation = device.add(&chat, &packages, newcomers)?;
-            contacts::confirmed(&mut device.contacts, account, &entry.username);
-            device.introduce(&chat)?;
-            Ok((chat, invitation))
+        }
+        Ok((packages, newcomers))
+    }
+
+    /// The name someone gave `chat`, if any (ADR-0015).
+    #[must_use]
+    pub fn chat_name(&self, chat: &ChatId) -> Option<&str> {
+        self.meta
+            .get(chat)
+            .and_then(|meta| meta.name.as_ref())
+            .map(|(_, _, name)| name.as_str())
+    }
+
+    /// Renames `chat` for everyone in it.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Malformed`] for a bad name, [`CoreError::UnknownChat`],
+    /// or an MLS or storage error.
+    pub fn rename_chat(&mut self, chat: &ChatId, name: &str) -> Result<()> {
+        let message = AppMessage::new(
+            MessageId::random()?,
+            now_ms(),
+            Body::Name {
+                name: name.to_owned(),
+            },
+        );
+        self.send(chat, &message).map(|_| ())
+    }
+
+    /// Leaves `chat`: the others are told, so they take this account's
+    /// devices out (ADR-0015), and this device erases it. A chat request is
+    /// left without a word, like a declined one.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::UnknownChat`], or a crypto, MLS or storage error.
+    pub fn leave_chat(&mut self, chat: &ChatId) -> Result<()> {
+        if !self.chats.contains_key(chat) {
+            return Err(CoreError::UnknownChat);
+        }
+        self.transact(|device| {
+            if device.introduced.contains(chat) {
+                let leave = AppMessage::new(MessageId::random()?, now_ms(), Body::Leave);
+                device.send_now(chat, &leave, &leave.encode()?)?;
+            }
+            device.erase(chat)
+        })
+    }
+
+    /// Chats where accounts that left still have devices, and this device
+    /// is the one to take them out: the remaining member with the lowest
+    /// leaf, so the others do not race it (ADR-0015).
+    ///
+    /// # Errors
+    ///
+    /// A malformed member.
+    pub fn departures(&self) -> Result<Vec<ChatId>> {
+        let mut due = Vec::new();
+        for (chat, meta) in &self.meta {
+            if meta.departed.is_empty() {
+                continue;
+            }
+            let Some(group) = self.chats.get(chat) else {
+                continue;
+            };
+            if group.pending_commit().is_some() {
+                continue;
+            }
+            let mut gone = false;
+            let mut first_staying = None;
+            for member in group.members() {
+                let account = certificate_of(&member.credential)?.account();
+                if meta.departed.contains(&account) {
+                    gone = true;
+                } else if first_staying.is_none() {
+                    first_staying = Some(member.index);
+                }
+            }
+            if gone && first_staying == Some(group.own_leaf_index()) {
+                due.push(chat.clone());
+            }
+        }
+        Ok(due)
+    }
+
+    /// Takes the devices of everyone who left `chat` out of it, in one
+    /// commit through the sequencer.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::UnknownChat`], [`CoreError::Malformed`] when no one
+    /// left, or an MLS or storage error.
+    pub fn remove_departed(&mut self, chat: &ChatId) -> Result<Outgoing> {
+        let departed = self
+            .meta
+            .get(chat)
+            .map(|meta| meta.departed.clone())
+            .unwrap_or_default();
+        self.transact(|device| {
+            device.remove_where(chat, |certificate| {
+                departed.contains(&certificate.account())
+            })
         })
     }
 
@@ -1145,38 +1348,45 @@ impl Device {
                 "a device cannot remove itself",
             ));
         }
+        let own = self.account();
         self.transact(|device| {
-            let own = device.account();
-            let group = device.chats.get(chat).ok_or(CoreError::UnknownChat)?;
-            let mut leaves = Vec::new();
-            for member in group.members() {
-                let certificate = certificate_of(&member.credential)?;
-                if certificate.account() == own && devices.contains(&certificate.device()) {
-                    leaves.push(member.index);
-                }
-            }
-            if leaves.is_empty() {
-                return Err(CoreError::malformed(
-                    "removal",
-                    "no such device in the chat",
-                ));
-            }
-            let group = device.chats.get_mut(chat).ok_or(CoreError::UnknownChat)?;
-            // The removed devices get the commit too: it tells them they
-            // are out.
-            let everyone = recipients(group)?;
-            let epoch = group.epoch().as_u64();
-            let (commit, _welcome, _group_info) = group
-                .remove_members(&device.provider, &device.signer, &leaves)
-                .map_err(|e| CoreError::mls("removing a device", e))?;
-            let commit = Outgoing {
-                id: EnvelopeId::random()?,
-                recipients: everyone,
-                payload: encode(&commit, "encoding a commit")?,
-                commit: None,
-            };
-            device.queue_commit(chat, epoch, commit, None)
+            device.remove_where(chat, |certificate| {
+                certificate.account() == own && devices.contains(&certificate.device())
+            })
         })
+    }
+
+    /// Takes every member `chosen` picks out of `chat` in one commit.
+    fn remove_where(
+        &mut self,
+        chat: &ChatId,
+        chosen: impl Fn(&DeviceCertificate) -> bool,
+    ) -> Result<Outgoing> {
+        let group = self.chats.get(chat).ok_or(CoreError::UnknownChat)?;
+        let mut leaves = Vec::new();
+        for member in group.members() {
+            if chosen(&certificate_of(&member.credential)?) {
+                leaves.push(member.index);
+            }
+        }
+        if leaves.is_empty() || leaves.contains(&group.own_leaf_index()) {
+            return Err(CoreError::malformed("removal", "no one to take out"));
+        }
+        let group = self.chats.get_mut(chat).ok_or(CoreError::UnknownChat)?;
+        // The removed devices get the commit too: it tells them they are
+        // out.
+        let everyone = recipients(group)?;
+        let epoch = group.epoch().as_u64();
+        let (commit, _welcome, _group_info) = group
+            .remove_members(&self.provider, &self.signer, &leaves)
+            .map_err(|e| CoreError::mls("removing a device", e))?;
+        let commit = Outgoing {
+            id: EnvelopeId::random()?,
+            recipients: everyone,
+            payload: encode(&commit, "encoding a commit")?,
+            commit: None,
+        };
+        self.queue_commit(chat, epoch, commit, None)
     }
 
     /// Adds this account's own devices to `chat` in one commit, each from a
@@ -1427,16 +1637,20 @@ impl Device {
     ///
     /// [`CoreError::UnknownChat`], or an MLS or storage error.
     pub fn delete_chat(&mut self, chat: &ChatId) -> Result<()> {
-        self.transact(|device| {
-            let mut group = device.chats.remove(chat).ok_or(CoreError::UnknownChat)?;
-            group
-                .delete(device.provider.storage())
-                .map_err(|e| CoreError::mls("erasing a chat", e))?;
-            device.introduced.remove(chat);
-            device.read_marks.remove(chat);
-            device.pending.erased.push(chat.clone());
-            Ok(())
-        })
+        self.transact(|device| device.erase(chat))
+    }
+
+    /// Erases `chat` from this device, as part of the operation in progress.
+    fn erase(&mut self, chat: &ChatId) -> Result<()> {
+        let mut group = self.chats.remove(chat).ok_or(CoreError::UnknownChat)?;
+        group
+            .delete(self.provider.storage())
+            .map_err(|e| CoreError::mls("erasing a chat", e))?;
+        self.introduced.remove(chat);
+        self.read_marks.remove(chat);
+        self.meta.remove(chat);
+        self.pending.erased.push(chat.clone());
+        Ok(())
     }
 
     /// Marks everything in `chat` as read here. In a chat the user has
@@ -1548,6 +1762,18 @@ impl Device {
                     // this device too (ADR-0014).
                     self.introduced.insert(chat.clone());
                 }
+                if message.body == Body::Leave {
+                    if author.account == self.account() {
+                        // Another of our devices left: so does this one.
+                        self.erase(&chat)?;
+                    } else {
+                        self.meta
+                            .entry(chat.clone())
+                            .or_default()
+                            .departed
+                            .insert(author.account);
+                    }
+                }
                 if let Body::Profile { username } = &message.body
                     && author.account != self.account()
                 {
@@ -1570,7 +1796,13 @@ impl Device {
                 // device: added members, updated leaves and the committer's
                 // own new leaf.
                 for added in staged.add_proposals() {
-                    verify_leaf(added.add_proposal().key_package().leaf_node())?;
+                    let leaf = added.add_proposal().key_package().leaf_node();
+                    verify_leaf(leaf)?;
+                    // Someone who left and is added again is a member again.
+                    let account = certificate_of(leaf.credential())?.account();
+                    if let Some(meta) = self.meta.get_mut(&chat) {
+                        meta.departed.remove(&account);
+                    }
                 }
                 for updated in staged.update_proposals() {
                     verify_leaf(updated.update_proposal().leaf_node())?;
@@ -1650,6 +1882,14 @@ impl Device {
         message: &AppMessage,
         status: SendStatus,
     ) -> Result<()> {
+        if let Body::Name { name } = &message.body
+            && self.chat_name(chat) == Some(name.as_str())
+        {
+            // The same name again, sent for people who just joined: nothing
+            // to show to those who knew it.
+            self.note_name(chat, message, name);
+            return Ok(());
+        }
         let records = history::apply(
             &ChatHistory {
                 store: &self.store,
@@ -1665,6 +1905,31 @@ impl Device {
         self.pending
             .messages
             .extend(records.into_iter().map(|record| (chat.clone(), record)));
+        if let Body::Name { name } = &message.body {
+            self.note_name(chat, message, name);
+        }
+        Ok(())
+    }
+
+    /// Keeps `name` as the chat's name if `message` is the newest naming.
+    fn note_name(&mut self, chat: &ChatId, message: &AppMessage, name: &str) {
+        let meta = self.meta.entry(chat.clone()).or_default();
+        let newer = meta
+            .name
+            .as_ref()
+            .is_none_or(|(at, id, _)| (message.sent_at_ms, message.id.0) > (*at, id.0));
+        if newer {
+            meta.name = Some((message.sent_at_ms, message.id, name.to_owned()));
+        }
+    }
+
+    /// Tells people who just joined `chat` its name, if it has one.
+    fn announce_name(&mut self, chat: &ChatId) -> Result<()> {
+        let Some(name) = self.chat_name(chat).map(str::to_owned) else {
+            return Ok(());
+        };
+        let message = AppMessage::new(MessageId::random()?, now_ms(), Body::Name { name });
+        self.send_now(chat, &message, &message.encode()?)?;
         Ok(())
     }
 
@@ -1746,6 +2011,11 @@ impl Device {
                 .records
                 .push((RECORD_READ_MARKS, encode_read_marks(&self.read_marks)?));
         }
+        if self.meta != self.persisted_meta {
+            batch
+                .records
+                .push((RECORD_CHAT_META, encode_meta(&self.meta)?));
+        }
         if self.introduced != self.persisted_introduced {
             let introduced: HashSet<ChatId> = self.introduced.iter().cloned().collect();
             batch
@@ -1780,6 +2050,7 @@ impl Device {
         self.persisted_contacts.clone_from(&self.contacts);
         self.persisted_introduced.clone_from(&self.introduced);
         self.persisted_read_marks.clone_from(&self.read_marks);
+        self.persisted_meta.clone_from(&self.meta);
         Ok(())
     }
 
@@ -1796,6 +2067,7 @@ impl Device {
         self.contacts.clone_from(&self.persisted_contacts);
         self.introduced.clone_from(&self.persisted_introduced);
         self.read_marks.clone_from(&self.persisted_read_marks);
+        self.meta.clone_from(&self.persisted_meta);
         Ok(())
     }
 }
@@ -1926,6 +2198,36 @@ fn encode_labels(labels: &BTreeMap<DeviceId, String>) -> Result<Vec<u8>> {
         source: e.into(),
     })?;
     Ok(out)
+}
+
+/// The record `name` decoded, or the empty value if it was never written.
+fn decoded_or_default<T: Default>(
+    store: &Store,
+    name: &str,
+    decode: impl Fn(&[u8]) -> Result<T>,
+) -> Result<T> {
+    store
+        .record(name)?
+        .map(|bytes| decode(&bytes))
+        .transpose()
+        .map(Option::unwrap_or_default)
+}
+
+fn encode_meta(meta: &BTreeMap<ChatId, ChatMeta>) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    ciborium::into_writer(&meta.iter().collect::<Vec<_>>(), &mut out).map_err(|e| {
+        CoreError::Encoding {
+            what: "chat details",
+            source: e.into(),
+        }
+    })?;
+    Ok(out)
+}
+
+fn decode_meta(bytes: &[u8]) -> Result<BTreeMap<ChatId, ChatMeta>> {
+    let list: Vec<(ChatId, ChatMeta)> = ciborium::from_reader(bytes)
+        .map_err(|_| CoreError::malformed("store", "chat details are malformed"))?;
+    Ok(list.into_iter().collect())
 }
 
 fn decode_labels(bytes: &[u8]) -> Result<BTreeMap<DeviceId, String>> {

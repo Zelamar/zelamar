@@ -120,6 +120,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  ChatEvent dco_decode_box_autoadd_chat_event(dynamic raw);
+
+  @protected
   HttpAnswer dco_decode_box_autoadd_http_answer(dynamic raw);
 
   @protected
@@ -136,6 +139,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Quote dco_decode_box_autoadd_quote(dynamic raw);
+
+  @protected
+  ChatEvent dco_decode_chat_event(dynamic raw);
+
+  @protected
+  ChatEventKind dco_decode_chat_event_kind(dynamic raw);
 
   @protected
   ChatPreview dco_decode_chat_preview(dynamic raw);
@@ -171,6 +180,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   InboxEvent dco_decode_inbox_event(dynamic raw);
 
   @protected
+  Invitee dco_decode_invitee(dynamic raw);
+
+  @protected
   LabError dco_decode_lab_error(dynamic raw);
 
   @protected
@@ -204,7 +216,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<HttpHeader> dco_decode_list_http_header(dynamic raw);
 
   @protected
+  List<Invitee> dco_decode_list_invitee(dynamic raw);
+
+  @protected
   List<LabParticipant> dco_decode_list_lab_participant(dynamic raw);
+
+  @protected
+  List<MemberView> dco_decode_list_member_view(dynamic raw);
 
   @protected
   List<MessageView> dco_decode_list_message_view(dynamic raw);
@@ -225,6 +243,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MailboxLink dco_decode_mailbox_link(dynamic raw);
 
   @protected
+  MemberView dco_decode_member_view(dynamic raw);
+
+  @protected
   MessageStatus dco_decode_message_status(dynamic raw);
 
   @protected
@@ -241,6 +262,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   dco_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     dynamic raw,
   );
+
+  @protected
+  ChatEvent? dco_decode_opt_box_autoadd_chat_event(dynamic raw);
 
   @protected
   HttpAnswer? dco_decode_opt_box_autoadd_http_answer(dynamic raw);
@@ -381,6 +405,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  ChatEvent sse_decode_box_autoadd_chat_event(SseDeserializer deserializer);
+
+  @protected
   HttpAnswer sse_decode_box_autoadd_http_answer(SseDeserializer deserializer);
 
   @protected
@@ -399,6 +426,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   Quote sse_decode_box_autoadd_quote(SseDeserializer deserializer);
+
+  @protected
+  ChatEvent sse_decode_chat_event(SseDeserializer deserializer);
+
+  @protected
+  ChatEventKind sse_decode_chat_event_kind(SseDeserializer deserializer);
 
   @protected
   ChatPreview sse_decode_chat_preview(SseDeserializer deserializer);
@@ -434,6 +467,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   InboxEvent sse_decode_inbox_event(SseDeserializer deserializer);
 
   @protected
+  Invitee sse_decode_invitee(SseDeserializer deserializer);
+
+  @protected
   LabError sse_decode_lab_error(SseDeserializer deserializer);
 
   @protected
@@ -467,9 +503,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<HttpHeader> sse_decode_list_http_header(SseDeserializer deserializer);
 
   @protected
+  List<Invitee> sse_decode_list_invitee(SseDeserializer deserializer);
+
+  @protected
   List<LabParticipant> sse_decode_list_lab_participant(
     SseDeserializer deserializer,
   );
+
+  @protected
+  List<MemberView> sse_decode_list_member_view(SseDeserializer deserializer);
 
   @protected
   List<MessageView> sse_decode_list_message_view(SseDeserializer deserializer);
@@ -490,6 +532,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MailboxLink sse_decode_mailbox_link(SseDeserializer deserializer);
 
   @protected
+  MemberView sse_decode_member_view(SseDeserializer deserializer);
+
+  @protected
   MessageStatus sse_decode_message_status(SseDeserializer deserializer);
 
   @protected
@@ -504,6 +549,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   Session?
   sse_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ChatEvent? sse_decode_opt_box_autoadd_chat_event(
     SseDeserializer deserializer,
   );
 
@@ -665,6 +715,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_chat_event(
+    ChatEvent self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_http_answer(
     HttpAnswer self,
     SseSerializer serializer,
@@ -693,6 +749,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_box_autoadd_quote(Quote self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_chat_event(ChatEvent self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_chat_event_kind(ChatEventKind self, SseSerializer serializer);
 
   @protected
   void sse_encode_chat_preview(ChatPreview self, SseSerializer serializer);
@@ -726,6 +788,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_inbox_event(InboxEvent self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_invitee(Invitee self, SseSerializer serializer);
 
   @protected
   void sse_encode_lab_error(LabError self, SseSerializer serializer);
@@ -779,8 +844,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_invitee(List<Invitee> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_lab_participant(
     List<LabParticipant> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_member_view(
+    List<MemberView> self,
     SseSerializer serializer,
   );
 
@@ -812,6 +886,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_mailbox_link(MailboxLink self, SseSerializer serializer);
 
   @protected
+  void sse_encode_member_view(MemberView self, SseSerializer serializer);
+
+  @protected
   void sse_encode_message_status(MessageStatus self, SseSerializer serializer);
 
   @protected
@@ -827,6 +904,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     Session? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_chat_event(
+    ChatEvent? self,
     SseSerializer serializer,
   );
 

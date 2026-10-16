@@ -24,6 +24,8 @@ The plaintext of every MLS application message is one CBOR map:
 | `delete` | `target`: bytes(16) | Deletes one of the author's own messages for everyone |
 | `receipt` | `status`: `"delivered"` or `"read"`, `messages`: array of bytes(16), 1–256 items | Acknowledges messages |
 | `profile` | `username`: string, a normalized username (`directory.md`) | Who the author is; never shown as a message |
+| `name` | `name`: string, 1–64 characters, no surrounding spaces, no control characters | Names the chat (a group); shown as a line |
+| `leave` | none | The author leaves the chat; shown as a line |
 
 Receivers MUST check, against their own history, that an `edit` or
 `delete` targets a message by the same author (same account); otherwise
@@ -44,7 +46,17 @@ chats the user started or wrote in:
 - a `read` receipt (the newest 256 at most) when the user sees the chat.
 
 Until the user writes, a stranger learns nothing, not even that a message
-arrived. The username in a
+arrived.
+
+Groups (ADR-0015):
+- A chat's name is the `name` with the greatest `(t, i)`. A device that adds
+  people sends the current name again once its change is accepted, so the
+  newcomers learn it. A `name` equal to the current one is not shown again.
+- After a `leave` from an account, the remaining member with the lowest leaf
+  index takes all of that account's devices out of the chat, in one
+  sequenced commit. Adding that account again cancels it.
+- A `leave` from one's own account makes every own device leave too.
+- Someone leaving a chat they never wrote in (a request) sends nothing. The username in a
 profile is only a claim. Receivers show it as confirmed only after the
 directory (`GET /v0/accounts/{username}/key`) names the same account.
 

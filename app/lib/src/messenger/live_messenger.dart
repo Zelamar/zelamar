@@ -364,6 +364,77 @@ class LiveMessenger extends Messenger {
     return chat;
   });
 
+  @override
+  Future<String> createGroup(String name, List<String> usernames) =>
+      _guard(() async {
+        final session = _ready;
+        final invitees = await _invitees(usernames);
+        final chat = await session.createGroup(
+          name: name,
+          invitees: invitees,
+          own: await _ownDevices(),
+        );
+        await _refreshChats(chat);
+        unawaited(_flush());
+        return chat;
+      });
+
+  @override
+  Future<void> addMembers(String chat, List<String> usernames) =>
+      _guard(() async {
+        final invitees = await _invitees(usernames);
+        await _ready.addMembers(chat: chat, invitees: invitees);
+        await _refreshChats(chat);
+        unawaited(_flush());
+      });
+
+  @override
+  Future<void> renameChat(String chat, String name) => _changeChat(
+    chat,
+    (session) => session.renameChat(chat: chat, name: name),
+  );
+
+  @override
+  Future<void> leaveChat(String chat) => _guard(() async {
+    await _ready.leaveChat(chat: chat);
+    await _refreshChats(null);
+    unawaited(_flush());
+  });
+
+  @override
+  Future<List<MemberView>> members(String chat) =>
+      _guard(() => _ready.members(chat: chat));
+
+  /// Looks each of [usernames] up in the directory.
+  Future<List<Invitee>> _invitees(List<String> usernames) async {
+    final invitees = <Invitee>[];
+    for (final username in usernames) {
+      final (status, body) = await transport.send(
+        lookupCall(username: username),
+      );
+      invitees.add(
+        Invitee(
+          username: username,
+          answer: HttpAnswer(status: status, body: body),
+        ),
+      );
+    }
+    return invitees;
+  }
+
+  /// Takes the devices of people who left out of the chats where this
+  /// device is the one to do it (ADR-0015).
+  Future<void> _seeOff() async {
+    try {
+      if (await _ready.removeDeparted() > 0) {
+        await _refreshChats(null);
+        unawaited(_flush());
+      }
+    } on Object {
+      // The next message or connection tries again.
+    }
+  }
+
   /// This account's own devices with a key package each, so a new chat
   /// holds them from the start; `null` when the service cannot say.
   Future<HttpAnswer?> _ownDevices() async {
@@ -509,6 +580,7 @@ class LiveMessenger extends Messenger {
         delay = const Duration(seconds: 1);
         unawaited(_flush());
         unawaited(_heal());
+        unawaited(_seeOff());
         // `await for` opens envelopes strictly one after another, in the
         // order the mailbox sends them.
         await for (final data in socket) {
@@ -542,6 +614,9 @@ class LiveMessenger extends Messenger {
     if (event.left) {
       // Perhaps the account removed this device; healing finds out.
       unawaited(_heal());
+    } else if (event.chat != null) {
+      // Someone may have left; their devices go.
+      unawaited(_seeOff());
     }
     final notice = event.notice;
     if (notice != null && !await notifier.inFront()) {
@@ -568,6 +643,9 @@ class LiveMessenger extends Messenger {
         }
         if (pending.isNotEmpty) {
           await _refreshChats(null);
+          // Settling may queue more, such as a group's name for people
+          // just added.
+          _flushAgain = true;
         }
       } while (_flushAgain);
       if (lost) {

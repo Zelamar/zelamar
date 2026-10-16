@@ -8,6 +8,7 @@ import 'package:zelamar/src/design/tokens.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/rust/api/session.dart';
 import 'package:zelamar/src/ui/avatar.dart';
+import 'package:zelamar/src/ui/chat/group_details_screen.dart';
 import 'package:zelamar/src/ui/chat/safety_code.dart';
 import 'package:zelamar/src/ui/words.dart';
 
@@ -123,6 +124,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     } finally {
       _loadingOlder = false;
     }
+  }
+
+  Future<void> _details() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            GroupDetailsScreen(messenger: widget.messenger, chat: widget.chat),
+      ),
+    );
   }
 
   /// Removes the chat from this device after the user confirms.
@@ -328,6 +338,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             .firstOrNull;
         final title = preview?.title ?? 'Chat';
         final request = preview?.request ?? false;
+        final group = preview?.group ?? false;
         final subtitle = preview != null && !preview.verified
             ? 'Name not yet confirmed by Zelamar'
             : switch (widget.messenger.link) {
@@ -347,16 +358,24 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 tooltip: 'More',
                 icon: Icon(Icons.more_horiz, color: colors.textSecondary),
                 itemBuilder: (_) => [
-                  PopupMenuItem<void>(
-                    key: const Key('chat.safety'),
-                    onTap: () => unawaited(_safetyCode(title)),
-                    child: const Text('Safety code'),
-                  ),
-                  PopupMenuItem<void>(
-                    key: const Key('chat.delete'),
-                    onTap: () => unawaited(_delete(title, request: request)),
-                    child: Text(request ? 'Decline' : 'Delete chat'),
-                  ),
+                  if (group)
+                    PopupMenuItem<void>(
+                      key: const Key('chat.details'),
+                      onTap: () => unawaited(_details()),
+                      child: const Text('Group details'),
+                    )
+                  else
+                    PopupMenuItem<void>(
+                      key: const Key('chat.safety'),
+                      onTap: () => unawaited(_safetyCode(title)),
+                      child: const Text('Safety code'),
+                    ),
+                  if (request || !group)
+                    PopupMenuItem<void>(
+                      key: const Key('chat.delete'),
+                      onTap: () => unawaited(_delete(title, request: request)),
+                      child: Text(request ? 'Decline' : 'Delete chat'),
+                    ),
                 ],
               ),
             ],
@@ -414,20 +433,34 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                       final startsDay =
                           older == null ||
                           !sameDay(older.sentAtMs, message.sentAtMs);
-                      final grouped =
-                          newer != null &&
-                          newer.outgoing == message.outgoing &&
-                          sameDay(newer.sentAtMs, message.sentAtMs);
+                      bool together(MessageView? a, MessageView? b) =>
+                          a != null &&
+                          b != null &&
+                          a.event == null &&
+                          b.event == null &&
+                          a.outgoing == b.outgoing &&
+                          a.author == b.author &&
+                          sameDay(a.sentAtMs, b.sentAtMs);
+                      final event = message.event;
                       return Column(
                         children: [
                           if (startsDay) DayLabel(dayLabel(message.sentAtMs)),
-                          MessageBubble(
-                            message,
-                            grouped: grouped,
-                            peer: title,
-                            onActions: () => _showActions(message),
-                            onReact: (emoji) => _react(message, emoji),
-                          ),
+                          if (event != null)
+                            EventLine(describeEvent(message.author, event))
+                          else
+                            MessageBubble(
+                              message,
+                              grouped: together(message, newer),
+                              peer: title,
+                              author:
+                                  group &&
+                                      !message.outgoing &&
+                                      !together(message, older)
+                                  ? message.author
+                                  : null,
+                              onActions: () => _showActions(message),
+                              onReact: (emoji) => _react(message, emoji),
+                            ),
                         ],
                       );
                     },
@@ -562,17 +595,45 @@ class DayLabel extends StatelessWidget {
 
 /// One message: sand on the right for the user's own, white on the left
 /// for others, the small corner pointing at the sender.
+/// Something that happened to the chat, between the messages.
+class EventLine extends StatelessWidget {
+  const new(this.label, {super.key});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: ZSpace.md),
+      child: Center(
+        child: Text(
+          label,
+          key: const Key('chat.event'),
+          textAlign: TextAlign.center,
+          style: context.text.labelMedium?.copyWith(
+            color: context.colors.textTertiary,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class MessageBubble extends StatelessWidget {
   const new(
     this.message, {
     this.grouped = false,
     this.peer = '',
+    this.author,
     this.onActions,
     this.onReact,
     super.key,
   });
 
   final MessageView message;
+
+  /// Who wrote it, shown above the text: in groups, for the first of a run.
+  final String? author;
 
   /// Followed by a newer message from the same side: less space below.
   final bool grouped;
@@ -628,6 +689,19 @@ class MessageBubble extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.end,
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (author != null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  widthFactor: 1,
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 2),
+                    child: Text(
+                      author!,
+                      key: const Key('chat.author'),
+                      style: text.labelMedium?.copyWith(color: colors.accent),
+                    ),
+                  ),
+                ),
               if (quote != null && !message.deleted)
                 QuoteBox(quote, author: quote.outgoing ? 'You' : peer),
               Align(

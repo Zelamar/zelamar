@@ -226,6 +226,138 @@ void main() {
     });
   });
 
+  group('groups', () {
+    testWidgets('a group is started with a name and people', (tester) async {
+      final messenger = await pumpApp(
+        tester,
+        messenger: FakeMessenger(
+          phaseValue: MessengerPhase.ready,
+          usernameValue: 'ada',
+        ),
+      );
+      await tester.tap(find.byKey(const Key('chats.new')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('newChat.mode')));
+      await tester.pumpAndSettle();
+      expect(find.text('New group'), findsOneWidget);
+      final create = find.byKey(const Key('newGroup.create'));
+      expect(tester.widget<FilledButton>(create).onPressed, isNull);
+
+      await tester.enterText(
+        find.byKey(const Key('newGroup.name')),
+        'Pier crew',
+      );
+      for (final name in ['bob', 'Carol', 'bob']) {
+        await tester.enterText(find.byKey(const Key('newChat.username')), name);
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('newGroup.add')));
+        await tester.pump();
+      }
+      expect(find.text('@bob'), findsOneWidget);
+      expect(find.text('@carol'), findsOneWidget);
+      await tester.enterText(find.byKey(const Key('newChat.username')), 'ada');
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('newGroup.add')));
+      await tester.pump();
+      expect(find.byKey(const Key('newChat.error')), findsOneWidget);
+
+      await tester.tap(create);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('chat.title')), findsOneWidget);
+      expect(find.text('Pier crew'), findsWidgets);
+      expect((await messenger.members('group-0')).map((m) => m.title), [
+        '@bob',
+        '@carol',
+      ]);
+    });
+
+    testWidgets('a group shows who wrote what, and what happened', (
+      tester,
+    ) async {
+      final messenger =
+          FakeMessenger(phaseValue: MessengerPhase.ready, usernameValue: 'ada')
+            ..addChat(
+              'g1',
+              'Pier crew',
+              group: true,
+              messages: [
+                view(4, 'See you', author: '@carol'),
+                view(3, 'Seven?'),
+                view(2, 'Hi all'),
+                view(
+                  1,
+                  '',
+                  event: const ChatEvent(
+                    kind: ChatEventKind.named,
+                    name: 'Pier crew',
+                  ),
+                ),
+              ],
+            );
+      await pumpApp(tester, messenger: messenger);
+      await tester.tap(find.byKey(const Key('chats.tile.g1')));
+      await tester.pumpAndSettle();
+      expect(find.text('@bob named the group “Pier crew”'), findsOneWidget);
+      // One name per run of messages from the same person (newest first).
+      expect(
+        tester
+            .widgetList<Text>(find.byKey(const Key('chat.author')))
+            .map((t) => t.data),
+        ['@carol', '@bob'],
+      );
+      await tester.tap(find.byKey(const Key('chat.menu')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('chat.safety')), findsNothing);
+      expect(find.byKey(const Key('chat.details')), findsOneWidget);
+    });
+
+    testWidgets('a group is renamed, grows, and can be left', (tester) async {
+      final messenger = FakeMessenger(
+        phaseValue: MessengerPhase.ready,
+        usernameValue: 'ada',
+      )..addChat('g1', 'Pier crew', group: true);
+      messenger.membersOf['g1'] = [
+        const MemberView(title: '@bob', verified: true),
+      ];
+      await pumpApp(tester, messenger: messenger);
+      await tester.tap(find.byKey(const Key('chats.tile.g1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('chat.menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('chat.details')));
+      await tester.pumpAndSettle();
+      expect(find.text('PEOPLE · 2'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('group.rename')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('group.field')),
+        'Pier crew 🌊',
+      );
+      await tester.tap(find.byKey(const Key('group.field.done')));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<Text>(find.byKey(const Key('group.name'))).data,
+        'Pier crew 🌊',
+      );
+
+      await tester.tap(find.byKey(const Key('group.add')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('group.field')), 'Dave');
+      await tester.tap(find.byKey(const Key('group.field.done')));
+      await tester.pumpAndSettle();
+      expect(find.text('@dave'), findsOneWidget);
+      expect(find.text('PEOPLE · 3'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('group.leave')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('group.leave.confirm')));
+      await tester.pumpAndSettle();
+      expect(messenger.left, ['g1']);
+      expect(find.byKey(const Key('chats.tile.g1')), findsNothing);
+    });
+  });
+
   group('chat requests', () {
     Future<FakeMessenger> openRequest(WidgetTester tester) async {
       final messenger =

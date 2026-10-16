@@ -35,6 +35,22 @@ pub enum StoredContent {
         /// The kind's name.
         kind: String,
     },
+    /// The author named the chat.
+    Named {
+        /// The new name.
+        name: String,
+    },
+    /// The author left the chat.
+    Left,
+}
+
+impl StoredContent {
+    /// Whether this records something that happened to the chat (a name,
+    /// someone leaving) rather than a message.
+    #[must_use]
+    pub const fn is_event(&self) -> bool {
+        matches!(self, Self::Named { .. } | Self::Left)
+    }
 }
 
 /// Where an outgoing message is on its way out.
@@ -169,6 +185,11 @@ pub(crate) fn apply(
             history,
             new_record(StoredContent::Unknown { kind: kind.clone() }),
         ),
+        Body::Name { name } => insert(
+            history,
+            new_record(StoredContent::Named { name: name.clone() }),
+        ),
+        Body::Leave => insert(history, new_record(StoredContent::Left)),
         // Profiles update contacts, not history.
         Body::Profile { .. } => Ok(Vec::new()),
         Body::Edit { target, text } => {
@@ -183,7 +204,9 @@ pub(crate) fn apply(
                 | StoredContent::Reply { text: current, .. } => {
                     current.clone_from(text);
                 }
-                StoredContent::Unknown { .. } => return Ok(Vec::new()),
+                StoredContent::Unknown { .. }
+                | StoredContent::Named { .. }
+                | StoredContent::Left => return Ok(Vec::new()),
             }
             record.edited_at_ms = Some(message.sent_at_ms);
             Ok(vec![record])
@@ -192,11 +215,13 @@ pub(crate) fn apply(
             let Some(mut record) = own_target(history, *target, author)? else {
                 return Ok(Vec::new());
             };
-            record.deleted = true;
             match &mut record.content {
                 StoredContent::Text { text } | StoredContent::Reply { text, .. } => text.clear(),
                 StoredContent::Unknown { .. } => {}
+                // What happened to the chat stays in its history.
+                StoredContent::Named { .. } | StoredContent::Left => return Ok(Vec::new()),
             }
+            record.deleted = true;
             record.reactions.clear();
             Ok(vec![record])
         }
@@ -204,7 +229,7 @@ pub(crate) fn apply(
             let Some(mut record) = history.load(*target)? else {
                 return Ok(Vec::new());
             };
-            if record.deleted {
+            if record.deleted || record.content.is_event() {
                 return Ok(Vec::new());
             }
             record
@@ -215,28 +240,35 @@ pub(crate) fn apply(
             }
             Ok(vec![record])
         }
-        Body::Receipt { status, messages } => {
-            if outgoing {
-                // Our own receipts change nothing in our own history.
-                return Ok(Vec::new());
-            }
-            let mut writes = Vec::new();
-            for id in messages {
-                let Some(mut record) = history.load(*id)? else {
-                    continue;
-                };
-                if !record.outgoing {
-                    continue;
-                }
-                add_once(&mut record.delivered_to, author.account);
-                if *status == ReceiptStatus::Read {
-                    add_once(&mut record.read_by, author.account);
-                }
-                writes.push(record);
-            }
-            Ok(writes)
-        }
+        // Our own receipts change nothing in our own history.
+        Body::Receipt { .. } if outgoing => Ok(Vec::new()),
+        Body::Receipt { status, messages } => receipt(history, author, *status, messages),
     }
+}
+
+/// `author` got as far as `status` with `messages`: the outgoing ones
+/// among them record it.
+fn receipt(
+    history: &impl HistoryReader,
+    author: Author,
+    status: ReceiptStatus,
+    messages: &[MessageId],
+) -> Result<Vec<StoredMessage>> {
+    let mut writes = Vec::new();
+    for id in messages {
+        let Some(mut record) = history.load(*id)? else {
+            continue;
+        };
+        if !record.outgoing {
+            continue;
+        }
+        add_once(&mut record.delivered_to, author.account);
+        if status == ReceiptStatus::Read {
+            add_once(&mut record.read_by, author.account);
+        }
+        writes.push(record);
+    }
+    Ok(writes)
 }
 
 /// Inserts a new message, refusing an id already used in this chat.
