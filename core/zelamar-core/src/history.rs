@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::content::{AppMessage, Body, MessageId, ReceiptStatus};
+use crate::content::{AppMessage, Body, FileRef, MessageId, ReceiptStatus};
 use crate::device::Author;
 use crate::error::{CoreError, Result};
 use crate::identity::AccountId;
@@ -42,6 +42,8 @@ pub enum StoredContent {
     },
     /// The author left the chat.
     Left,
+    /// A file.
+    File(Box<FileRef>),
 }
 
 impl StoredContent {
@@ -131,7 +133,7 @@ pub struct HistoryEntry {
 pub(crate) const fn inserts(body: &Body) -> bool {
     matches!(
         body,
-        Body::Text { .. } | Body::Reply { .. } | Body::Unknown { .. }
+        Body::Text { .. } | Body::Reply { .. } | Body::File(_) | Body::Unknown { .. }
     )
 }
 
@@ -190,6 +192,7 @@ pub(crate) fn apply(
             new_record(StoredContent::Named { name: name.clone() }),
         ),
         Body::Leave => insert(history, new_record(StoredContent::Left)),
+        Body::File(file) => insert(history, new_record(StoredContent::File(file.clone()))),
         // Profiles update contacts, not history.
         Body::Profile { .. } => Ok(Vec::new()),
         Body::Edit { target, text } => {
@@ -206,7 +209,8 @@ pub(crate) fn apply(
                 }
                 StoredContent::Unknown { .. }
                 | StoredContent::Named { .. }
-                | StoredContent::Left => return Ok(Vec::new()),
+                | StoredContent::Left
+                | StoredContent::File(_) => return Ok(Vec::new()),
             }
             record.edited_at_ms = Some(message.sent_at_ms);
             Ok(vec![record])
@@ -218,6 +222,12 @@ pub(crate) fn apply(
             match &mut record.content {
                 StoredContent::Text { text } | StoredContent::Reply { text, .. } => text.clear(),
                 StoredContent::Unknown { .. } => {}
+                // A deleted file keeps nothing that could fetch or open it.
+                StoredContent::File(_) => {
+                    record.content = StoredContent::Text {
+                        text: String::new(),
+                    };
+                }
                 // What happened to the chat stays in its history.
                 StoredContent::Named { .. } | StoredContent::Left => return Ok(Vec::new()),
             }

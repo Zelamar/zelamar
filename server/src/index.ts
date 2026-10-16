@@ -19,12 +19,14 @@ import {
   MAX_DELIVERY_FRAME,
 } from './frames';
 import { failure, json, parseObject, readBody, respond, type Reply } from './http';
+import { MAX_CHUNK, MAX_CHUNKS } from './blob';
 import { inviteKey, inviteSerial } from './invite';
 import { type LinkPart, linkMessage, MAX_LINK_ANSWER } from './link';
 import type { SignedRequest } from './signed';
 import { normalizeUsername } from './username';
 
 export { Account, Invites } from './account';
+export { Blob } from './blob';
 export { Group } from './group';
 export { Link } from './link';
 export { Mailbox } from './mailbox';
@@ -95,6 +97,12 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (parts.length === 6 && leaf === 'key-packages') {
       return only(request, 'POST') ?? respond(await signed(request, env, name, device, 'publish'));
     }
+  }
+  if (resource === 'blobs' && name !== undefined && sub !== undefined && parts.length === 4) {
+    if (request.method === 'PUT') {
+      return respond(await putChunk(request, env, name, sub));
+    }
+    return only(request, 'GET') ?? getChunk(request, env, name, sub);
   }
   if (resource === 'links' && name !== undefined && parts.length === 3) {
     return linkSlot(request, env, name);
@@ -267,6 +275,73 @@ async function lookup(
   }
   const device = fixedBase64Url(what.device, 16);
   return device === null ? failure(404, 'unknown_device') : holder.lookupDevice(buffer(device));
+}
+
+/** A chunk index from the path, or `null`. */
+function chunkIndex(text: string): number | null {
+  return /^\d{1,2}$/u.test(text) && Number(text) < MAX_CHUNKS ? Number(text) : null;
+}
+
+/** Stores one sealed file chunk for a device that proves its mailbox (ADR-0016). */
+async function putChunk(request: Request, env: Env, blob: string, at: string): Promise<Reply> {
+  const index = chunkIndex(at);
+  if (fixedBase64Url(blob, 16) === null || index === null) {
+    return failure(404, 'unknown_blob');
+  }
+  const count = Number(request.headers.get('zelamar-chunks') ?? '');
+  if (!Number.isInteger(count) || count < 1 || count > MAX_CHUNKS || index >= count) {
+    return failure(400, 'malformed');
+  }
+  const mailbox = request.headers.get('zelamar-mailbox') ?? '';
+  const secret = /^Bearer ([A-Za-z0-9_-]+)$/u.exec(request.headers.get('authorization') ?? '');
+  const secretBytes = fixedBase64Url(secret?.[1], 32);
+  if (fixedBase64Url(mailbox, 32) === null || secretBytes === null) {
+    return failure(401, 'unauthorized');
+  }
+  if (!(await allowed(env.UPLOAD_LIMITER, request))) {
+    return failure(429, 'rate_limited');
+  }
+  const body = await readBody(request, MAX_CHUNK);
+  if (body === null) {
+    return failure(413, 'too_large');
+  }
+  if (body.length < 16) {
+    return failure(400, 'malformed');
+  }
+  const allowance = await env.MAILBOX.getByName(mailbox).allowUpload(
+    buffer(secretBytes),
+    body.length,
+  );
+  if (allowance !== 'allowed') {
+    return allowance === 'over_quota' ? failure(429, 'over_quota') : failure(401, 'unauthorized');
+  }
+  const outcome = await env.BLOB.getByName(blob).put(index, count, buffer(body));
+  if (outcome === 'taken') {
+    return failure(409, 'blob_taken');
+  }
+  return { status: outcome === 'stored' ? 201 : 200, body: {} };
+}
+
+/** Hands out one sealed file chunk to whoever knows the blob id. */
+async function getChunk(request: Request, env: Env, blob: string, at: string): Promise<Response> {
+  const index = chunkIndex(at);
+  if (fixedBase64Url(blob, 16) === null || index === null) {
+    return json({ error: 'unknown_blob' }, 404);
+  }
+  if (!(await allowed(env.DOWNLOAD_LIMITER, request))) {
+    return json({ error: 'rate_limited' }, 429);
+  }
+  const chunk = await env.BLOB.getByName(blob).get(index);
+  if (chunk === null) {
+    return json({ error: 'unknown_blob' }, 404);
+  }
+  return new Response(chunk, {
+    headers: {
+      'content-type': 'application/octet-stream',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    },
+  });
 }
 
 /** Reads (GET) or clears (DELETE) a link slot (ADR-0014). */

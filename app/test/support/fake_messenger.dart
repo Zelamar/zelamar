@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:zelamar/src/messenger/messenger.dart';
+import 'package:zelamar/src/messenger/outgoing_file.dart';
 import 'package:zelamar/src/rust/api/session.dart';
 
 /// A messenger without network or native code, for widget tests. It keeps
@@ -203,6 +205,42 @@ class FakeMessenger extends Messenger {
     final id = 'chat-$username';
     addChat(id, '@$username');
     return id;
+  }
+
+  /// Files sent, as `chat: name`.
+  final sentFiles = <String>[];
+
+  /// What [openFile] answers, by message id.
+  final fileBytes = <String, Uint8List>{};
+
+  @override
+  Future<void> sendFile(String chat, OutgoingFile file) async {
+    _maybeFail();
+    sentFiles.add('$chat: ${file.name}');
+    final message = view(
+      ++_seq + 1000,
+      '',
+      outgoing: true,
+      file: FileView(
+        name: file.name,
+        mime: file.mime,
+        size: BigInt.from(file.bytes.length),
+        width: file.width,
+        height: file.height,
+        thumb: file.thumb,
+        durationMs: file.durationMs,
+      ),
+    );
+    fileBytes[message.id] = file.bytes;
+    conversations[chat] = [message, ...?conversations[chat]];
+    _changes.add(chat);
+    notifyListeners();
+  }
+
+  @override
+  Future<Uint8List> openFile(String chat, String message) async {
+    _maybeFail();
+    return fileBytes[message] ?? Uint8List(0);
   }
 
   /// Members of each chat, by chat id.
@@ -419,6 +457,7 @@ MessageView view(
   List<Reaction> reactions = const [],
   String author = '@bob',
   ChatEvent? event,
+  FileView? file,
 }) => MessageView(
   id: 'm$seq',
   seq: seq,
@@ -434,6 +473,7 @@ MessageView view(
   editable: outgoing && !deleted && event == null,
   author: outgoing ? 'You' : author,
   event: event,
+  file: file,
 );
 
 /// [message] with some fields replaced.
@@ -459,4 +499,5 @@ MessageView copyView(
   editable: editable ?? message.editable,
   author: message.author,
   event: message.event,
+  file: message.file,
 );

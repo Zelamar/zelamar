@@ -1,13 +1,16 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:zelamar/src/design/theme.dart';
 import 'package:zelamar/src/design/tokens.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
+import 'package:zelamar/src/messenger/outgoing_file.dart';
 import 'package:zelamar/src/rust/api/session.dart';
 import 'package:zelamar/src/ui/avatar.dart';
+import 'package:zelamar/src/ui/chat/attachments.dart';
 import 'package:zelamar/src/ui/chat/group_details_screen.dart';
 import 'package:zelamar/src/ui/chat/safety_code.dart';
 import 'package:zelamar/src/ui/words.dart';
@@ -123,6 +126,35 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       // Try again on the next scroll.
     } finally {
       _loadingOlder = false;
+    }
+  }
+
+  bool _attaching = false;
+
+  /// Picks a file, prepares it and sends it.
+  Future<void> _attach() async {
+    final picked = await openFile();
+    if (picked == null || !mounted) {
+      return;
+    }
+    setState(() => _attaching = true);
+    final say = ScaffoldMessenger.of(context);
+    try {
+      final bytes = await picked.readAsBytes();
+      if (bytes.length > maxFileBytes) {
+        say.showSnackBar(
+          const SnackBar(content: Text('Files can be up to 25 MB.')),
+        );
+        return;
+      }
+      final file = await OutgoingFile.prepare(picked.name, bytes);
+      await widget.messenger.sendFile(widget.chat, file);
+    } on MessengerFailure catch (failure) {
+      say.showSnackBar(SnackBar(content: Text(describeFailure(failure.code))));
+    } finally {
+      if (mounted) {
+        setState(() => _attaching = false);
+      }
     }
   }
 
@@ -452,6 +484,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                               message,
                               grouped: together(message, newer),
                               peer: title,
+                              loadFile: () => widget.messenger.openFile(
+                                widget.chat,
+                                message.id,
+                              ),
                               author:
                                   group &&
                                       !message.outgoing &&
@@ -477,6 +513,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 controller: _input,
                 onSend: _send,
                 onCancel: _cancelMode,
+                onAttach: _attaching ? null : _attach,
+                attaching: _attaching,
                 banner: switch ((_editing, _replying)) {
                   (final editing?, _) => ComposerBanner(
                     icon: Icons.edit_outlined,
@@ -625,12 +663,16 @@ class MessageBubble extends StatelessWidget {
     this.grouped = false,
     this.peer = '',
     this.author,
+    this.loadFile,
     this.onActions,
     this.onReact,
     super.key,
   });
 
   final MessageView message;
+
+  /// Fetches and opens the message's file, if it has one.
+  final FileLoader? loadFile;
 
   /// Who wrote it, shown above the text: in groups, for the first of a run.
   final String? author;
@@ -704,6 +746,19 @@ class MessageBubble extends StatelessWidget {
                 ),
               if (quote != null && !message.deleted)
                 QuoteBox(quote, author: quote.outgoing ? 'You' : peer),
+              if (message.file case final file? when !message.deleted)
+                Padding(
+                  padding: EdgeInsets.only(
+                    bottom: message.text.isEmpty ? ZSpace.xxs : ZSpace.xs,
+                  ),
+                  child: file.mime.startsWith('image/') && loadFile != null
+                      ? ImageAttachment(file: file, load: loadFile!)
+                      : FileAttachment(
+                          file: file,
+                          load: loadFile ?? () async => Uint8List(0),
+                          outgoing: outgoing,
+                        ),
+                ),
               Align(
                 alignment: Alignment.centerLeft,
                 widthFactor: 1,
@@ -1074,11 +1129,19 @@ class Composer extends StatefulWidget {
     required this.onSend,
     this.banner,
     this.onCancel,
+    this.onAttach,
+    this.attaching = false,
     super.key,
   });
 
   final TextEditingController controller;
   final Future<void> Function(String text) onSend;
+
+  /// Picks a file to send; `null` while one is on its way.
+  final VoidCallback? onAttach;
+
+  /// A file is being prepared and uploaded.
+  final bool attaching;
 
   /// What the next message answers or edits, shown above the field.
   final Widget? banner;
@@ -1172,6 +1235,28 @@ class _ComposerState extends State<Composer> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
+              SizedBox(
+                width: 44,
+                height: 44,
+                child: widget.attaching
+                    ? Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: colors.accent,
+                        ),
+                      )
+                    : IconButton(
+                        key: const Key('chat.attach'),
+                        tooltip: 'Attach a photo or file',
+                        onPressed: widget.onAttach,
+                        icon: Icon(
+                          Icons.attach_file_rounded,
+                          color: colors.textSecondary,
+                        ),
+                      ),
+              ),
+              const SizedBox(width: ZSpace.xs),
               Expanded(
                 child: TextField(
                   key: const Key('chat.input'),

@@ -31,6 +31,42 @@ pub const MAX_RECEIPT_IDS: usize = 256;
 /// Longest chat name, in characters.
 pub const MAX_NAME: usize = 64;
 
+/// Longest file name, in bytes of UTF-8.
+pub const MAX_FILE_NAME: usize = 255;
+
+/// Largest inline thumbnail, in bytes.
+pub const MAX_THUMBNAIL: usize = 8 * 1024;
+
+/// A file stored as an encrypted blob, and what it takes to fetch and open
+/// it (ADR-0016).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileRef {
+    /// Where the sealed chunks are stored.
+    #[serde(with = "serde_bytes")]
+    pub blob: [u8; 16],
+    /// Opens the chunks.
+    #[serde(with = "serde_bytes")]
+    pub key: [u8; 32],
+    /// Plaintext size in bytes.
+    pub size: u64,
+    /// The file's name, as the sender had it.
+    pub name: String,
+    /// Its media type, such as `image/jpeg` or `audio/mp4`.
+    pub mime: String,
+    /// Image width in pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    /// Image height in pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    /// A small JPEG preview of an image, shown before the file arrives.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "serde_bytes")]
+    pub thumb: Option<Vec<u8>>,
+    /// The length of a voice message or video.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u32>,
+}
+
 /// Longest body kind name accepted from the wire.
 const MAX_KIND: usize = 32;
 
@@ -122,6 +158,8 @@ pub enum Body {
     /// The author leaves the chat; the other members take all of the
     /// author's devices out of it (ADR-0015).
     Leave,
+    /// A file: a photo, a document, a voice message.
+    File(Box<FileRef>),
     /// A kind this Zelamar does not know yet (sent by a newer version).
     /// Received only; never sent.
     Unknown {
@@ -266,6 +304,7 @@ impl AppMessage {
             ),
             Body::Name { name } => ("name", fields(&NameFields { name: name.clone() })?),
             Body::Leave => ("leave", fields(&LeaveFields {})?),
+            Body::File(file) => ("file", fields(file.as_ref())?),
             Body::Unknown { .. } => {
                 return Err(CoreError::malformed(
                     "message content",
@@ -372,6 +411,7 @@ impl AppMessage {
                 let _: LeaveFields = parse(&wire.c)?;
                 Body::Leave
             }
+            "file" => Body::File(Box::new(parse(&wire.c)?)),
             other => Body::Unknown {
                 kind: other.to_owned(),
             },
@@ -421,6 +461,7 @@ impl AppMessage {
                     "username is not a normalized username",
                 ))
             }
+            Body::File(file) => validate_file(file),
             Body::Name { name }
                 if name.is_empty()
                     || name.trim() != name
@@ -435,6 +476,36 @@ impl AppMessage {
             _ => Ok(()),
         }
     }
+}
+
+fn validate_file(file: &FileRef) -> Result<()> {
+    let bad = |why| Err(CoreError::malformed("file", why));
+    if file.size > crate::attachment::MAX_FILE {
+        return bad("too large");
+    }
+    if file.name.is_empty()
+        || file.name.len() > MAX_FILE_NAME
+        || file
+            .name
+            .chars()
+            .any(|c| c.is_control() || c == '/' || c == '\\')
+    {
+        return bad("the name is empty, too long or not a plain name");
+    }
+    if file.mime.len() > 100 || !file.mime.bytes().all(|b| b.is_ascii_graphic()) {
+        return bad("the media type is not plain");
+    }
+    if file
+        .thumb
+        .as_ref()
+        .is_some_and(|thumb| thumb.len() > MAX_THUMBNAIL)
+    {
+        return bad("the thumbnail is too large");
+    }
+    if file.width.is_some_and(|w| w > 20_000) || file.height.is_some_and(|h| h > 20_000) {
+        return bad("the image is too large");
+    }
+    Ok(())
 }
 
 fn fields<T: Serialize>(value: &T) -> Result<ciborium::Value> {
@@ -495,6 +566,64 @@ mod tests {
             name: "Zəlamar friends 🌊".into(),
         });
         round_trip(Body::Leave);
+        round_trip(Body::File(Box::new(photo())));
+        round_trip(Body::File(Box::new(FileRef {
+            name: "voice.m4a".into(),
+            mime: "audio/mp4".into(),
+            width: None,
+            height: None,
+            thumb: None,
+            duration_ms: Some(4_200),
+            ..photo()
+        })));
+    }
+
+    fn photo() -> FileRef {
+        FileRef {
+            blob: [1; 16],
+            key: [2; 32],
+            size: 123_456,
+            name: "Pier at dusk.jpg".into(),
+            mime: "image/jpeg".into(),
+            width: Some(4032),
+            height: Some(3024),
+            thumb: Some(vec![0xFF, 0xD8, 0xFF]),
+            duration_ms: None,
+        }
+    }
+
+    #[test]
+    fn files_are_checked_before_they_are_trusted() {
+        let bad = [
+            FileRef {
+                name: String::new(),
+                ..photo()
+            },
+            FileRef {
+                name: "../etc/passwd".into(),
+                ..photo()
+            },
+            FileRef {
+                name: "a\nb".into(),
+                ..photo()
+            },
+            FileRef {
+                mime: "image/jpeg; x=y z".into(),
+                ..photo()
+            },
+            FileRef {
+                thumb: Some(vec![0; MAX_THUMBNAIL + 1]),
+                ..photo()
+            },
+            FileRef {
+                size: crate::attachment::MAX_FILE + 1,
+                ..photo()
+            },
+        ];
+        for file in bad {
+            let message = AppMessage::new(A, 1, Body::File(Box::new(file.clone())));
+            assert!(message.encode().is_err(), "{file:?}");
+        }
     }
 
     #[test]

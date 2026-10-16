@@ -21,5 +21,6 @@ decision gets a new ADR that supersedes the old one.
 | [0013](0013-app-architecture.md) | App architecture: one Messenger, a bridge session, keys in the OS vault | Accepted |
 | [0014](0014-linked-devices.md) | Linked devices: a typed code, a certificate, chats that heal themselves | Accepted |
 | [0015](0015-group-chats.md) | Group chats: one MLS group, names in messages, people leave by themselves | Accepted |
+| [0016](0016-attachments.md) | Attachments: encrypted chunks in Durable Objects, keys in the message | Accepted |
 
 New ADRs copy [`template.md`](template.md) and take the next number.

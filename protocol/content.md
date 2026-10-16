@@ -26,6 +26,7 @@ The plaintext of every MLS application message is one CBOR map:
 | `profile` | `username`: string, a normalized username (`directory.md`) | Who the author is; never shown as a message |
 | `name` | `name`: string, 1–64 characters, no surrounding spaces, no control characters | Names the chat (a group); shown as a line |
 | `leave` | none | The author leaves the chat; shown as a line |
+| `file` | as in `attachments.md` | A photo, document or voice message |
 
 Receivers MUST check, against their own history, that an `edit` or
 `delete` targets a message by the same author (same account); otherwise

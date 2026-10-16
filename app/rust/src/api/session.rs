@@ -5,13 +5,15 @@
 //! verifies or decides lives in the core (ADR-0012). Each method either
 //! builds a request ([`HttpCall`]) or reads the answer to one.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use zelamar_core::attachment::{self, BlobId, SealedFile};
 use zelamar_core::contacts::Contact;
-use zelamar_core::content::{AppMessage, Body, MessageId};
+use zelamar_core::content::{AppMessage, Body, FileRef, MessageId};
 use zelamar_core::device::{ChatId, ChatSummary, Device, Received, Settled};
 use zelamar_core::history::{HistoryEntry, SendStatus, StoredContent};
 use zelamar_core::identity::{AccountKey, DeviceId, SafetyCode};
@@ -209,9 +211,36 @@ pub struct MessageView {
     pub editable: bool,
     /// Who wrote it: `@bob`, or a short fingerprint for an unknown account.
     pub author: String,
+    /// A photo, a document or a voice message.
+    pub file: Option<FileView>,
     /// Something that happened to the chat, shown as a line rather than a
     /// bubble; `text` is empty then.
     pub event: Option<ChatEvent>,
+}
+
+/// A file in a message, as the chat screen shows it (ADR-0016).
+#[derive(Debug, Clone)]
+pub struct FileView {
+    pub name: String,
+    /// Media type, such as `image/jpeg`.
+    pub mime: String,
+    /// Bytes.
+    pub size: u64,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    /// A small JPEG to show until the file itself arrives.
+    pub thumb: Option<Vec<u8>>,
+    pub duration_ms: Option<u32>,
+}
+
+/// A file sealed and ready to upload: send every call, then
+/// [`Session::send_file`].
+#[derive(Debug, Clone)]
+pub struct PreparedFile {
+    /// Pass back to [`Session::send_file`].
+    pub blob: String,
+    /// One upload per chunk; read each answer with [`chunk_uploaded`].
+    pub calls: Vec<HttpCall>,
 }
 
 /// What kind of thing happened to a chat (ADR-0015).
@@ -327,6 +356,8 @@ pub struct Session {
     offer: Option<Offer>,
     /// The device that answered the offer, once one did.
     applicant: Option<Applicant>,
+    /// Files sealed for upload and not sent yet, by blob id.
+    prepared: HashMap<[u8; 16], SealedFile>,
 }
 
 /// A new device joining an existing account by its link code, before it
@@ -426,6 +457,12 @@ pub fn session_exists(directory: String) -> bool {
     store_path(&directory).exists()
 }
 
+/// Reads the answer to one of [`PreparedFile::calls`].
+#[flutter_rust_bridge::frb(sync)]
+pub fn chunk_uploaded(status: u16, body: Vec<u8>) -> Result<(), SessionError> {
+    Ok(attachment::uploaded(status, &body)?)
+}
+
 /// Deletes the store in `directory`: for an account that never got a name,
 /// before this device joins another account instead. Dispose its session
 /// first.
@@ -479,11 +516,12 @@ impl Session {
         Ok(Self::with(device))
     }
 
-    const fn with(device: Device) -> Self {
+    fn with(device: Device) -> Self {
         Self {
             device,
             offer: None,
             applicant: None,
+            prepared: HashMap::new(),
         }
     }
 
@@ -1070,6 +1108,94 @@ impl Session {
             .collect())
     }
 
+    /// Seals `bytes` for upload under a fresh key (ADR-0016).
+    pub fn prepare_file(&mut self, bytes: Vec<u8>) -> Result<PreparedFile, SessionError> {
+        let sealed = attachment::seal_file(&bytes)?;
+        let calls = (0..u32::try_from(sealed.chunks.len()).unwrap_or(0))
+            .map(|index| Ok(self.device.upload(&sealed, index)?.into()))
+            .collect::<Result<Vec<HttpCall>, SessionError>>()?;
+        let blob = URL_SAFE_NO_PAD.encode(sealed.blob.0);
+        self.prepared.insert(sealed.blob.0, sealed);
+        Ok(PreparedFile { blob, calls })
+    }
+
+    /// Sends a file already uploaded with [`Session::prepare_file`] into
+    /// `chat`, described by the rest.
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_file(
+        &mut self,
+        chat: String,
+        blob: String,
+        name: String,
+        mime: String,
+        width: Option<u32>,
+        height: Option<u32>,
+        thumb: Option<Vec<u8>>,
+        duration_ms: Option<u32>,
+    ) -> Result<(), SessionError> {
+        let id = blob_id(&blob)?;
+        let sealed = self
+            .prepared
+            .get(&id.0)
+            .ok_or_else(|| failure("unknown_blob", "prepare the file first"))?;
+        let file = FileRef {
+            blob: id.0,
+            key: *sealed.key,
+            size: sealed.size,
+            name,
+            mime,
+            width,
+            height,
+            thumb,
+            duration_ms,
+        };
+        let chat_id = self.find_chat(&chat)?;
+        let message = AppMessage::new(MessageId::random()?, now_ms(), Body::File(Box::new(file)));
+        self.device.send(&chat_id, &message)?;
+        self.prepared.remove(&id.0);
+        Ok(())
+    }
+
+    /// The calls that fetch the file in message `message` of `chat`.
+    pub fn download_calls(
+        &self,
+        chat: String,
+        message: String,
+    ) -> Result<Vec<HttpCall>, SessionError> {
+        let file = self.file(&chat, &message)?;
+        Ok((0..attachment::chunk_count(file.size))
+            .map(|index| attachment::download(BlobId(file.blob), index).into())
+            .collect())
+    }
+
+    /// Opens the file in message `message` of `chat` from the answers to
+    /// [`Session::download_calls`], in order.
+    pub fn open_file(
+        &self,
+        chat: String,
+        message: String,
+        answers: Vec<HttpAnswer>,
+    ) -> Result<Vec<u8>, SessionError> {
+        let file = self.file(&chat, &message)?;
+        let chunks = answers
+            .iter()
+            .map(|answer| attachment::downloaded(answer.status, &answer.body))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(attachment::open_file(&file.key, file.size, &chunks)?)
+    }
+
+    fn file(&self, chat: &str, message: &str) -> Result<FileRef, SessionError> {
+        let chat = self.find_chat(chat)?;
+        let stored = self
+            .device
+            .message(&chat, message_id(message)?)?
+            .ok_or_else(|| failure("unknown_message", "no such message"))?;
+        match stored.content {
+            StoredContent::File(file) if !stored.deleted => Ok(*file),
+            _ => Err(failure("not_a_file", "that message holds no file")),
+        }
+    }
+
     /// Every chat, most recently active first.
     pub fn chats(&self) -> Result<Vec<ChatPreview>, SessionError> {
         self.device
@@ -1103,8 +1229,13 @@ impl Session {
         account: zelamar_core::identity::AccountId,
         body: &Body,
     ) -> Option<Notice> {
+        let line;
         let text = match body {
             Body::Text { text } | Body::Reply { text, .. } => text,
+            Body::File(file) => {
+                line = file_line(file);
+                &line
+            }
             _ => return None,
         };
         let author = self
@@ -1149,11 +1280,26 @@ impl Session {
         let (text, unsupported, answers) = match &message.content {
             StoredContent::Text { text } => (text.clone(), false, None),
             StoredContent::Reply { text, to } => (text.clone(), false, Some(*to)),
-            StoredContent::Unknown { .. } | StoredContent::Named { .. } | StoredContent::Left => (
+            StoredContent::Unknown { .. }
+            | StoredContent::Named { .. }
+            | StoredContent::Left
+            | StoredContent::File(_) => (
                 String::new(),
                 matches!(message.content, StoredContent::Unknown { .. }),
                 None,
             ),
+        };
+        let file = match &message.content {
+            StoredContent::File(file) => Some(FileView {
+                name: file.name.clone(),
+                mime: file.mime.clone(),
+                size: file.size,
+                width: file.width,
+                height: file.height,
+                thumb: file.thumb.clone(),
+                duration_ms: file.duration_ms,
+            }),
+            _ => None,
         };
         let event = match &message.content {
             StoredContent::Named { name } => Some(ChatEvent {
@@ -1178,6 +1324,7 @@ impl Session {
                             StoredContent::Text { text } | StoredContent::Reply { text, .. } => {
                                 shorten(text, QUOTE_CHARS)
                             }
+                            StoredContent::File(file) => file_line(file),
                             StoredContent::Unknown { .. }
                             | StoredContent::Named { .. }
                             | StoredContent::Left => "Message unavailable".to_owned(),
@@ -1242,6 +1389,7 @@ impl Session {
                 )
             },
             event,
+            file,
         })
     }
 
@@ -1267,6 +1415,26 @@ fn master(bytes: &[u8]) -> Result<MasterKey, SessionError> {
 
 fn chat_key(chat: &ChatId) -> String {
     URL_SAFE_NO_PAD.encode(chat.as_bytes())
+}
+
+/// A file in one line, for quotes and notifications.
+fn file_line(file: &FileRef) -> String {
+    if file.mime.starts_with("image/") {
+        "📷 Photo".to_owned()
+    } else if file.mime.starts_with("audio/") && file.duration_ms.is_some() {
+        "🎤 Voice message".to_owned()
+    } else {
+        format!("📎 {}", file.name)
+    }
+}
+
+fn blob_id(text: &str) -> Result<BlobId, SessionError> {
+    URL_SAFE_NO_PAD
+        .decode(text)
+        .ok()
+        .and_then(|bytes| <[u8; 16]>::try_from(bytes).ok())
+        .map(BlobId)
+        .ok_or_else(|| failure("malformed", "not a blob id"))
 }
 
 /// The directory entries behind `invitees`.

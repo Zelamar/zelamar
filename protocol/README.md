@@ -19,7 +19,7 @@ migration). Drafted in Phase 2 together with the core implementation.
 | [`content.md`](content.md) ✅ | What travels inside an MLS application message |
 | [`directory.md`](directory.md) ✅ | `@username` registry, signed device requests, KeyPackage publication and retrieval |
 | [`linking.md`](linking.md) ✅ | Linking a new device with a typed code; chats that follow the account |
-| `attachments.md` | Client-side encrypted files: upload, reference, expiry |
+| [`attachments.md`](attachments.md) ✅ | Client-side encrypted files: sealed chunks, the `file` message, the blob store, expiry |
 
 ## Test vectors
 

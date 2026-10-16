@@ -15,12 +15,14 @@
       { "name": "INVITES", "class_name": "Invites" },
       { "name": "GROUP", "class_name": "Group" },
       { "name": "LINK", "class_name": "Link" },
+      { "name": "BLOB", "class_name": "Blob" },
     ],
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Account", "Mailbox", "Invites"] },
     { "tag": "v2", "new_sqlite_classes": ["Group"] },
     { "tag": "v3", "new_sqlite_classes": ["Link"] },
+    { "tag": "v4", "new_sqlite_classes": ["Blob"] },
   ],
   // Proof-of-work difficulty for claiming a username (protocol/directory.md).
   // INVITE_KEY (hex, 32+ bytes) is a secret: `wrangler secret put INVITE_KEY`.
@@ -32,6 +34,13 @@
     { "name": "CLAIM_LIMITER", "namespace_id": "1003", "simple": { "limit": 5, "period": 60 } },
     // Both devices poll their link slot every few seconds, maybe from one address.
     { "name": "LINK_LIMITER", "namespace_id": "1004", "simple": { "limit": 90, "period": 60 } },
+    // File chunks of 1 MiB: a 25 MiB file is 25 requests.
+    { "name": "UPLOAD_LIMITER", "namespace_id": "1005", "simple": { "limit": 120, "period": 60 } },
+    {
+      "name": "DOWNLOAD_LIMITER",
+      "namespace_id": "1006",
+      "simple": { "limit": 600, "period": 60 },
+    },
   ],
   "observability": {
     "enabled": true,

@@ -7,6 +7,7 @@ import 'package:zelamar/src/messenger/key_vault.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/messenger/notifier.dart';
 import 'package:zelamar/src/messenger/os_vault.dart';
+import 'package:zelamar/src/messenger/outgoing_file.dart';
 import 'package:zelamar/src/messenger/transport.dart';
 import 'package:zelamar/src/rust/api/session.dart';
 import 'package:zelamar/src/rust/api/session.dart'
@@ -86,6 +87,10 @@ class LiveMessenger extends Messenger {
 
   /// A device just approved: healing waits until it has registered.
   String? _awaitedDevice;
+
+  /// Files opened lately, by `chat/message`, oldest first.
+  final _files = <String, Uint8List>{};
+  static const int _filesKept = 64 * 1024 * 1024;
 
   @override
   MessengerPhase get phase => _phase;
@@ -462,6 +467,56 @@ class LiveMessenger extends Messenger {
     await _ready.sendText(chat: chat, text: text);
     await _refreshChats(chat);
     unawaited(_flush());
+  });
+
+  @override
+  Future<void> sendFile(String chat, OutgoingFile file) => _guard(() async {
+    final session = _ready;
+    final prepared = await session.prepareFile(bytes: file.bytes);
+    for (final call in prepared.calls) {
+      final (status, body) = await transport.send(call);
+      chunkUploaded(status: status, body: body);
+    }
+    await session.sendFile(
+      chat: chat,
+      blob: prepared.blob,
+      name: file.name,
+      mime: file.mime,
+      width: file.width,
+      height: file.height,
+      thumb: file.thumb,
+      durationMs: file.durationMs,
+    );
+    await _refreshChats(chat);
+    unawaited(_flush());
+  });
+
+  @override
+  Future<Uint8List> openFile(String chat, String message) => _guard(() async {
+    final key = '$chat/$message';
+    final kept = _files.remove(key);
+    if (kept != null) {
+      _files[key] = kept;
+      return kept;
+    }
+    final session = _ready;
+    final calls = await session.downloadCalls(chat: chat, message: message);
+    final answers = <HttpAnswer>[];
+    for (final call in calls) {
+      final (status, body) = await transport.send(call);
+      answers.add(HttpAnswer(status: status, body: body));
+    }
+    final bytes = await session.openFile(
+      chat: chat,
+      message: message,
+      answers: answers,
+    );
+    _files[key] = bytes;
+    var total = _files.values.fold<int>(0, (sum, file) => sum + file.length);
+    while (total > _filesKept && _files.length > 1) {
+      total -= _files.remove(_files.keys.first)!.length;
+    }
+    return bytes;
   });
 
   @override

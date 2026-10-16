@@ -7,8 +7,8 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `chat_key`, `claim_with`, `device_id`, `device_key`, `entries`, `failure`, `find_chat`, `joining`, `master`, `member_title`, `message_id`, `notice`, `now_ms`, `offer`, `own_name`, `preview`, `send_body`, `shorten`, `store_path`, `title`, `view`, `with`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
+// These functions are ignored because they are not marked as `pub`: `blob_id`, `chat_key`, `claim_with`, `device_id`, `device_key`, `entries`, `failure`, `file_line`, `file`, `find_chat`, `joining`, `master`, `member_title`, `message_id`, `notice`, `now_ms`, `offer`, `own_name`, `preview`, `send_body`, `shorten`, `store_path`, `title`, `view`, `with`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
 
 /// A fresh random master key for a new session. Keep it in the platform's
 /// secure storage; it opens the session's store.
@@ -17,6 +17,12 @@ Uint8List newMasterKey() => RustLib.instance.api.crateApiSessionNewMasterKey();
 /// Whether `directory` already holds a session.
 bool sessionExists({required String directory}) =>
     RustLib.instance.api.crateApiSessionSessionExists(directory: directory);
+
+/// Reads the answer to one of [`PreparedFile::calls`].
+void chunkUploaded({required int status, required List<int> body}) => RustLib
+    .instance
+    .api
+    .crateApiSessionChunkUploaded(status: status, body: body);
 
 /// Deletes the store in `directory`: for an account that never got a name,
 /// before this device joins another account instead. Dispose its session
@@ -160,6 +166,12 @@ abstract class Session implements RustOpaqueInterface {
   /// Lists this account's devices, to heal chats (ADR-0014).
   HttpCall devicesCall();
 
+  /// The calls that fetch the file in message `message` of `chat`.
+  Future<List<HttpCall>> downloadCalls({
+    required String chat,
+    required String message,
+  });
+
   /// Replaces the text of one of the user's own messages, for everyone.
   Future<void> editText({
     required String chat,
@@ -231,8 +243,19 @@ abstract class Session implements RustOpaqueInterface {
   /// Opens one binary WebSocket message from the mailbox.
   Future<InboxEvent> openEnvelope({required List<int> bytes});
 
+  /// Opens the file in message `message` of `chat` from the answers to
+  /// [`Session::download_calls`], in order.
+  Future<Uint8List> openFile({
+    required String chat,
+    required String message,
+    required List<HttpAnswer> answers,
+  });
+
   /// Everything waiting to go out, oldest first.
   Future<List<PendingSend>> pendingSends();
+
+  /// Seals `bytes` for upload under a fresh key (ADR-0016).
+  Future<PreparedFile> prepareFile({required List<int> bytes});
 
   /// Sets the user's reaction to a message, or with `None` removes it.
   Future<void> react({
@@ -278,6 +301,19 @@ abstract class Session implements RustOpaqueInterface {
   /// twelve groups of five digits; `None` in a chat with more people or
   /// nobody else. Two people compare it to know no one sits between them.
   Future<List<String>?> safetyCode({required String chat});
+
+  /// Sends a file already uploaded with [`Session::prepare_file`] into
+  /// `chat`, described by the rest.
+  Future<void> sendFile({
+    required String chat,
+    required String blob,
+    required String name,
+    required String mime,
+    int? width,
+    int? height,
+    Uint8List? thumb,
+    int? durationMs,
+  });
 
   /// Writes `text` into `chat`. It goes out with the next
   /// [`Session::pending_sends`].
@@ -441,6 +477,56 @@ class DeviceView {
           id == other.id &&
           label == other.label &&
           thisDevice == other.thisDevice;
+}
+
+/// A file in a message, as the chat screen shows it (ADR-0016).
+class FileView {
+  final String name;
+
+  /// Media type, such as `image/jpeg`.
+  final String mime;
+
+  /// Bytes.
+  final BigInt size;
+  final int? width;
+  final int? height;
+
+  /// A small JPEG to show until the file itself arrives.
+  final Uint8List? thumb;
+  final int? durationMs;
+
+  const FileView({
+    required this.name,
+    required this.mime,
+    required this.size,
+    this.width,
+    this.height,
+    this.thumb,
+    this.durationMs,
+  });
+
+  @override
+  int get hashCode =>
+      name.hashCode ^
+      mime.hashCode ^
+      size.hashCode ^
+      width.hashCode ^
+      height.hashCode ^
+      thumb.hashCode ^
+      durationMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FileView &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          mime == other.mime &&
+          size == other.size &&
+          width == other.width &&
+          height == other.height &&
+          thumb == other.thumb &&
+          durationMs == other.durationMs;
 }
 
 /// What healing found: every registered device of the account, the chats
@@ -742,6 +828,9 @@ class MessageView {
   /// Who wrote it: `@bob`, or a short fingerprint for an unknown account.
   final String author;
 
+  /// A photo, a document or a voice message.
+  final FileView? file;
+
   /// Something that happened to the chat, shown as a line rather than a
   /// bubble; `text` is empty then.
   final ChatEvent? event;
@@ -760,6 +849,7 @@ class MessageView {
     required this.reactions,
     required this.editable,
     required this.author,
+    this.file,
     this.event,
   });
 
@@ -778,6 +868,7 @@ class MessageView {
       reactions.hashCode ^
       editable.hashCode ^
       author.hashCode ^
+      file.hashCode ^
       event.hashCode;
 
   @override
@@ -798,6 +889,7 @@ class MessageView {
           reactions == other.reactions &&
           editable == other.editable &&
           author == other.author &&
+          file == other.file &&
           event == other.event;
 }
 
@@ -841,6 +933,29 @@ class PendingSend {
           runtimeType == other.runtimeType &&
           id == other.id &&
           call == other.call;
+}
+
+/// A file sealed and ready to upload: send every call, then
+/// [`Session::send_file`].
+class PreparedFile {
+  /// Pass back to [`Session::send_file`].
+  final String blob;
+
+  /// One upload per chunk; read each answer with [`chunk_uploaded`].
+  final List<HttpCall> calls;
+
+  const PreparedFile({required this.blob, required this.calls});
+
+  @override
+  int get hashCode => blob.hashCode ^ calls.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PreparedFile &&
+          runtimeType == other.runtimeType &&
+          blob == other.blob &&
+          calls == other.calls;
 }
 
 /// The message a reply answers, as a short quote.

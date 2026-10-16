@@ -125,6 +125,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ChatEvent dco_decode_box_autoadd_chat_event(dynamic raw);
 
   @protected
+  FileView dco_decode_box_autoadd_file_view(dynamic raw);
+
+  @protected
   HttpAnswer dco_decode_box_autoadd_http_answer(dynamic raw);
 
   @protected
@@ -143,6 +146,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Quote dco_decode_box_autoadd_quote(dynamic raw);
 
   @protected
+  int dco_decode_box_autoadd_u_32(dynamic raw);
+
+  @protected
   ChatEvent dco_decode_chat_event(dynamic raw);
 
   @protected
@@ -159,6 +165,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   DeviceView dco_decode_device_view(dynamic raw);
+
+  @protected
+  FileView dco_decode_file_view(dynamic raw);
 
   @protected
   HealPlan dco_decode_heal_plan(dynamic raw);
@@ -215,6 +224,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<HttpAnswer> dco_decode_list_http_answer(dynamic raw);
 
   @protected
+  List<HttpCall> dco_decode_list_http_call(dynamic raw);
+
+  @protected
   List<HttpHeader> dco_decode_list_http_header(dynamic raw);
 
   @protected
@@ -269,6 +281,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ChatEvent? dco_decode_opt_box_autoadd_chat_event(dynamic raw);
 
   @protected
+  FileView? dco_decode_opt_box_autoadd_file_view(dynamic raw);
+
+  @protected
   HttpAnswer? dco_decode_opt_box_autoadd_http_answer(dynamic raw);
 
   @protected
@@ -287,6 +302,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Quote? dco_decode_opt_box_autoadd_quote(dynamic raw);
 
   @protected
+  int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
+
+  @protected
   List<String>? dco_decode_opt_list_String(dynamic raw);
 
   @protected
@@ -294,6 +312,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PendingSend dco_decode_pending_send(dynamic raw);
+
+  @protected
+  PreparedFile dco_decode_prepared_file(dynamic raw);
 
   @protected
   Quote dco_decode_quote(dynamic raw);
@@ -410,6 +431,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ChatEvent sse_decode_box_autoadd_chat_event(SseDeserializer deserializer);
 
   @protected
+  FileView sse_decode_box_autoadd_file_view(SseDeserializer deserializer);
+
+  @protected
   HttpAnswer sse_decode_box_autoadd_http_answer(SseDeserializer deserializer);
 
   @protected
@@ -430,6 +454,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Quote sse_decode_box_autoadd_quote(SseDeserializer deserializer);
 
   @protected
+  int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
   ChatEvent sse_decode_chat_event(SseDeserializer deserializer);
 
   @protected
@@ -446,6 +473,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   DeviceView sse_decode_device_view(SseDeserializer deserializer);
+
+  @protected
+  FileView sse_decode_file_view(SseDeserializer deserializer);
 
   @protected
   HealPlan sse_decode_heal_plan(SseDeserializer deserializer);
@@ -500,6 +530,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<HttpAnswer> sse_decode_list_http_answer(SseDeserializer deserializer);
+
+  @protected
+  List<HttpCall> sse_decode_list_http_call(SseDeserializer deserializer);
 
   @protected
   List<HttpHeader> sse_decode_list_http_header(SseDeserializer deserializer);
@@ -560,6 +593,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  FileView? sse_decode_opt_box_autoadd_file_view(SseDeserializer deserializer);
+
+  @protected
   HttpAnswer? sse_decode_opt_box_autoadd_http_answer(
     SseDeserializer deserializer,
   );
@@ -584,6 +620,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Quote? sse_decode_opt_box_autoadd_quote(SseDeserializer deserializer);
 
   @protected
+  int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
   List<String>? sse_decode_opt_list_String(SseDeserializer deserializer);
 
   @protected
@@ -591,6 +630,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PendingSend sse_decode_pending_send(SseDeserializer deserializer);
+
+  @protected
+  PreparedFile sse_decode_prepared_file(SseDeserializer deserializer);
 
   @protected
   Quote sse_decode_quote(SseDeserializer deserializer);
@@ -723,6 +765,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_file_view(
+    FileView self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_http_answer(
     HttpAnswer self,
     SseSerializer serializer,
@@ -753,6 +801,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_box_autoadd_quote(Quote self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
+
+  @protected
   void sse_encode_chat_event(ChatEvent self, SseSerializer serializer);
 
   @protected
@@ -769,6 +820,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_device_view(DeviceView self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_file_view(FileView self, SseSerializer serializer);
 
   @protected
   void sse_encode_heal_plan(HealPlan self, SseSerializer serializer);
@@ -838,6 +892,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     List<HttpAnswer> self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_list_http_call(List<HttpCall> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_http_header(
@@ -916,6 +973,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_file_view(
+    FileView? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_http_answer(
     HttpAnswer? self,
     SseSerializer serializer,
@@ -949,6 +1012,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_opt_box_autoadd_quote(Quote? self, SseSerializer serializer);
 
   @protected
+  void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);
+
+  @protected
   void sse_encode_opt_list_String(List<String>? self, SseSerializer serializer);
 
   @protected
@@ -959,6 +1025,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_pending_send(PendingSend self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_prepared_file(PreparedFile self, SseSerializer serializer);
 
   @protected
   void sse_encode_quote(Quote self, SseSerializer serializer);

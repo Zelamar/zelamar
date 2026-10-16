@@ -17,11 +17,15 @@ export const TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /** Envelopes sent to one connection and not yet acknowledged, at most. */
 export const WINDOW = 64;
 
+/** Bytes of file chunks one mailbox may upload per UTC day (ADR-0016). */
+export const UPLOAD_QUOTA = 512 * 1024 * 1024;
+
 /** Acknowledgement frame tag: `0x01` followed by 16-byte envelope ids. */
 const ACK = 0x01;
 
 export type ClaimOutcome = 'claimed' | 'same' | 'taken';
 export type DepositOutcome = 'queued' | 'duplicate' | 'unknown' | 'full';
+export type UploadAllowance = 'allowed' | 'unauthorized' | 'over_quota';
 
 /** Per-connection state that survives hibernation. */
 interface Cursor {
@@ -45,6 +49,40 @@ export class Mailbox extends DurableObject<Env> {
     }
     this.ctx.storage.sql.exec('INSERT INTO owner (id, secret_hash) VALUES (1, ?)', secretHash);
     return 'claimed';
+  }
+
+  /**
+   * Whether the holder of `secret` owns this mailbox and may upload `bytes`
+   * more of file chunks today; counts them if so.
+   */
+  async allowUpload(secret: ArrayBuffer, bytes: number): Promise<UploadAllowance> {
+    const owner = this.owner();
+    if (
+      owner === null ||
+      secret.byteLength !== 32 ||
+      !sameBytes(await sha256(new Uint8Array(secret)), owner)
+    ) {
+      return 'unauthorized';
+    }
+    const sql = this.ctx.storage.sql;
+    sql.exec(
+      'CREATE TABLE IF NOT EXISTS uploads (id INTEGER PRIMARY KEY CHECK (id = 1), day INTEGER NOT NULL, bytes INTEGER NOT NULL)',
+    );
+    const today = Math.floor(Date.now() / 86_400_000);
+    const row = sql
+      .exec<{ day: number; bytes: number }>('SELECT day, bytes FROM uploads WHERE id = 1')
+      .toArray()[0];
+    const used = row?.day === today ? row.bytes : 0;
+    if (used + bytes > UPLOAD_QUOTA) {
+      return 'over_quota';
+    }
+    sql.exec(
+      `INSERT INTO uploads (id, day, bytes) VALUES (1, ?, ?)
+       ON CONFLICT (id) DO UPDATE SET day = excluded.day, bytes = excluded.bytes`,
+      today,
+      used + bytes,
+    );
+    return 'allowed';
   }
 
   /** Queues one envelope and pushes it to live connections. */

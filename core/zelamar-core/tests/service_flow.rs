@@ -53,6 +53,8 @@ struct Service {
     groups: HashMap<String, (u64, [u8; 16])>,
     /// Link slots: the sealed request and, once approved, the answer.
     links: HashMap<String, (Vec<u8>, Option<Vec<u8>>)>,
+    /// Stored file chunks, by blob and index.
+    blobs: HashMap<(String, String), Vec<u8>>,
 }
 
 /// One delivery frame read from the start of `frame`, and its length.
@@ -84,6 +86,30 @@ impl Service {
         let unknown = || answer(404, &json!({ "error": "unknown_account" }));
         if let ["links", slot @ ..] = parts.as_slice() {
             return self.link_slot(request, slot);
+        }
+        if let ["blobs", blob, index] = parts.as_slice() {
+            let key = ((*blob).to_owned(), (*index).to_owned());
+            return match request.method {
+                "PUT" => {
+                    let header = |name: &str| {
+                        request
+                            .headers
+                            .iter()
+                            .find(|(header, _)| *header == name)
+                            .map(|(_, value)| value.clone())
+                    };
+                    assert!(
+                        header("authorization").is_some() && header("zelamar-mailbox").is_some()
+                    );
+                    assert!(header("zelamar-chunks").is_some());
+                    self.blobs.insert(key, request.body.clone());
+                    answer(201, &json!({}))
+                }
+                _ => self.blobs.get(&key).map_or_else(
+                    || answer(404, &json!({ "error": "unknown_blob" })),
+                    |chunk| (200, chunk.clone()),
+                ),
+            };
         }
         match (request.method, parts.as_slice()) {
             ("POST", ["accounts"]) => {
@@ -1333,4 +1359,78 @@ fn people_leave_a_group_and_hear_nothing_more() {
         texts(&alice.read(&mut service)),
         vec![(bob.author(), "Just us".to_owned())]
     );
+}
+
+#[test]
+fn a_file_travels_sealed_and_opens_only_for_the_chat() {
+    use zelamar_core::attachment::{self, BlobId};
+    use zelamar_core::content::FileRef;
+
+    let mut service = Service::default();
+    let mut alice = Person::join(&mut service, "alice");
+    let mut bob = Person::join(&mut service, "bob");
+    let chat = alice.start_chat_with(&mut service, "bob");
+    alice.flush(&mut service);
+    bob.read(&mut service);
+
+    // Alice seals and uploads a 2.5 MiB photo, then sends the message.
+    let photo: Vec<u8> = (0..(5 * attachment::CHUNK / 2))
+        .map(|i| u8::try_from(i % 241).expect("byte"))
+        .collect();
+    let sealed = attachment::seal_file(&photo).expect("seal");
+    assert_eq!(sealed.chunks.len(), 3);
+    for index in 0..3 {
+        let (status, body) = service.handle(&alice.device.upload(&sealed, index).expect("upload"));
+        attachment::uploaded(status, &body).expect("uploaded");
+    }
+    for chunk in service.blobs.values() {
+        assert!(
+            !chunk
+                .windows(64)
+                .any(|w| photo.windows(64).next() == Some(w)),
+            "the service holds no plaintext"
+        );
+    }
+    let file = FileRef {
+        blob: sealed.blob.0,
+        key: *sealed.key,
+        size: sealed.size,
+        name: "pier.jpg".into(),
+        mime: "image/jpeg".into(),
+        width: Some(4032),
+        height: Some(3024),
+        thumb: Some(vec![0xFF, 0xD8]),
+        duration_ms: None,
+    };
+    let message = AppMessage::new(MessageId([9; 16]), NOW, Body::File(Box::new(file)));
+    alice.device.send(&chat, &message).expect("send");
+    alice.flush(&mut service);
+
+    // Bob gets the message, fetches the chunks and opens the photo.
+    let got = bob.read(&mut service);
+    let Some(Received::Message { message, .. }) = got.last() else {
+        panic!("expected the file message, got {got:?}");
+    };
+    let Body::File(file) = &message.body else {
+        panic!("expected a file, got {:?}", message.body);
+    };
+    let chunks: Vec<Vec<u8>> = (0..attachment::chunk_count(file.size))
+        .map(|index| {
+            let (status, body) = service.handle(&attachment::download(BlobId(file.blob), index));
+            attachment::downloaded(status, &body).expect("chunk")
+        })
+        .collect();
+    assert_eq!(
+        attachment::open_file(&file.key, file.size, &chunks).expect("open"),
+        photo
+    );
+    let stored = &bob.device.history(&chat, None, 1).expect("history")[0].message;
+    assert!(matches!(&stored.content, StoredContent::File(f) if f.name == "pier.jpg"));
+
+    // A missing blob is a clear refusal, not garbage.
+    let (status, body) = service.handle(&attachment::download(BlobId([0; 16]), 0));
+    assert!(matches!(
+        attachment::downloaded(status, &body),
+        Err(CoreError::Service { code, .. }) if code == "unknown_blob"
+    ));
 }

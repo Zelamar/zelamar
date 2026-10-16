@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -7,6 +8,7 @@ import 'package:zelamar/src/messenger/key_vault.dart';
 import 'package:zelamar/src/messenger/live_messenger.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/messenger/notifier.dart';
+import 'package:zelamar/src/messenger/outgoing_file.dart';
 import 'package:zelamar/src/messenger/transport.dart';
 import 'package:zelamar/src/rust/api/session.dart';
 import 'package:zelamar/src/rust/frb_generated.dart';
@@ -195,6 +197,21 @@ void main() {
         () => crewAt(alice).last?.event?.kind == ChatEventKind.left,
         'Alice sees Bob leave',
       );
+      // A file travels sealed and opens on the other side.
+      final pdf = Uint8List.fromList(
+        List.generate(1500 * 1024, (i) => i % 251),
+      );
+      await alice.sendFile(
+        chat,
+        OutgoingFile(name: 'Plan.pdf', bytes: pdf, mime: 'application/pdf'),
+      );
+      await until(
+        () => bob.chats.single.last?.file?.name == 'Plan.pdf',
+        'Bob receives the file',
+      );
+      final received = bob.chats.single.last!;
+      expect(await bob.openFile(chat, received.id), pdf);
+
       final deadline = DateTime.now().add(const Duration(seconds: 30));
       while ((await alice.members(crew)).isNotEmpty) {
         if (DateTime.now().isAfter(deadline)) {

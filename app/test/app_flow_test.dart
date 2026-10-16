@@ -358,6 +358,47 @@ void main() {
     });
   });
 
+  group('files', () {
+    testWidgets('photos and files show in bubbles', (tester) async {
+      final messenger =
+          FakeMessenger(phaseValue: MessengerPhase.ready, usernameValue: 'ada')
+            ..addChat(
+              'c1',
+              '@bob',
+              messages: [
+                view(
+                  2,
+                  '',
+                  file: FileView(
+                    name: 'Plan.pdf',
+                    mime: 'application/pdf',
+                    size: BigInt.from(2516582),
+                  ),
+                ),
+                view(
+                  1,
+                  '',
+                  file: FileView(
+                    name: 'pier.jpg',
+                    mime: 'image/jpeg',
+                    size: BigInt.from(300000),
+                    width: 400,
+                    height: 300,
+                  ),
+                ),
+              ],
+            );
+      await pumpApp(tester, messenger: messenger);
+      await tester.tap(find.byKey(const Key('chats.tile.c1')));
+      await pumpAWhile(tester);
+      expect(find.byKey(const Key('chat.image')), findsOneWidget);
+      expect(find.byKey(const Key('chat.file')), findsOneWidget);
+      expect(find.text('Plan.pdf'), findsOneWidget);
+      expect(find.text('2.4 MB'), findsOneWidget);
+      expect(find.byKey(const Key('chat.attach')), findsOneWidget);
+    });
+  });
+
   group('chat requests', () {
     Future<FakeMessenger> openRequest(WidgetTester tester) async {
       final messenger =

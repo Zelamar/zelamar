@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:zelamar/src/messenger/outgoing_file.dart';
 import 'package:zelamar/src/rust/api/session.dart';
 
 /// Where the app is in its life.
@@ -154,6 +155,14 @@ abstract class Messenger extends ChangeNotifier {
 
   /// Sends [text] into [chat].
   Future<void> sendText(String chat, String text);
+
+  /// Sends [file] into [chat]: sealed here, uploaded, then announced in a
+  /// message (ADR-0016).
+  Future<void> sendFile(String chat, OutgoingFile file);
+
+  /// The file in [message] of [chat], fetched and opened; kept in memory
+  /// for a while.
+  Future<Uint8List> openFile(String chat, String message);
 
   /// Sends [text] into [chat] as an answer to message [to].
   Future<void> replyText(String chat, String to, String text);

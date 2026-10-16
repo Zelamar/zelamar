@@ -8,6 +8,7 @@
 //! talks to it through a thin bridge crate (`app/rust`).
 //!
 //! Modules:
+//! - [`attachment`]: files sealed in chunks for the blob store;
 //! - [`identity`]: account keys and device certificates;
 //! - [`device`]: a device as a member of MLS chats;
 //! - [`contacts`]: who is who, and which usernames are confirmed;
@@ -18,6 +19,7 @@
 //! - [`link`]: linking a new device to an account;
 //! - [`store`]: encrypted persistence of a device.
 
+pub mod attachment;
 pub mod contacts;
 pub mod content;
 pub mod device;

@@ -34,6 +34,18 @@ String describeFailure(String code) => switch (code) {
   _ => 'Something went wrong. Please try again.',
 };
 
+/// A file size people read: `512 B`, `48 KB`, `2.4 MB`.
+String describeSize(int bytes) {
+  if (bytes < 1024) {
+    return '$bytes B';
+  }
+  if (bytes < 1024 * 1024) {
+    return '${(bytes / 1024).round()} KB';
+  }
+  final megabytes = bytes / (1024 * 1024);
+  return '${megabytes.toStringAsFixed(megabytes < 10 ? 1 : 0)} MB';
+}
+
 /// A line for something that happened to a chat.
 String describeEvent(String author, ChatEvent event) => switch (event.kind) {
   ChatEventKind.named => '$author named the group “${event.name ?? ''}”',
