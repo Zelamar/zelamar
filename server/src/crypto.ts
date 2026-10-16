@@ -73,9 +73,10 @@ export async function requestPayload(
   path: string,
   timestamp: number,
   body: Uint8Array,
+  context = 'zelamar/request/v0',
 ): Promise<Uint8Array> {
   return concat(
-    utf8('zelamar/request/v0'),
+    utf8(context),
     utf8(method),
     new Uint8Array([0]),
     utf8(path),

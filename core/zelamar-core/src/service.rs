@@ -45,6 +45,7 @@ pub const MAX_RECIPIENTS: usize = 255;
 const CLAIM_CONTEXT: &[u8] = b"zelamar/claim/v0";
 const WORK_CONTEXT: &[u8] = b"zelamar/work/v0";
 const REQUEST_CONTEXT: &[u8] = b"zelamar/request/v0";
+const ACCOUNT_REQUEST_CONTEXT: &[u8] = b"zelamar/account-request/v0";
 const DELIVERY_MAGIC: &[u8] = b"ZD";
 const COMMIT_MAGIC: &[u8] = b"ZC";
 const DELIVERY_VERSION: u8 = 0;
@@ -213,6 +214,15 @@ pub fn key_lookup(username: &str) -> Result<Request> {
         headers: Vec::new(),
         body: Vec::new(),
     })
+}
+
+/// Reads the answer to [`Device::remove_device`].
+///
+/// # Errors
+///
+/// [`CoreError::Service`] (`unauthorized`, ...).
+pub fn device_removed(status: u16, body: &[u8]) -> Result<()> {
+    expect_success(status, body, &[200])
 }
 
 /// Asks the directory which devices `username` has registered, without
@@ -607,11 +617,36 @@ impl Device {
         })
     }
 
+    /// Takes `device`, one of this account's, out of the directory
+    /// (ADR-0014): this device itself, or, from the device holding the
+    /// account key, any other. Chats then lose it as they heal.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Unauthenticated`] for another device without the
+    /// account key, [`CoreError::Malformed`] for a bad username, or a
+    /// crypto error.
+    pub fn remove_device(&self, username: &str, device: DeviceId, now_ms: u64) -> Result<Request> {
+        let username = normalize_username(username)?;
+        let path = device_path(&username, device);
+        if device == self.id() {
+            return self.signed("DELETE", path, &json!({}), now_ms);
+        }
+        let account = self.account_key().ok_or(CoreError::Unauthenticated(
+            "only the device holding the account key can remove other devices",
+        ))?;
+        let mut request = json_request("DELETE", path, &json!({}))?;
+        let signature =
+            account.sign(&request_payload(ACCOUNT_REQUEST_CONTEXT, &request, now_ms))?;
+        request.headers.extend([
+            ("zelamar-timestamp", now_ms.to_string()),
+            ("zelamar-account-signature", b64(&signature)),
+        ]);
+        Ok(request)
+    }
+
     fn device_path(&self, username: &str) -> String {
-        format!(
-            "/v0/accounts/{username}/devices/{}",
-            b64(self.id().as_bytes())
-        )
+        device_path(username, self.id())
     }
 
     /// A request signed by this device (`protocol/directory.md`).
@@ -623,17 +658,7 @@ impl Device {
         now_ms: u64,
     ) -> Result<Request> {
         let mut request = json_request(method, path, body)?;
-        let payload = [
-            REQUEST_CONTEXT,
-            method.as_bytes(),
-            &[0],
-            request.path.as_bytes(),
-            &[0],
-            &now_ms.to_be_bytes(),
-            &Sha256::digest(&request.body),
-        ]
-        .concat();
-        let signature = self.sign(&payload)?;
+        let signature = self.sign(&request_payload(REQUEST_CONTEXT, &request, now_ms))?;
         request.headers.extend([
             ("zelamar-certificate", b64(&self.certificate().encode())),
             ("zelamar-timestamp", now_ms.to_string()),
@@ -641,6 +666,24 @@ impl Device {
         ]);
         Ok(request)
     }
+}
+
+fn device_path(username: &str, device: DeviceId) -> String {
+    format!("/v0/accounts/{username}/devices/{}", b64(device.as_bytes()))
+}
+
+/// What a signed request's signature covers (`protocol/directory.md`).
+fn request_payload(context: &[u8], request: &Request, now_ms: u64) -> Vec<u8> {
+    [
+        context,
+        request.method.as_bytes(),
+        &[0],
+        request.path.as_bytes(),
+        &[0],
+        &now_ms.to_be_bytes(),
+        &Sha256::digest(&request.body),
+    ]
+    .concat()
 }
 
 /// `u8 length || username`, as both the claim and the proof of work use it.
@@ -866,6 +909,7 @@ mod tests {
         usernames: Vec<(String, Option<String>)>,
         claim: ClaimVector,
         request: RequestVector,
+        account_request: AccountRequestVector,
         delivery: DeliveryVector,
         commit: CommitVector,
         envelope: EnvelopeVector,
@@ -884,6 +928,16 @@ mod tests {
 
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
     struct RequestVector {
+        method: String,
+        path: String,
+        timestamp: u64,
+        headers: BTreeMap<String, String>,
+        body: String,
+    }
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct AccountRequestVector {
+        account: String,
         method: String,
         path: String,
         timestamp: u64,
@@ -1011,6 +1065,10 @@ mod tests {
             .replenish_key_packages("alice_92", 1, TIMESTAMP)
             .expect("request");
 
+        let removal = device
+            .remove_device("alice_92", DeviceId::from_bytes([0xCC; 16]), TIMESTAMP)
+            .expect("removal");
+
         let outgoing = fixed_delivery();
         let envelope = fixed_envelope();
         let commit_request = delivery(&fixed_commit()).expect("commit");
@@ -1038,6 +1096,18 @@ mod tests {
                     .map(|(name, value)| ((*name).to_owned(), value.clone()))
                     .collect(),
                 body: b64(&request.body),
+            },
+            account_request: AccountRequestVector {
+                account: b64(account.id().as_bytes()),
+                method: removal.method.to_owned(),
+                path: removal.path.clone(),
+                timestamp: TIMESTAMP,
+                headers: removal
+                    .headers
+                    .iter()
+                    .map(|(name, value)| ((*name).to_owned(), value.clone()))
+                    .collect(),
+                body: b64(&removal.body),
             },
             delivery: DeliveryVector {
                 id: b64(&outgoing.id.0),
@@ -1121,6 +1191,30 @@ mod tests {
                 &unb64(header("zelamar-signature")).expect("b64"),
             )
             .expect("request signature verifies");
+
+        // So does the account-signed one, under the account key alone.
+        let removal = &vectors.account_request;
+        let header = |name: &str| removal.headers.get(name).expect("header").as_str();
+        assert_eq!(header("zelamar-timestamp"), removal.timestamp.to_string());
+        assert!(!removal.headers.contains_key("zelamar-certificate"));
+        let payload = [
+            ACCOUNT_REQUEST_CONTEXT,
+            removal.method.as_bytes(),
+            &[0],
+            removal.path.as_bytes(),
+            &[0],
+            &removal.timestamp.to_be_bytes(),
+            &Sha256::digest(unb64(&removal.body).expect("b64")),
+        ]
+        .concat();
+        RustCrypto::default()
+            .verify_signature(
+                SignatureScheme::ED25519,
+                &payload,
+                &unb64(&removal.account).expect("b64"),
+                &unb64(header("zelamar-account-signature")).expect("b64"),
+            )
+            .expect("account signature verifies");
 
         assert_eq!(
             vectors.delivery.frame,

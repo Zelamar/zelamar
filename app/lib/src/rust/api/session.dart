@@ -8,7 +8,7 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `chat_key`, `claim_with`, `device_id`, `device_key`, `failure`, `find_chat`, `joining`, `master`, `message_id`, `notice`, `now_ms`, `offer`, `own_name`, `preview`, `send_body`, `shorten`, `store_path`, `title`, `view`, `with`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
 
 /// A fresh random master key for a new session. Keep it in the platform's
 /// secure storage; it opens the session's store.
@@ -132,6 +132,16 @@ abstract class Session implements RustOpaqueInterface {
   /// Takes one key package of one of this account's devices.
   HttpCall deviceLookupCall({required String device});
 
+  /// Reads the answer to [`Session::remove_device_call`].
+  void deviceRemoved({required int status, required List<int> body});
+
+  /// Reads the answer to [`Session::devices_call`] for the devices
+  /// screen: this device first.
+  Future<List<DeviceView>> deviceViews({
+    required int status,
+    required List<int> body,
+  });
+
   /// Lists this account's devices, to heal chats (ADR-0014).
   HttpCall devicesCall();
 
@@ -147,7 +157,7 @@ abstract class Session implements RustOpaqueInterface {
   String fingerprint();
 
   /// Reads the answer to [`Session::devices_call`]: which chats lack
-  /// which of this account's devices.
+  /// which of this account's devices, and which still hold removed ones.
   Future<HealPlan> healPlan({required int status, required List<int> body});
 
   /// Reads the answer to [`Session::link_check_call`]: the device that
@@ -217,6 +227,17 @@ abstract class Session implements RustOpaqueInterface {
   /// Reads the answer to [`Session::register`]: key packages stored.
   Future<int> registered({required int status, required List<int> body});
 
+  /// Takes `device` out of the account: this device itself, or, on the
+  /// device holding the account key, any other. Heal afterwards.
+  Future<HttpCall> removeDeviceCall({required String device});
+
+  /// Takes removed devices of this account out of `chat` in one change.
+  /// It goes out with the next [`Session::pending_sends`].
+  Future<void> removeOwnDevices({
+    required String chat,
+    required List<String> devices,
+  });
+
   /// Writes `text` into `chat` as an answer to message `to`.
   Future<void> replyText({
     required String chat,
@@ -242,6 +263,9 @@ abstract class Session implements RustOpaqueInterface {
     required int status,
     required List<int> body,
   });
+
+  /// Remembers what this device calls itself; linking passes it on.
+  Future<void> setOwnLabel({required String label});
 
   /// Starts a chat from the answer to [`lookup_call`] for `username`, and
   /// `own`, the answer to a lookup of this account's own name, so its
@@ -330,17 +354,58 @@ class DeviceGap {
           devices == other.devices;
 }
 
-/// What healing found: every registered device of the account, and the
-/// chats that lack some of them.
+/// One device of this account, for the devices screen.
+class DeviceView {
+  /// Device id, base64url.
+  final String id;
+
+  /// What it calls itself, if this device knows.
+  final String? label;
+  final bool thisDevice;
+
+  const DeviceView({required this.id, this.label, required this.thisDevice});
+
+  @override
+  int get hashCode => id.hashCode ^ label.hashCode ^ thisDevice.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DeviceView &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          label == other.label &&
+          thisDevice == other.thisDevice;
+}
+
+/// What healing found: every registered device of the account, the chats
+/// that lack some of them, and the chats that still hold removed ones.
 class HealPlan {
   /// Device ids, base64url.
   final List<String> devices;
+
+  /// Add these with [`Session::add_own_devices`].
   final List<DeviceGap> gaps;
 
-  const HealPlan({required this.devices, required this.gaps});
+  /// Take these out with [`Session::remove_own_devices`].
+  final List<DeviceGap> stale;
+
+  /// `false` once this device was removed from the account.
+  final bool thisDeviceListed;
+
+  const HealPlan({
+    required this.devices,
+    required this.gaps,
+    required this.stale,
+    required this.thisDeviceListed,
+  });
 
   @override
-  int get hashCode => devices.hashCode ^ gaps.hashCode;
+  int get hashCode =>
+      devices.hashCode ^
+      gaps.hashCode ^
+      stale.hashCode ^
+      thisDeviceListed.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -348,7 +413,9 @@ class HealPlan {
       other is HealPlan &&
           runtimeType == other.runtimeType &&
           devices == other.devices &&
-          gaps == other.gaps;
+          gaps == other.gaps &&
+          stale == other.stale &&
+          thisDeviceListed == other.thisDeviceListed;
 }
 
 /// The service's answer to one [`HttpCall`].
@@ -432,6 +499,10 @@ class InboxEvent {
   /// Someone started a chat with this device.
   final bool joined;
 
+  /// A change took this device out of the chat; it may have been
+  /// removed from its account.
+  final bool left;
+
   /// Why the envelope was refused, if it was.
   final String? refused;
 
@@ -442,6 +513,7 @@ class InboxEvent {
     this.ack,
     this.chat,
     required this.joined,
+    required this.left,
     this.refused,
     this.notice,
   });
@@ -451,6 +523,7 @@ class InboxEvent {
       ack.hashCode ^
       chat.hashCode ^
       joined.hashCode ^
+      left.hashCode ^
       refused.hashCode ^
       notice.hashCode;
 
@@ -462,6 +535,7 @@ class InboxEvent {
           ack == other.ack &&
           chat == other.chat &&
           joined == other.joined &&
+          left == other.left &&
           refused == other.refused &&
           notice == other.notice;
 }

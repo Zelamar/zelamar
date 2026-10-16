@@ -14,6 +14,10 @@ enum MessengerPhase {
 
   /// The store could not be opened; see [Messenger.failure].
   failed,
+
+  /// This device was removed from its account: nothing works until it is
+  /// erased ([Messenger.eraseThisDevice]).
+  unlinked,
 }
 
 /// The connection to the delivery service.
@@ -108,6 +112,19 @@ abstract class Messenger extends ChangeNotifier {
 
   /// Stops offering a link.
   void cancelLink();
+
+  /// The account's devices, this one first.
+  Future<List<DeviceView>> devices();
+
+  /// Removes another device from the account: it leaves every chat and
+  /// gets nothing more. Only a device that [canLinkDevices] can.
+  Future<void> removeDevice(String id);
+
+  /// Removes this device from its account, then erases it.
+  Future<void> unlinkThisDevice();
+
+  /// Erases everything this device keeps: its keys, chats and messages.
+  Future<void> eraseThisDevice();
 
   /// Starts a chat with [username]; returns its id.
   Future<String> startChat(String username);

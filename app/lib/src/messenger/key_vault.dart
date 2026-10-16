@@ -48,4 +48,13 @@ class KeyVault {
     await Directory(directory).create(recursive: true);
     await _registered.writeAsString('yes', flush: true);
   }
+
+  /// Forgets the key and the registration, for a device being erased.
+  Future<void> forget() async {
+    for (final file in [_sealedKey, _registered]) {
+      if (file.existsSync()) {
+        await file.delete();
+      }
+    }
+  }
 }

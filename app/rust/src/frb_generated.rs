@@ -41,7 +41,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 429640216;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -2060680213;
 
 // Section: executor
 
@@ -1209,6 +1209,113 @@ fn wire__crate__api__session__Session_device_lookup_call_impl(
         },
     )
 }
+fn wire__crate__api__session__Session_device_removed_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "Session_device_removed",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Session>,
+            >>::sse_decode(&mut deserializer);
+            let api_status = <u16>::sse_decode(&mut deserializer);
+            let api_body = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, crate::api::session::SessionError>((move || {
+                let mut api_that_guard = None;
+                let decode_indices_ =
+                    flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                        flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                            &api_that, 0, false,
+                        ),
+                    ]);
+                for i in decode_indices_ {
+                    match i {
+                        0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                        _ => unreachable!(),
+                    }
+                }
+                let api_that_guard = api_that_guard.unwrap();
+                let output_ok = crate::api::session::Session::device_removed(
+                    &*api_that_guard,
+                    api_status,
+                    api_body,
+                )?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__session__Session_device_views_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "Session_device_views",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Session>,
+            >>::sse_decode(&mut deserializer);
+            let api_status = <u16>::sse_decode(&mut deserializer);
+            let api_body = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, crate::api::session::SessionError>((move || {
+                    let mut api_that_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, false,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let api_that_guard = api_that_guard.unwrap();
+                    let output_ok = crate::api::session::Session::device_views(
+                        &*api_that_guard,
+                        api_status,
+                        api_body,
+                    )?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__session__Session_devices_call_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -2123,6 +2230,114 @@ fn wire__crate__api__session__Session_registered_impl(
         },
     )
 }
+fn wire__crate__api__session__Session_remove_device_call_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "Session_remove_device_call",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Session>,
+            >>::sse_decode(&mut deserializer);
+            let api_device = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, crate::api::session::SessionError>((move || {
+                    let mut api_that_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, false,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let api_that_guard = api_that_guard.unwrap();
+                    let output_ok = crate::api::session::Session::remove_device_call(
+                        &*api_that_guard,
+                        api_device,
+                    )?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__session__Session_remove_own_devices_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "Session_remove_own_devices",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Session>,
+            >>::sse_decode(&mut deserializer);
+            let api_chat = <String>::sse_decode(&mut deserializer);
+            let api_devices = <Vec<String>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, crate::api::session::SessionError>((move || {
+                    let mut api_that_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, true,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref_mut()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let mut api_that_guard = api_that_guard.unwrap();
+                    let output_ok = crate::api::session::Session::remove_own_devices(
+                        &mut *api_that_guard,
+                        api_chat,
+                        api_devices,
+                    )?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__session__Session_reply_text_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -2336,6 +2551,59 @@ fn wire__crate__api__session__Session_sent_impl(
                         api_id,
                         api_status,
                         api_body,
+                    )?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__session__Session_set_own_label_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "Session_set_own_label",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Session>,
+            >>::sse_decode(&mut deserializer);
+            let api_label = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, crate::api::session::SessionError>((move || {
+                    let mut api_that_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, true,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref_mut()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let mut api_that_guard = api_that_guard.unwrap();
+                    let output_ok = crate::api::session::Session::set_own_label(
+                        &mut *api_that_guard,
+                        api_label,
                     )?;
                     std::result::Result::Ok(output_ok)
                 })())
@@ -2851,14 +3119,32 @@ impl SseDecode for crate::api::session::DeviceGap {
     }
 }
 
+impl SseDecode for crate::api::session::DeviceView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_id = <String>::sse_decode(deserializer);
+        let mut var_label = <Option<String>>::sse_decode(deserializer);
+        let mut var_thisDevice = <bool>::sse_decode(deserializer);
+        return crate::api::session::DeviceView {
+            id: var_id,
+            label: var_label,
+            this_device: var_thisDevice,
+        };
+    }
+}
+
 impl SseDecode for crate::api::session::HealPlan {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_devices = <Vec<String>>::sse_decode(deserializer);
         let mut var_gaps = <Vec<crate::api::session::DeviceGap>>::sse_decode(deserializer);
+        let mut var_stale = <Vec<crate::api::session::DeviceGap>>::sse_decode(deserializer);
+        let mut var_thisDeviceListed = <bool>::sse_decode(deserializer);
         return crate::api::session::HealPlan {
             devices: var_devices,
             gaps: var_gaps,
+            stale: var_stale,
+            this_device_listed: var_thisDeviceListed,
         };
     }
 }
@@ -2923,12 +3209,14 @@ impl SseDecode for crate::api::session::InboxEvent {
         let mut var_ack = <Option<Vec<u8>>>::sse_decode(deserializer);
         let mut var_chat = <Option<String>>::sse_decode(deserializer);
         let mut var_joined = <bool>::sse_decode(deserializer);
+        let mut var_left = <bool>::sse_decode(deserializer);
         let mut var_refused = <Option<String>>::sse_decode(deserializer);
         let mut var_notice = <Option<crate::api::session::Notice>>::sse_decode(deserializer);
         return crate::api::session::InboxEvent {
             ack: var_ack,
             chat: var_chat,
             joined: var_joined,
+            left: var_left,
             refused: var_refused,
             notice: var_notice,
         };
@@ -3038,6 +3326,18 @@ impl SseDecode for Vec<crate::api::session::DeviceGap> {
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
             ans_.push(<crate::api::session::DeviceGap>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::session::DeviceView> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::session::DeviceView>::sse_decode(deserializer));
         }
         return ans_;
     }
@@ -3444,44 +3744,62 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        26 => wire__crate__api__session__Session_edit_text_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__session__Session_heal_plan_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__session__Session_link_applicant_impl(
+        26 => {
+            wire__crate__api__session__Session_device_views_impl(port, ptr, rust_vec_len, data_len)
+        }
+        28 => wire__crate__api__session__Session_edit_text_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__session__Session_heal_plan_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__session__Session_link_applicant_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        30 => {
+        32 => {
             wire__crate__api__session__Session_link_approved_impl(port, ptr, rust_vec_len, data_len)
         }
-        33 => wire__crate__api__session__Session_mark_read_impl(port, ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__session__Session_messages_impl(port, ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__session__Session_names_to_confirm_impl(
+        35 => wire__crate__api__session__Session_mark_read_impl(port, ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__session__Session_messages_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__session__Session_names_to_confirm_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        36 => wire__crate__api__session__Session_offer_link_impl(port, ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__session__Session_open_impl(port, ptr, rust_vec_len, data_len),
-        38 => {
+        38 => wire__crate__api__session__Session_offer_link_impl(port, ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__session__Session_open_impl(port, ptr, rust_vec_len, data_len),
+        40 => {
             wire__crate__api__session__Session_open_envelope_impl(port, ptr, rust_vec_len, data_len)
         }
-        39 => {
+        41 => {
             wire__crate__api__session__Session_pending_sends_impl(port, ptr, rust_vec_len, data_len)
         }
-        40 => wire__crate__api__session__Session_react_impl(port, ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__session__Session_register_impl(port, ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__session__Session_registered_impl(port, ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__session__Session_reply_text_impl(port, ptr, rust_vec_len, data_len),
-        44 => {
+        42 => wire__crate__api__session__Session_react_impl(port, ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__session__Session_register_impl(port, ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__session__Session_registered_impl(port, ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__session__Session_remove_device_call_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        46 => wire__crate__api__session__Session_remove_own_devices_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        47 => wire__crate__api__session__Session_reply_text_impl(port, ptr, rust_vec_len, data_len),
+        48 => {
             wire__crate__api__session__Session_safety_code_impl(port, ptr, rust_vec_len, data_len)
         }
-        45 => wire__crate__api__session__Session_send_text_impl(port, ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__session__Session_sent_impl(port, ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__session__Session_start_chat_impl(port, ptr, rust_vec_len, data_len),
-        51 => wire__crate__api__lifecycle__init_app_impl(port, ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__session__Session_send_text_impl(port, ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__session__Session_sent_impl(port, ptr, rust_vec_len, data_len),
+        51 => {
+            wire__crate__api__session__Session_set_own_label_impl(port, ptr, rust_vec_len, data_len)
+        }
+        52 => wire__crate__api__session__Session_start_chat_impl(port, ptr, rust_vec_len, data_len),
+        56 => wire__crate__api__lifecycle__init_app_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -3506,19 +3824,20 @@ fn pde_ffi_dispatcher_sync_impl(
         24 => {
             wire__crate__api__session__Session_device_lookup_call_impl(ptr, rust_vec_len, data_len)
         }
-        25 => wire__crate__api__session__Session_devices_call_impl(ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__session__Session_fingerprint_impl(ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__session__Session_link_check_call_impl(ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__session__Session_mailbox_impl(ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__session__Session_username_impl(ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__diagnostics__core_info_impl(ptr, rust_vec_len, data_len),
-        50 => wire__crate__api__diagnostics__greet_impl(ptr, rust_vec_len, data_len),
-        52 => wire__crate__api__session__key_lookup_call_impl(ptr, rust_vec_len, data_len),
-        53 => wire__crate__api__session__lookup_call_impl(ptr, rust_vec_len, data_len),
-        54 => wire__crate__api__session__new_master_key_impl(ptr, rust_vec_len, data_len),
-        55 => wire__crate__api__session__normalize_username_impl(ptr, rust_vec_len, data_len),
-        56 => wire__crate__api__session__remove_store_impl(ptr, rust_vec_len, data_len),
-        57 => wire__crate__api__session__session_exists_impl(ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__session__Session_device_removed_impl(ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__session__Session_devices_call_impl(ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__session__Session_fingerprint_impl(ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__session__Session_link_check_call_impl(ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__session__Session_mailbox_impl(ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__session__Session_username_impl(ptr, rust_vec_len, data_len),
+        54 => wire__crate__api__diagnostics__core_info_impl(ptr, rust_vec_len, data_len),
+        55 => wire__crate__api__diagnostics__greet_impl(ptr, rust_vec_len, data_len),
+        57 => wire__crate__api__session__key_lookup_call_impl(ptr, rust_vec_len, data_len),
+        58 => wire__crate__api__session__lookup_call_impl(ptr, rust_vec_len, data_len),
+        59 => wire__crate__api__session__new_master_key_impl(ptr, rust_vec_len, data_len),
+        60 => wire__crate__api__session__normalize_username_impl(ptr, rust_vec_len, data_len),
+        61 => wire__crate__api__session__remove_store_impl(ptr, rust_vec_len, data_len),
+        62 => wire__crate__api__session__session_exists_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -3638,11 +3957,35 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::session::DeviceGap>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::session::DeviceView {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.id.into_into_dart().into_dart(),
+            self.label.into_into_dart().into_dart(),
+            self.this_device.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::session::DeviceView
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::session::DeviceView>
+    for crate::api::session::DeviceView
+{
+    fn into_into_dart(self) -> crate::api::session::DeviceView {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::session::HealPlan {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.devices.into_into_dart().into_dart(),
             self.gaps.into_into_dart().into_dart(),
+            self.stale.into_into_dart().into_dart(),
+            self.this_device_listed.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -3724,6 +4067,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::session::InboxEvent {
             self.ack.into_into_dart().into_dart(),
             self.chat.into_into_dart().into_dart(),
             self.joined.into_into_dart().into_dart(),
+            self.left.into_into_dart().into_dart(),
             self.refused.into_into_dart().into_dart(),
             self.notice.into_into_dart().into_dart(),
         ]
@@ -4101,11 +4445,22 @@ impl SseEncode for crate::api::session::DeviceGap {
     }
 }
 
+impl SseEncode for crate::api::session::DeviceView {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.id, serializer);
+        <Option<String>>::sse_encode(self.label, serializer);
+        <bool>::sse_encode(self.this_device, serializer);
+    }
+}
+
 impl SseEncode for crate::api::session::HealPlan {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<String>>::sse_encode(self.devices, serializer);
         <Vec<crate::api::session::DeviceGap>>::sse_encode(self.gaps, serializer);
+        <Vec<crate::api::session::DeviceGap>>::sse_encode(self.stale, serializer);
+        <bool>::sse_encode(self.this_device_listed, serializer);
     }
 }
 
@@ -4155,6 +4510,7 @@ impl SseEncode for crate::api::session::InboxEvent {
         <Option<Vec<u8>>>::sse_encode(self.ack, serializer);
         <Option<String>>::sse_encode(self.chat, serializer);
         <bool>::sse_encode(self.joined, serializer);
+        <bool>::sse_encode(self.left, serializer);
         <Option<String>>::sse_encode(self.refused, serializer);
         <Option<crate::api::session::Notice>>::sse_encode(self.notice, serializer);
     }
@@ -4240,6 +4596,16 @@ impl SseEncode for Vec<crate::api::session::DeviceGap> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <crate::api::session::DeviceGap>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::session::DeviceView> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::session::DeviceView>::sse_encode(item, serializer);
         }
     }
 }

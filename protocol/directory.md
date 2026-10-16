@@ -138,4 +138,6 @@ package. Clients use it to confirm a username someone claims in a chat
 
 `GET /v0/accounts/{username}/devices` lists the devices' certificates only.
 `GET /v0/accounts/{username}/devices/{id}` hands out one key package of one
-device. Both serve linked devices and are specified in `linking.md`.
+device. `DELETE` on the same path removes the device, signed by the device
+itself or by the account key. All three serve linked devices and are
+specified in `linking.md`.

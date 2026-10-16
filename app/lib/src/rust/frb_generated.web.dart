@@ -149,6 +149,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   DeviceGap dco_decode_device_gap(dynamic raw);
 
   @protected
+  DeviceView dco_decode_device_view(dynamic raw);
+
+  @protected
   HealPlan dco_decode_heal_plan(dynamic raw);
 
   @protected
@@ -192,6 +195,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<DeviceGap> dco_decode_list_device_gap(dynamic raw);
+
+  @protected
+  List<DeviceView> dco_decode_list_device_view(dynamic raw);
 
   @protected
   List<HttpAnswer> dco_decode_list_http_answer(dynamic raw);
@@ -406,6 +412,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   DeviceGap sse_decode_device_gap(SseDeserializer deserializer);
 
   @protected
+  DeviceView sse_decode_device_view(SseDeserializer deserializer);
+
+  @protected
   HealPlan sse_decode_heal_plan(SseDeserializer deserializer);
 
   @protected
@@ -449,6 +458,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<DeviceGap> sse_decode_list_device_gap(SseDeserializer deserializer);
+
+  @protected
+  List<DeviceView> sse_decode_list_device_view(SseDeserializer deserializer);
 
   @protected
   List<HttpAnswer> sse_decode_list_http_answer(SseDeserializer deserializer);
@@ -694,6 +706,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_device_gap(DeviceGap self, SseSerializer serializer);
 
   @protected
+  void sse_encode_device_view(DeviceView self, SseSerializer serializer);
+
+  @protected
   void sse_encode_heal_plan(HealPlan self, SseSerializer serializer);
 
   @protected
@@ -744,6 +759,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_device_gap(
     List<DeviceGap> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_device_view(
+    List<DeviceView> self,
     SseSerializer serializer,
   );
 

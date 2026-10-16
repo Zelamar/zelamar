@@ -240,6 +240,9 @@ pub(crate) struct AnswerBody {
     pub(crate) username: String,
     pub(crate) contacts: Vec<Contact>,
     pub(crate) introduced: Vec<ChatId>,
+    /// What the account's devices call themselves.
+    #[serde(default)]
+    pub(crate) labels: Vec<(DeviceId, String)>,
 }
 
 fn cbor<T: Serialize>(value: &T, what: &'static str) -> Result<Zeroizing<Vec<u8>>> {
@@ -351,6 +354,7 @@ pub struct Linked {
     pub(crate) username: String,
     pub(crate) contacts: Vec<Contact>,
     pub(crate) introduced: Vec<ChatId>,
+    pub(crate) labels: Vec<(DeviceId, String)>,
 }
 
 impl Joining {
@@ -441,6 +445,11 @@ impl Joining {
             username: service::normalize_username(&answer.username)?,
             contacts: answer.contacts,
             introduced: answer.introduced,
+            labels: answer
+                .labels
+                .into_iter()
+                .filter(|(_, label)| label.chars().count() <= MAX_LABEL)
+                .collect(),
         }))
     }
 

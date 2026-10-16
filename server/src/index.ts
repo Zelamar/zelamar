@@ -86,6 +86,9 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (parts.length === 5 && request.method === 'GET') {
       return respond(await lookup(request, env, name, { device }));
     }
+    if (parts.length === 5 && request.method === 'DELETE') {
+      return respond(await signed(request, env, name, device, 'remove'));
+    }
     if (parts.length === 5) {
       return only(request, 'PUT') ?? respond(await signed(request, env, name, device, 'register'));
     }
@@ -324,7 +327,7 @@ async function signed(
   env: Env,
   name: string,
   device: string,
-  action: 'register' | 'publish',
+  action: 'register' | 'publish' | 'remove',
 ): Promise<Reply> {
   const username = normalizeUsername(name);
   if (username === null || name !== username) {
@@ -343,6 +346,9 @@ async function signed(
     body: buffer(body),
   };
   const holder = env.ACCOUNT.getByName(username);
+  if (action === 'remove') {
+    return holder.removeDevice(device, parts, request.headers.get('zelamar-account-signature'));
+  }
   return action === 'register'
     ? holder.registerDevice(device, parts)
     : holder.publishKeyPackages(device, parts);

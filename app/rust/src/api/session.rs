@@ -126,6 +126,9 @@ pub struct InboxEvent {
     pub chat: Option<String>,
     /// Someone started a chat with this device.
     pub joined: bool,
+    /// A change took this device out of the chat; it may have been
+    /// removed from its account.
+    pub left: bool,
     /// Why the envelope was refused, if it was.
     pub refused: Option<String>,
     /// A new message from someone else, worth a notification.
@@ -251,13 +254,28 @@ pub struct DeviceGap {
     pub devices: Vec<String>,
 }
 
-/// What healing found: every registered device of the account, and the
-/// chats that lack some of them.
+/// What healing found: every registered device of the account, the chats
+/// that lack some of them, and the chats that still hold removed ones.
 #[derive(Debug, Clone)]
 pub struct HealPlan {
     /// Device ids, base64url.
     pub devices: Vec<String>,
+    /// Add these with [`Session::add_own_devices`].
     pub gaps: Vec<DeviceGap>,
+    /// Take these out with [`Session::remove_own_devices`].
+    pub stale: Vec<DeviceGap>,
+    /// `false` once this device was removed from the account.
+    pub this_device_listed: bool,
+}
+
+/// One device of this account, for the devices screen.
+#[derive(Debug, Clone)]
+pub struct DeviceView {
+    /// Device id, base64url.
+    pub id: String,
+    /// What it calls itself, if this device knows.
+    pub label: Option<String>,
+    pub this_device: bool,
 }
 
 /// One device of one account, stored encrypted in a directory.
@@ -485,7 +503,11 @@ impl Session {
             .applicant
             .as_ref()
             .ok_or_else(|| failure("no_link", "no device asked to join"))?;
-        Ok(self.device.approve_link(self.offer()?, applicant)?.into())
+        let offer = self
+            .offer
+            .as_ref()
+            .ok_or_else(|| failure("no_link", "no link is being offered"))?;
+        Ok(self.device.approve_link(offer, applicant)?.into())
     }
 
     /// Reads the answer to [`Session::approve_link`]; returns the new
@@ -521,25 +543,89 @@ impl Session {
     }
 
     /// Reads the answer to [`Session::devices_call`]: which chats lack
-    /// which of this account's devices.
+    /// which of this account's devices, and which still hold removed ones.
     pub fn heal_plan(&self, status: u16, body: Vec<u8>) -> Result<HealPlan, SessionError> {
         let (_, registered) = service::device_list(&self.own_name()?, status, &body)?;
-        let gaps = self
-            .device
-            .missing_devices(&registered)?
-            .into_iter()
-            .map(|(chat, devices)| DeviceGap {
-                chat: chat_key(&chat),
-                devices: devices.iter().map(device_key).collect(),
-            })
-            .collect();
+        let gaps = |found: Vec<(ChatId, Vec<DeviceId>)>| {
+            found
+                .into_iter()
+                .map(|(chat, devices)| DeviceGap {
+                    chat: chat_key(&chat),
+                    devices: devices.iter().map(device_key).collect(),
+                })
+                .collect()
+        };
         Ok(HealPlan {
             devices: registered
                 .iter()
                 .map(|certificate| device_key(&certificate.device()))
                 .collect(),
-            gaps,
+            gaps: gaps(self.device.missing_devices(&registered)?),
+            stale: gaps(self.device.stale_devices(&registered)?),
+            this_device_listed: registered
+                .iter()
+                .any(|certificate| certificate.device() == self.device.id()),
         })
+    }
+
+    /// Reads the answer to [`Session::devices_call`] for the devices
+    /// screen: this device first.
+    pub fn device_views(
+        &self,
+        status: u16,
+        body: Vec<u8>,
+    ) -> Result<Vec<DeviceView>, SessionError> {
+        let (_, registered) = service::device_list(&self.own_name()?, status, &body)?;
+        let mut views: Vec<DeviceView> = registered
+            .iter()
+            .map(|certificate| {
+                let device = certificate.device();
+                DeviceView {
+                    id: device_key(&device),
+                    label: self.device.device_label(device).map(str::to_owned),
+                    this_device: device == self.device.id(),
+                }
+            })
+            .collect();
+        views.sort_by_key(|view| !view.this_device);
+        Ok(views)
+    }
+
+    /// Remembers what this device calls itself; linking passes it on.
+    pub fn set_own_label(&mut self, label: String) -> Result<(), SessionError> {
+        let me = self.device.id();
+        Ok(self.device.remember_label(me, &label)?)
+    }
+
+    /// Takes `device` out of the account: this device itself, or, on the
+    /// device holding the account key, any other. Heal afterwards.
+    pub fn remove_device_call(&self, device: String) -> Result<HttpCall, SessionError> {
+        Ok(self
+            .device
+            .remove_device(&self.own_name()?, device_id(&device)?, now_ms())?
+            .into())
+    }
+
+    /// Reads the answer to [`Session::remove_device_call`].
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn device_removed(&self, status: u16, body: Vec<u8>) -> Result<(), SessionError> {
+        Ok(service::device_removed(status, &body)?)
+    }
+
+    /// Takes removed devices of this account out of `chat` in one change.
+    /// It goes out with the next [`Session::pending_sends`].
+    pub fn remove_own_devices(
+        &mut self,
+        chat: String,
+        devices: Vec<String>,
+    ) -> Result<(), SessionError> {
+        let devices = devices
+            .iter()
+            .map(|device| device_id(device))
+            .collect::<Result<Vec<_>, _>>()?;
+        let chat = self.find_chat(&chat)?;
+        self.device.remove_own_devices(&chat, &devices)?;
+        Ok(())
     }
 
     /// Takes one key package of one of this account's devices.
@@ -768,6 +854,7 @@ impl Session {
                 ack,
                 chat: Some(chat_key(&chat)),
                 joined: true,
+                left: false,
                 refused: None,
                 notice: None,
             },
@@ -779,15 +866,25 @@ impl Session {
                 ack,
                 chat: Some(chat_key(&chat)),
                 joined: false,
+                left: false,
                 refused: None,
                 notice: (author.account != self.device.account())
                     .then(|| self.notice(author.account, &message.body))
                     .flatten(),
             },
+            Ok(Received::Left { chat }) => InboxEvent {
+                ack,
+                chat: Some(chat_key(&chat)),
+                joined: false,
+                left: true,
+                refused: None,
+                notice: None,
+            },
             Ok(Received::ChatUpdated { chat } | Received::OwnEcho { chat }) => InboxEvent {
                 ack,
                 chat: Some(chat_key(&chat)),
                 joined: false,
+                left: false,
                 refused: None,
                 notice: None,
             },
@@ -795,6 +892,7 @@ impl Session {
                 ack,
                 chat: None,
                 joined: false,
+                left: false,
                 refused: None,
                 notice: None,
             },
@@ -802,6 +900,7 @@ impl Session {
                 ack,
                 chat: None,
                 joined: false,
+                left: false,
                 refused: Some(SessionError::from(error).code),
                 notice: None,
             },

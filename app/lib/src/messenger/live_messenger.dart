@@ -76,6 +76,9 @@ class LiveMessenger extends Messenger {
 
   /// Bumped to stop whatever linking loop is waiting.
   int _joinGeneration = 0;
+
+  /// Bumped to stop the mailbox loop when this device goes away.
+  int _mailboxGeneration = 0;
   int _linkGeneration = 0;
 
   bool _healing = false;
@@ -297,6 +300,56 @@ class LiveMessenger extends Messenger {
   }
 
   @override
+  Future<List<DeviceView>> devices() => _guard(() async {
+    final session = _ready;
+    final (status, body) = await transport.send(session.devicesCall());
+    return await session.deviceViews(status: status, body: body);
+  });
+
+  @override
+  Future<void> removeDevice(String id) => _guard(() async {
+    final session = _ready;
+    final (status, body) = await transport.send(
+      await session.removeDeviceCall(device: id),
+    );
+    session.deviceRemoved(status: status, body: body);
+    unawaited(_heal());
+  });
+
+  @override
+  Future<void> unlinkThisDevice() => _guard(() async {
+    final session = _ready;
+    final me = (await devices()).firstWhere((device) => device.thisDevice);
+    final (status, body) = await transport.send(
+      await session.removeDeviceCall(device: me.id),
+    );
+    session.deviceRemoved(status: status, body: body);
+    await eraseThisDevice();
+  });
+
+  @override
+  Future<void> eraseThisDevice() => _guard(() async {
+    _offline();
+    final session = _session;
+    _session = null;
+    session?.dispose();
+    removeStore(directory: directory);
+    await vault.forget();
+    _username = null;
+    _chats = const [];
+    _setPhase(MessengerPhase.needsAccount);
+  });
+
+  /// Stops talking to the service: no mailbox, no retries.
+  void _offline() {
+    _mailboxGeneration++;
+    _retry?.cancel();
+    unawaited(_socket?.close());
+    _socket = null;
+    _setLink(Link.offline);
+  }
+
+  @override
   Future<String> startChat(String username) => _guard(() async {
     final session = _ready;
     final (status, body) = await transport.send(lookupCall(username: username));
@@ -426,6 +479,11 @@ class LiveMessenger extends Messenger {
   }
 
   Future<void> _becomeReady() async {
+    try {
+      await _session?.setOwnLabel(label: _deviceLabel());
+    } on SessionError {
+      // Only a name for the devices screen.
+    }
     _setPhase(MessengerPhase.ready);
     unawaited(notifier.requestPermission());
     await _refreshChats(null);
@@ -435,11 +493,17 @@ class LiveMessenger extends Messenger {
 
   /// Keeps one live connection to the mailbox, reconnecting with backoff.
   Future<void> _runMailbox() async {
+    final generation = ++_mailboxGeneration;
+    bool stopped() => _closed || generation != _mailboxGeneration;
     var delay = const Duration(seconds: 1);
-    while (!_closed) {
+    while (!stopped()) {
       _setLink(Link.connecting);
       try {
         final socket = await transport.connect(_ready.mailbox());
+        if (stopped()) {
+          await socket.close();
+          return;
+        }
         _socket = socket;
         _setLink(Link.online);
         delay = const Duration(seconds: 1);
@@ -455,10 +519,10 @@ class LiveMessenger extends Messenger {
       } on Object {
         // Reconnect below.
       }
-      _socket = null;
-      if (_closed) {
+      if (stopped()) {
         return;
       }
+      _socket = null;
       _setLink(Link.offline);
       await Future<void>.delayed(delay);
       delay = Duration(seconds: min(delay.inSeconds * 2, 30));
@@ -474,6 +538,10 @@ class LiveMessenger extends Messenger {
     if (event.chat != null) {
       await _refreshChats(event.chat);
       unawaited(_confirmNames());
+    }
+    if (event.left) {
+      // Perhaps the account removed this device; healing finds out.
+      unawaited(_heal());
     }
     final notice = event.notice;
     if (notice != null && !await notifier.inFront()) {
@@ -532,6 +600,16 @@ class LiveMessenger extends Messenger {
         final session = _ready;
         final (status, body) = await transport.send(session.devicesCall());
         final plan = await session.healPlan(status: status, body: body);
+        if (!plan.thisDeviceListed) {
+          // The account removed this device: it may not read or write
+          // anything more, only be erased.
+          _offline();
+          _setPhase(MessengerPhase.unlinked);
+          return;
+        }
+        for (final gap in plan.stale) {
+          await session.removeOwnDevices(chat: gap.chat, devices: gap.devices);
+        }
         final awaited = _awaitedDevice;
         if (awaited != null && !plan.devices.contains(awaited)) {
           if (DateTime.now().difference(started) > _linkLifetime) {
@@ -553,7 +631,7 @@ class LiveMessenger extends Messenger {
           }
           await session.addOwnDevices(chat: gap.chat, answers: answers);
         }
-        if (plan.gaps.isNotEmpty) {
+        if (plan.gaps.isNotEmpty || plan.stale.isNotEmpty) {
           await _refreshChats(null);
           unawaited(_flush());
         }

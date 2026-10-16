@@ -65,7 +65,13 @@ one's own account.
 - Linking needs both devices online at once, for about a minute.
 - A device list in the directory makes the number of devices behind a
   username public. Lookups already revealed it.
-- Removing a device (lost phone) needs the same rule in reverse: unregister
-  it in the directory, and every own device removes its leaves. That is the
-  next slice; the design already points there.
+- Removing a device (lost phone) is the same rule in reverse. The device
+  holding the account key unregisters it in the directory with a request
+  signed by the account key; a linked device may unregister itself. Every
+  own device then removes the stale leaves from every chat. The removed
+  device learns it from the commit that takes it out, and offers only to
+  erase itself. Until the next heal, contacts still encrypt to it, so
+  healing runs on every connection.
+- Any member can still remove any device from a chat. Group roles
+  (Phase 5) will restrict that.
 - Reading the same chat on two devices does not yet sync read marks.

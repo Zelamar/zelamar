@@ -115,3 +115,31 @@ account.
   person accepts.
 - **Speaking makes a chat yours.** A message from one's own account makes a
   chat introduced on every own device.
+
+## Removing a device
+
+A lost or retired device leaves the account in two steps.
+
+1. **The directory forgets it.** `DELETE /v0/accounts/{username}/devices/{id}`
+   with body `{}`. It is signed in one of two ways:
+   - by that device itself, as a signed device request (`directory.md`):
+     the device unlinks itself;
+   - by the account key, for any device of the account. Such a request
+     carries `Zelamar-Timestamp` and `Zelamar-Account-Signature`, and no
+     certificate:
+
+     ```text
+     signed = "zelamar/account-request/v0" || method || 0x00 || path || 0x00
+              || u64 timestamp || SHA-256(body)
+     ```
+
+   The device's key packages go with it. The answer is
+   `200 {"devices": <how many are left>}`. Removing a device that is
+   already gone also answers `200`. Errors are as for signed requests.
+2. **Chats heal.** Every own device removes the leaves of own devices the
+   directory no longer lists, in every chat, requests included, with one
+   commit per chat through the sequencer. The removed device receives that
+   commit and learns it is out of the chat.
+
+A device that finds itself missing from its account's device list stops
+reading and writing. It offers only to erase itself.

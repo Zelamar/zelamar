@@ -6,7 +6,7 @@ import 'package:zelamar/src/lab/crypto_lab_screen.dart';
 import 'package:zelamar/src/lab/lab_engine.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/ui/avatar.dart';
-import 'package:zelamar/src/ui/profile/link_device_screen.dart';
+import 'package:zelamar/src/ui/profile/devices_screen.dart';
 import 'package:zelamar/src/version.dart';
 
 /// "You": the account's name and key, and how Zelamar protects it.
@@ -83,26 +83,23 @@ class ProfileScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: ZSpace.lg),
-                  if (messenger.canLinkDevices)
-                    ListTile(
-                      key: const Key('profile.link'),
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(
-                        Icons.devices_outlined,
-                        color: colors.accent,
-                      ),
-                      title: const Text('Link a device'),
-                      subtitle: const Text(
-                        'Use Zelamar on a phone and a computer',
-                      ),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) =>
-                              LinkDeviceScreen(messenger: messenger),
-                        ),
+                  ListTile(
+                    key: const Key('profile.devices'),
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.devices_outlined, color: colors.accent),
+                    title: const Text('Devices'),
+                    subtitle: Text(
+                      messenger.canLinkDevices
+                          ? 'Use Zelamar on a phone and a computer'
+                          : 'Linked to your account',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => DevicesScreen(messenger: messenger),
                       ),
                     ),
+                  ),
                   ListTile(
                     key: const Key('profile.lab'),
                     contentPadding: EdgeInsets.zero,

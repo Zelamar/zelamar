@@ -157,6 +157,13 @@ impl Service {
                     &json!({ "username": name, "account": key, "devices": listed }),
                 )
             }
+            ("DELETE", ["accounts", name, "devices", id]) => {
+                let Some((_, devices)) = self.accounts.get_mut(*name) else {
+                    return unknown();
+                };
+                devices.retain(|device| device.id != *id);
+                answer(200, &json!({ "devices": devices.len() }))
+            }
             ("GET", ["accounts", name, "devices", id]) => {
                 let Some((key, devices)) = self.accounts.get_mut(*name) else {
                     return unknown();
@@ -344,7 +351,7 @@ impl Person {
     }
 
     /// Links a new device to this account, the way the two apps do.
-    fn link(&self, service: &mut Service, label: &str) -> Self {
+    fn link(&mut self, service: &mut Service, label: &str) -> Self {
         let offer = Offer::new().expect("offer");
         let (status, body) = service.handle(&offer.check());
         assert_eq!(offer.applicant(status, &body).expect("slot"), None);
@@ -393,14 +400,21 @@ impl Person {
         }
     }
 
-    /// Brings this account's other devices into every chat that lacks them;
-    /// returns how many chats changed.
+    /// Takes removed devices out of every chat and brings this account's
+    /// other devices into every chat that lacks them; returns how many
+    /// chats changed.
     fn heal(&mut self, service: &mut Service) -> usize {
         let name = self.device.username().expect("username").to_owned();
         let (status, body) = service.handle(&service::devices(&name).expect("devices"));
         let (account, registered) =
             service::device_list(&name, status, &body).expect("device list");
         assert_eq!(account, self.account);
+        let stale = self.device.stale_devices(&registered).expect("stale");
+        for (chat, devices) in &stale {
+            self.device
+                .remove_own_devices(chat, devices)
+                .expect("remove devices");
+        }
         let missing = self.device.missing_devices(&registered).expect("missing");
         for (chat, devices) in &missing {
             let entries: Vec<_> = devices
@@ -415,7 +429,7 @@ impl Person {
                 .add_own_devices(chat, &entries)
                 .expect("add devices");
         }
-        missing.len()
+        stale.len() + missing.len()
     }
 
     /// Sends everything in the outbox and confirms what the service took.
@@ -947,7 +961,7 @@ fn a_linked_device_joins_the_account_and_every_chat() {
 #[test]
 fn linking_needs_the_code_and_the_account_key() {
     let mut service = Service::default();
-    let alice = Person::join(&mut service, "alice");
+    let mut alice = Person::join(&mut service, "alice");
     let offer = Offer::new().expect("offer");
 
     // A mistyped code is caught before anything is sent.
@@ -1040,4 +1054,109 @@ fn chat_requests_are_not_healed_until_accepted() {
             .iter()
             .any(|r| matches!(r, Received::Joined { chat: c, .. } if *c == lone))
     );
+}
+
+#[test]
+fn a_removed_device_leaves_every_chat_and_hears_nothing_more() {
+    let mut service = Service::default();
+    let mut alice = Person::join(&mut service, "alice");
+    let mut bob = Person::join(&mut service, "bob");
+    let mut phone = alice.link(&mut service, "Phone");
+    alice
+        .device
+        .remember_label(alice.device.id(), "Laptop")
+        .expect("label");
+    assert_eq!(alice.device.device_label(phone.device.id()), Some("Phone"));
+    assert_eq!(phone.device.device_label(phone.device.id()), Some("Phone"));
+
+    let chat = alice.start_chat_with(&mut service, "bob");
+    alice.flush(&mut service);
+    bob.read(&mut service);
+    assert!(matches!(
+        phone.read(&mut service)[0],
+        Received::Joined { .. }
+    ));
+
+    // Only the device holding the account key removes other devices.
+    assert!(matches!(
+        phone.device.remove_device("alice", alice.device.id(), NOW),
+        Err(CoreError::Unauthenticated(_))
+    ));
+    // The phone is lost: Alice takes it out of the directory...
+    let removal = alice
+        .device
+        .remove_device("alice", phone.device.id(), NOW)
+        .expect("removal");
+    assert!(
+        removal
+            .headers
+            .iter()
+            .any(|(name, _)| *name == "zelamar-account-signature")
+    );
+    let (status, body) = service.handle(&removal);
+    service::device_removed(status, &body).expect("removed");
+
+    // ...and healing takes it out of every chat.
+    assert_eq!(alice.heal(&mut service), 1);
+    assert_eq!(alice.flush(&mut service), vec![Settled::Applied]);
+    assert!(matches!(
+        bob.read(&mut service)[0],
+        Received::ChatUpdated { .. }
+    ));
+    assert!(matches!(
+        &phone.read(&mut service)[0],
+        Received::Left { chat: c } if *c == chat
+    ));
+    assert_eq!(alice.heal(&mut service), 0, "nothing left to heal");
+
+    // Bob's words no longer reach the phone, and it cannot write there.
+    bob.device
+        .send(&chat, &text(1, "Is it gone?"))
+        .expect("send");
+    bob.flush(&mut service);
+    assert_eq!(phone.read(&mut service), Vec::<Received>::new());
+    assert_eq!(
+        texts(&alice.read(&mut service)),
+        vec![(bob.author(), "Is it gone?".to_owned())]
+    );
+    assert!(phone.device.send(&chat, &text(2, "still here")).is_err());
+}
+
+#[test]
+fn a_linked_device_can_unlink_itself() {
+    let mut service = Service::default();
+    let mut alice = Person::join(&mut service, "alice");
+    let mut bob = Person::join(&mut service, "bob");
+    let mut phone = alice.link(&mut service, "Phone");
+    phone.start_chat_with(&mut service, "bob");
+    phone.flush(&mut service);
+    bob.read(&mut service);
+    alice.read(&mut service);
+
+    let leaving = phone
+        .device
+        .remove_device("alice", phone.device.id(), NOW)
+        .expect("leaving");
+    assert!(
+        leaving
+            .headers
+            .iter()
+            .any(|(name, _)| *name == "zelamar-certificate")
+    );
+    let (status, body) = service.handle(&leaving);
+    service::device_removed(status, &body).expect("removed");
+
+    // Alice's first device notices and takes the phone out of the chat.
+    assert_eq!(alice.heal(&mut service), 1);
+    assert_eq!(alice.flush(&mut service), vec![Settled::Applied]);
+    assert!(matches!(
+        bob.read(&mut service)[0],
+        Received::ChatUpdated { .. }
+    ));
+    assert!(matches!(
+        alice
+            .device
+            .remove_own_devices(&alice.device.chats()[0], &[alice.device.id()]),
+        Err(CoreError::Malformed { .. })
+    ));
 }

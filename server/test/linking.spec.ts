@@ -3,6 +3,7 @@ import { env, exports } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 
 import { concat, utf8 } from '../src/bytes';
+import { requestPayload } from '../src/crypto';
 import { MAX_LINK_ANSWER, MAX_LINK_REQUEST } from '../src/link';
 import {
   address,
@@ -11,9 +12,11 @@ import {
   device,
   devicePath,
   get,
+  type Keys,
   random,
   registered,
   registrationBody,
+  sign,
   signedFetch,
 } from './helpers';
 
@@ -80,6 +83,71 @@ describe('linked devices in the directory', () => {
     });
     expect((await get('/v0/accounts/nobodyhere/devices')).status).toBe(404);
     expect((await get('/v0/accounts/Not-A-Name!/devices')).status).toBe(400);
+  });
+});
+
+/** A request signed by the account key itself, as `protocol/directory.md` says. */
+async function accountFetch(
+  account: Keys,
+  method: string,
+  path: string,
+  timestamp = Date.now(),
+): Promise<Response> {
+  const body = utf8('{}');
+  const payload = await requestPayload(method, path, timestamp, body, 'zelamar/account-request/v0');
+  return exports.default.fetch(BASE + path, {
+    method,
+    body,
+    headers: {
+      'zelamar-timestamp': String(timestamp),
+      'zelamar-account-signature': b64(await sign(account, payload)),
+    },
+  });
+}
+
+describe('removing devices', () => {
+  it('takes a device out when it or the account key asks, and no one else', async () => {
+    const { name, account, device: first } = await registered([keyPackage('a1')]);
+    const second = await device(account);
+    const third = await device(account);
+    for (const extra of [second, third]) {
+      await signedFetch(extra, 'PUT', devicePath(name, extra.id), await registrationBody(extra));
+    }
+    const listed = async (): Promise<string[]> =>
+      (await (await get(`/v0/accounts/${name}/devices`)).json<Listed>()).devices.map(
+        (d) => d.certificate,
+      );
+
+    // One device cannot remove another; the account key can.
+    const refused = await signedFetch(first, 'DELETE', devicePath(name, second.id), {});
+    expect(refused.status).toBe(401);
+    const removed = await accountFetch(account, 'DELETE', devicePath(name, second.id));
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toEqual({ devices: 2 });
+    expect(await listed()).toEqual([b64(first.certificate), b64(third.certificate)]);
+    expect((await get(devicePath(name, second.id))).status).toBe(404);
+
+    // A device can leave by itself.
+    const left = await signedFetch(third, 'DELETE', devicePath(name, third.id), {});
+    expect(await left.json()).toEqual({ devices: 1 });
+    expect(await listed()).toEqual([b64(first.certificate)]);
+  });
+
+  it('refuses other keys, stale and moved signatures', async () => {
+    const { name, device: first } = await registered();
+    const stranger = await registered();
+    const path = devicePath(name, first.id);
+    expect((await accountFetch(stranger.account, 'DELETE', path)).status).toBe(401);
+    expect((await accountFetch(first.account, 'DELETE', path, Date.now() - 600_000)).status).toBe(
+      400,
+    );
+    const elsewhere = await accountFetch(
+      first.account,
+      'DELETE',
+      devicePath(stranger.name, stranger.device.id),
+    );
+    expect(elsewhere.status).toBe(401);
+    expect((await get(`/v0/accounts/${name}/devices`)).status).toBe(200);
   });
 });
 

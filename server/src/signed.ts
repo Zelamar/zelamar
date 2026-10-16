@@ -1,6 +1,6 @@
 /**
- * Signed device requests (`protocol/directory.md`): a certified device
- * proves it made exactly this request, recently.
+ * Signed requests (`protocol/directory.md`): a certified device, or the
+ * account key itself, proves it made exactly this request, recently.
  */
 import { fixedBase64Url, fromBase64Url } from './bytes';
 import { decodeCertificate, verifyCertificate } from './certificate';
@@ -48,7 +48,7 @@ export async function checkSignedRequest(
   ) {
     return failure(401, 'unauthorized');
   }
-  const timestamp = /^\d{1,16}$/u.test(request.timestamp ?? '') ? Number(request.timestamp) : NaN;
+  const timestamp = timestampOf(request);
   if (!fresh(timestamp, now)) {
     return failure(400, 'stale_request');
   }
@@ -62,4 +62,38 @@ export async function checkSignedRequest(
     return failure(401, 'unauthorized');
   }
   return { device: deviceId, certificate: certificateBytes };
+}
+
+/**
+ * Checks that `request` was signed at about `now` by the account key
+ * `accountKey` itself; `request.signature` is the `Zelamar-Account-Signature`
+ * header.
+ */
+export async function checkAccountRequest(
+  request: SignedRequest,
+  accountKey: Uint8Array,
+  now: number,
+): Promise<true | Reply> {
+  const signature = fixedBase64Url(request.signature, 64);
+  if (signature === null) {
+    return failure(401, 'unauthorized');
+  }
+  const timestamp = timestampOf(request);
+  if (!fresh(timestamp, now)) {
+    return failure(400, 'stale_request');
+  }
+  const payload = await requestPayload(
+    request.method,
+    request.path,
+    timestamp,
+    new Uint8Array(request.body),
+    'zelamar/account-request/v0',
+  );
+  return (await verifyEd25519(accountKey, payload, signature))
+    ? true
+    : failure(401, 'unauthorized');
+}
+
+function timestampOf(request: SignedRequest): number {
+  return /^\d{1,16}$/u.test(request.timestamp ?? '') ? Number(request.timestamp) : NaN;
 }

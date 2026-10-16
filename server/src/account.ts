@@ -8,7 +8,12 @@ import { DurableObject } from 'cloudflare:workers';
 import { buffer, fixedBase64Url, fromBase64Url, toBase64Url } from './bytes';
 import { sameBytes, sha256 } from './crypto';
 import { failure, parseObject, type Reply } from './http';
-import { checkSignedRequest, type SignedBy, type SignedRequest } from './signed';
+import {
+  checkAccountRequest,
+  checkSignedRequest,
+  type SignedBy,
+  type SignedRequest,
+} from './signed';
 
 /** Most devices one account may register. */
 export const MAX_DEVICES = 5;
@@ -90,6 +95,38 @@ export class Account extends DurableObject<Env> {
       Date.now(),
     );
     return { status: 200, body: { key_packages: this.store(auth.device, hashed) } };
+  }
+
+  /**
+   * Takes a device out of the directory (ADR-0014). The device itself may
+   * sign the request, or the account key may (`accountSignature`).
+   */
+  async removeDevice(
+    device: string,
+    request: SignedRequest,
+    accountSignature: string | null,
+  ): Promise<Reply> {
+    const key = this.accountKey();
+    if (key === null) {
+      return failure(404, 'unknown_account');
+    }
+    const id = fixedBase64Url(device, 16);
+    if (id === null) {
+      return failure(404, 'unknown_device');
+    }
+    const auth =
+      accountSignature === null
+        ? await checkSignedRequest(request, key, device, Date.now())
+        : await checkAccountRequest({ ...request, signature: accountSignature }, key, Date.now());
+    if (auth !== true && 'status' in auth) {
+      return auth;
+    }
+    // No await from here on: the writes below are atomic.
+    const sql = this.ctx.storage.sql;
+    sql.exec('DELETE FROM key_packages WHERE device = ?', buffer(id));
+    sql.exec('DELETE FROM devices WHERE device = ?', buffer(id));
+    const left = sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM devices').one().n;
+    return { status: 200, body: { devices: left } };
   }
 
   /** Adds one-time key packages (and optionally a new last-resort one). */

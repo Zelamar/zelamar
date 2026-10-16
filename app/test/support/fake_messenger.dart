@@ -122,6 +122,47 @@ class FakeMessenger extends Messenger {
   @override
   void cancelLink() => linkCancelled = true;
 
+  /// The account's devices, this one first.
+  List<DeviceView> devicesValue = const [
+    DeviceView(id: 'd-me', label: 'Windows computer', thisDevice: true),
+    DeviceView(id: 'd-phone', label: 'Android phone', thisDevice: false),
+  ];
+
+  /// Devices removed, by id.
+  final removedDevices = <String>[];
+  bool erased = false;
+
+  @override
+  Future<List<DeviceView>> devices() async {
+    _maybeFail();
+    return devicesValue;
+  }
+
+  @override
+  Future<void> removeDevice(String id) async {
+    _maybeFail();
+    removedDevices.add(id);
+    devicesValue = [
+      for (final device in devicesValue)
+        if (device.id != id) device,
+    ];
+  }
+
+  @override
+  Future<void> unlinkThisDevice() async {
+    _maybeFail();
+    await eraseThisDevice();
+  }
+
+  @override
+  Future<void> eraseThisDevice() async {
+    erased = true;
+    usernameValue = null;
+    _chats.clear();
+    phaseValue = MessengerPhase.needsAccount;
+    notifyListeners();
+  }
+
   @override
   Future<void> createAccount({
     required String username,

@@ -153,6 +153,25 @@ void main() {
         'Alice’s first device sees what the phone wrote',
       );
       expect((await alice.messages(chat)).first.outgoing, isTrue);
+
+      // The phone is lost: Alice removes it, and it hears nothing more.
+      final devices = await alice.devices();
+      expect(devices.length, 2);
+      expect(devices.first.thisDevice, isTrue);
+      await alice.removeDevice(devices.last.id);
+      await until(
+        () => phone.phase == MessengerPhase.unlinked,
+        'the phone learns it was removed',
+      );
+      expect(await alice.devices(), hasLength(1));
+      await bob.sendText(chat, 'Only your computer now.');
+      await until(
+        () => alice.chats.single.last?.text == 'Only your computer now.',
+        'Alice still reads Bob',
+      );
+      expect(phone.chats.single.last?.text, 'Yes, this is my phone.');
+      await phone.eraseThisDevice();
+      expect(phone.phase, MessengerPhase.needsAccount);
     },
     skip: invites.isEmpty ? 'needs a running service and invites' : false,
     timeout: const Timeout(Duration(minutes: 3)),

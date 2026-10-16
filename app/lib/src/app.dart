@@ -51,6 +51,10 @@ class ZelamarApp extends StatelessWidget {
               messenger.failure?.code ?? '',
               key: const Key('app.failed'),
             ),
+            MessengerPhase.unlinked => _Unlinked(
+              messenger,
+              key: const Key('app.unlinked'),
+            ),
           },
         ),
       ),
@@ -64,6 +68,74 @@ class _Splash extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const Scaffold(body: Center(child: SunsetZEmblem(size: 96)));
+  }
+}
+
+/// This device was removed from its account: it can only be erased.
+class _Unlinked extends StatefulWidget {
+  const new(this.messenger, {super.key});
+
+  final Messenger messenger;
+
+  @override
+  State<_Unlinked> createState() => _UnlinkedState();
+}
+
+class _UnlinkedState extends State<_Unlinked> {
+  bool _busy = false;
+
+  Future<void> _erase() async {
+    setState(() => _busy = true);
+    try {
+      await widget.messenger.eraseThisDevice();
+    } on MessengerFailure {
+      if (mounted) {
+        setState(() => _busy = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final text = context.text;
+    final name = widget.messenger.username;
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(ZSpace.gutter),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SunsetZEmblem(size: 72),
+                const SizedBox(height: ZSpace.xl),
+                Text(
+                  name == null
+                      ? 'This device was removed from your account.'
+                      : 'This device was removed from @$name.',
+                  style: text.titleMedium,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: ZSpace.sm),
+                Text(
+                  'It gets no new messages. Erase it to remove your chats '
+                  'from it too.',
+                  style: text.bodyMedium,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: ZSpace.xl),
+                FilledButton(
+                  key: const Key('unlinked.erase'),
+                  onPressed: _busy ? null : _erase,
+                  child: const Text('Erase this device'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

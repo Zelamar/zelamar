@@ -300,7 +300,9 @@ void main() {
       );
       await tester.tap(find.byKey(const Key('chats.profile')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('profile.link')));
+      await tester.tap(find.byKey(const Key('profile.devices')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('devices.link')));
       await pumpAWhile(tester);
       expect(find.text('abcde-fghij-klmno-pqrst'), findsOneWidget);
       expect(find.text('Waiting for your new device…'), findsOneWidget);
@@ -329,7 +331,9 @@ void main() {
       );
       await tester.tap(find.byKey(const Key('chats.profile')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('profile.link')));
+      await tester.tap(find.byKey(const Key('profile.devices')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('devices.link')));
       await pumpAWhile(tester);
       await tester.pageBack();
       await tester.pumpAndSettle();
@@ -337,8 +341,37 @@ void main() {
       expect(messenger.linkApproved, isFalse);
     });
 
-    testWidgets('a linked device cannot link others', (tester) async {
-      await pumpApp(
+    testWidgets('a lost device is removed after a confirmation', (
+      tester,
+    ) async {
+      final messenger = await pumpApp(
+        tester,
+        messenger: FakeMessenger(
+          phaseValue: MessengerPhase.ready,
+          usernameValue: 'ada',
+        ),
+      );
+      await tester.tap(find.byKey(const Key('chats.profile')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('profile.devices')));
+      await tester.pumpAndSettle();
+      expect(find.text('Windows computer'), findsOneWidget);
+      expect(find.text('Android phone'), findsOneWidget);
+      expect(find.byKey(const Key('devices.remove.d-me')), findsNothing);
+
+      await tester.tap(find.byKey(const Key('devices.remove.d-phone')));
+      await tester.pumpAndSettle();
+      expect(find.text('Remove “Android phone”?'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('devices.confirm')));
+      await tester.pumpAndSettle();
+      expect(messenger.removedDevices, ['d-phone']);
+      expect(find.text('Android phone'), findsNothing);
+    });
+
+    testWidgets('a linked device cannot link others, only unlink itself', (
+      tester,
+    ) async {
+      final messenger = await pumpApp(
         tester,
         messenger: FakeMessenger(
           phaseValue: MessengerPhase.ready,
@@ -347,11 +380,38 @@ void main() {
       );
       await tester.tap(find.byKey(const Key('chats.profile')));
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('profile.link')), findsNothing);
       expect(
         tester.widget<Text>(find.byKey(const Key('profile.keyNote'))).data,
         contains('this one is linked'),
       );
+      await tester.tap(find.byKey(const Key('profile.devices')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('devices.link')), findsNothing);
+      expect(find.byKey(const Key('devices.remove.d-phone')), findsNothing);
+
+      await tester.tap(find.byKey(const Key('devices.unlink')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('devices.confirm')));
+      await tester.pumpAndSettle();
+      expect(messenger.erased, isTrue);
+      expect(find.byKey(const Key('app.welcome')), findsOneWidget);
+    });
+
+    testWidgets('a device the account removed can only be erased', (
+      tester,
+    ) async {
+      final messenger = await pumpApp(
+        tester,
+        messenger: FakeMessenger(
+          phaseValue: MessengerPhase.unlinked,
+          usernameValue: 'ada',
+        ),
+      );
+      expect(find.text('This device was removed from @ada.'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('unlinked.erase')));
+      await tester.pumpAndSettle();
+      expect(messenger.erased, isTrue);
+      expect(find.byKey(const Key('app.welcome')), findsOneWidget);
     });
 
     testWidgets('a chat shows its 60-digit safety code', (tester) async {

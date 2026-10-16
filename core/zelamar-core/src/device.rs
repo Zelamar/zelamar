@@ -60,6 +60,7 @@ const RECORD_USERNAME: &str = "account.username";
 const RECORD_CONTACTS: &str = "device.contacts";
 const RECORD_INTRODUCED: &str = "device.introduced";
 const RECORD_READ_MARKS: &str = "device.read_marks";
+const RECORD_LABELS: &str = "device.labels";
 
 /// Unread counts stop at this many; the app shows "99+".
 const UNREAD_CAP: u32 = 99;
@@ -158,6 +159,12 @@ pub enum Received {
         /// The chat that changed.
         chat: ChatId,
     },
+    /// A change to the chat took this device out of it: it can read and
+    /// write nothing more there.
+    Left {
+        /// The chat this device is no longer in.
+        chat: ChatId,
+    },
     /// This device's own message, echoed back by a transport. Nothing to do:
     /// the device applied it when sending.
     OwnEcho {
@@ -225,6 +232,9 @@ pub struct Device {
     /// and as on disk.
     read_marks: BTreeMap<ChatId, i64>,
     persisted_read_marks: BTreeMap<ChatId, i64>,
+    /// What this account's devices call themselves, as far as this one
+    /// knows (ADR-0014).
+    labels: BTreeMap<DeviceId, String>,
 }
 
 /// Freshly built key packages, TLS-encoded.
@@ -315,6 +325,7 @@ impl Device {
         );
         device.introduced.extend(linked.introduced);
         device.username = Some(linked.username);
+        device.labels.extend(linked.labels);
         let records = device.base_records()?;
         device.persist_with(records)?;
         Ok(device)
@@ -367,6 +378,7 @@ impl Device {
             persisted_introduced: BTreeSet::new(),
             read_marks: BTreeMap::new(),
             persisted_read_marks: BTreeMap::new(),
+            labels: BTreeMap::new(),
         })
     }
 
@@ -382,6 +394,9 @@ impl Device {
         }
         if let Some(username) = &self.username {
             records.push((RECORD_USERNAME, username.as_bytes().to_vec()));
+        }
+        if !self.labels.is_empty() {
+            records.push((RECORD_LABELS, encode_labels(&self.labels)?));
         }
         Ok(records)
     }
@@ -443,6 +458,11 @@ impl Device {
             .map(|bytes| decode_read_marks(&bytes))
             .transpose()?
             .unwrap_or_default();
+        let labels = store
+            .record(RECORD_LABELS)?
+            .map(|bytes| decode_labels(&bytes))
+            .transpose()?
+            .unwrap_or_default();
 
         let provider = OpenMlsRustCrypto::default();
         let persisted = store.load_mls_state()?;
@@ -484,6 +504,7 @@ impl Device {
             introduced,
             persisted_read_marks: read_marks.clone(),
             read_marks,
+            labels,
         })
     }
 
@@ -510,6 +531,36 @@ impl Device {
     #[must_use]
     pub fn username(&self) -> Option<&str> {
         self.username.as_deref()
+    }
+
+    /// What `device`, one of this account's, calls itself, if this device
+    /// knows.
+    #[must_use]
+    pub fn device_label(&self, device: DeviceId) -> Option<&str> {
+        self.labels.get(&device).map(String::as_str)
+    }
+
+    /// Remembers what `device`, one of this account's, calls itself; each
+    /// device tells its own, and linking passes them on.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Malformed`] for an overlong label, or a storage error.
+    pub fn remember_label(&mut self, device: DeviceId, label: &str) -> Result<()> {
+        if label.chars().count() > crate::link::MAX_LABEL {
+            return Err(CoreError::malformed("device label", "too long"));
+        }
+        if self.labels.get(&device).map(String::as_str) == Some(label) {
+            return Ok(());
+        }
+        let mut labels = self.labels.clone();
+        labels.insert(device, label.to_owned());
+        self.store.apply(&Batch {
+            records: vec![(RECORD_LABELS, encode_labels(&labels)?)],
+            ..Batch::default()
+        })?;
+        self.labels = labels;
+        Ok(())
     }
 
     /// Remembers the username the service granted.
@@ -956,7 +1007,11 @@ impl Device {
     /// [`CoreError::Unauthenticated`] on a device without the account key,
     /// [`CoreError::Malformed`] before the account has a username or for an
     /// applicant claiming this device's id, or a crypto error.
-    pub fn approve_link(&self, offer: &Offer, applicant: &Applicant) -> Result<service::Request> {
+    pub fn approve_link(
+        &mut self,
+        offer: &Offer,
+        applicant: &Applicant,
+    ) -> Result<service::Request> {
         let account = self.account_key().ok_or(CoreError::Unauthenticated(
             "only the device holding the account key can link devices",
         ))?;
@@ -971,12 +1026,20 @@ impl Device {
             ));
         }
         let certificate = account.certify_device(applicant.device, &applicant.signature_key)?;
-        offer.answer(&AnswerBody {
+        let answer = offer.answer(&AnswerBody {
             certificate: certificate.encode(),
             username,
             contacts: self.contacts.values().cloned().collect(),
             introduced: self.introduced.iter().cloned().collect(),
-        })
+            labels: self
+                .labels
+                .iter()
+                .map(|(device, label)| (*device, label.clone()))
+                .chain([(applicant.device, applicant.label.clone())])
+                .collect(),
+        })?;
+        self.remember_label(applicant.device, &applicant.label)?;
+        Ok(answer)
     }
 
     /// Which of this account's devices each chat still lacks, given the
@@ -1021,6 +1084,99 @@ impl Device {
             }
         }
         Ok(missing)
+    }
+
+    /// Which devices of this account each chat still holds although the
+    /// directory no longer lists them ([`service::device_list`]): removed
+    /// devices, to take out of every chat (ADR-0014). Chats still waiting
+    /// for an answer to a commit are left for later.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Unauthenticated`] for a certificate of another account,
+    /// or a malformed member.
+    pub fn stale_devices(
+        &self,
+        registered: &[DeviceCertificate],
+    ) -> Result<Vec<(ChatId, Vec<DeviceId>)>> {
+        let own = self.account();
+        if registered
+            .iter()
+            .any(|certificate| certificate.account() != own)
+        {
+            return Err(CoreError::Unauthenticated(
+                "a listed device belongs to another account",
+            ));
+        }
+        let listed: BTreeSet<DeviceId> = registered.iter().map(DeviceCertificate::device).collect();
+        let mut stale = Vec::new();
+        for chat in self.chats() {
+            let group = &self.chats[&chat];
+            if group.pending_commit().is_some() {
+                continue;
+            }
+            let mut gone = Vec::new();
+            for member in group.members() {
+                let certificate = certificate_of(&member.credential)?;
+                let device = certificate.device();
+                if certificate.account() == own && device != self.id() && !listed.contains(&device)
+                {
+                    gone.push(device);
+                }
+            }
+            if !gone.is_empty() {
+                stale.push((chat, gone));
+            }
+        }
+        Ok(stale)
+    }
+
+    /// Takes `devices`, all of this account, out of `chat` in one commit.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::UnknownChat`], [`CoreError::Malformed`] when none of
+    /// them is in the chat or one is this device, or an MLS or storage
+    /// error.
+    pub fn remove_own_devices(&mut self, chat: &ChatId, devices: &[DeviceId]) -> Result<Outgoing> {
+        if devices.contains(&self.id()) {
+            return Err(CoreError::malformed(
+                "removal",
+                "a device cannot remove itself",
+            ));
+        }
+        self.transact(|device| {
+            let own = device.account();
+            let group = device.chats.get(chat).ok_or(CoreError::UnknownChat)?;
+            let mut leaves = Vec::new();
+            for member in group.members() {
+                let certificate = certificate_of(&member.credential)?;
+                if certificate.account() == own && devices.contains(&certificate.device()) {
+                    leaves.push(member.index);
+                }
+            }
+            if leaves.is_empty() {
+                return Err(CoreError::malformed(
+                    "removal",
+                    "no such device in the chat",
+                ));
+            }
+            let group = device.chats.get_mut(chat).ok_or(CoreError::UnknownChat)?;
+            // The removed devices get the commit too: it tells them they
+            // are out.
+            let everyone = recipients(group)?;
+            let epoch = group.epoch().as_u64();
+            let (commit, _welcome, _group_info) = group
+                .remove_members(&device.provider, &device.signer, &leaves)
+                .map_err(|e| CoreError::mls("removing a device", e))?;
+            let commit = Outgoing {
+                id: EnvelopeId::random()?,
+                recipients: everyone,
+                payload: encode(&commit, "encoding a commit")?,
+                commit: None,
+            };
+            device.queue_commit(chat, epoch, commit, None)
+        })
     }
 
     /// Adds this account's own devices to `chat` in one commit, each from a
@@ -1098,30 +1254,45 @@ impl Device {
             payload: encode(&welcome, "encoding a welcome")?,
             commit: None,
         };
-        let mut commit = Outgoing {
+        let commit = Outgoing {
             id: EnvelopeId::random()?,
             recipients: existing,
             payload: encode(&commit, "encoding a commit")?,
             commit: None,
         };
+        let commit = self.queue_commit(chat, epoch, commit, Some(welcome.clone()))?;
+        Ok(Invitation { commit, welcome })
+    }
+
+    /// Sends `commit`, made in `epoch`. With nobody else in `chat` nothing
+    /// can race it: it applies at once and its welcome goes out as is.
+    /// Otherwise it goes through the sequencer and applies here once it
+    /// wins ([`Device::settle`]).
+    fn queue_commit(
+        &mut self,
+        chat: &ChatId,
+        epoch: u64,
+        mut commit: Outgoing,
+        welcome: Option<Outgoing>,
+    ) -> Result<Outgoing> {
         if commit.recipients.is_empty() {
-            // Nobody else is here: nothing can race this commit, so it
-            // applies at once (a new chat works offline, too).
-            group
+            self.chats
+                .get_mut(chat)
+                .ok_or(CoreError::UnknownChat)?
                 .merge_pending_commit(&self.provider)
-                .map_err(|e| CoreError::mls("applying an invitation", e))?;
-            self.queue(&welcome, None)?;
+                .map_err(|e| CoreError::mls("applying a change to a chat", e))?;
+            if let Some(welcome) = &welcome {
+                self.queue(welcome, None)?;
+            }
         } else {
-            // Others may be changing the chat too: the sequencer decides,
-            // and the commit applies here once it wins (`settle`).
             commit.commit = Some(CommitTicket {
                 group: chat.0.clone(),
                 epoch,
-                welcome: Some(Box::new(welcome.clone())),
+                welcome: welcome.map(Box::new),
             });
             self.queue(&commit, None)?;
         }
-        Ok(Invitation { commit, welcome })
+        Ok(commit)
     }
 
     /// Joins a chat from a welcome addressed to this device.
@@ -1410,7 +1581,11 @@ impl Device {
                 group
                     .merge_staged_commit(&self.provider, *staged)
                     .map_err(|e| CoreError::mls("applying a chat update", e))?;
-                Ok(Received::ChatUpdated { chat })
+                Ok(if group.is_active() {
+                    Received::ChatUpdated { chat }
+                } else {
+                    Received::Left { chat }
+                })
             }
             // Zelamar merges its own commits immediately and frames everything
             // as PrivateMessage, so an echo of our own traffic is a duplicate.
@@ -1742,6 +1917,20 @@ fn encode_read_marks(marks: &BTreeMap<ChatId, i64>) -> Result<Vec<u8>> {
         }
     })?;
     Ok(out)
+}
+
+fn encode_labels(labels: &BTreeMap<DeviceId, String>) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    ciborium::into_writer(labels, &mut out).map_err(|e| CoreError::Encoding {
+        what: "device labels",
+        source: e.into(),
+    })?;
+    Ok(out)
+}
+
+fn decode_labels(bytes: &[u8]) -> Result<BTreeMap<DeviceId, String>> {
+    ciborium::from_reader(bytes)
+        .map_err(|_| CoreError::malformed("store", "device labels are malformed"))
 }
 
 fn decode_read_marks(bytes: &[u8]) -> Result<BTreeMap<ChatId, i64>> {

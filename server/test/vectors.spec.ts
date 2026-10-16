@@ -9,7 +9,7 @@ import { buffer, concat, fromBase64Url, utf8 } from '../src/bytes';
 import { decodeCertificate } from '../src/certificate';
 import { checkClaim } from '../src/claim';
 import { decodeCommit, decodeDelivery, encodeEnvelope } from '../src/frames';
-import { checkSignedRequest, type SignedRequest } from '../src/signed';
+import { checkAccountRequest, checkSignedRequest, type SignedRequest } from '../src/signed';
 import { normalizeUsername } from '../src/username';
 
 function bytes(text: string): Uint8Array {
@@ -63,6 +63,37 @@ describe('vectors written by the core', () => {
     });
     const late = await checkSignedRequest(request, account, device, vector.timestamp + 600_000);
     expect(late).toEqual({ status: 400, body: { error: 'stale_request' } });
+  });
+
+  it('give an account-signed request the service accepts, and only untouched', async () => {
+    const vector = vectors.account_request;
+    expect('zelamar-certificate' in vector.headers).toBe(false);
+    const request: SignedRequest = {
+      method: vector.method,
+      path: vector.path,
+      certificate: null,
+      timestamp: vector.headers['zelamar-timestamp'],
+      signature: vector.headers['zelamar-account-signature'],
+      body: buffer(bytes(vector.body)),
+    };
+    const account = bytes(vector.account);
+    expect(await checkAccountRequest(request, account, vector.timestamp)).toBe(true);
+    const moved = { ...request, path: vector.path.replace('alice_92', 'mallory') };
+    expect(await checkAccountRequest(moved, account, vector.timestamp)).toEqual({
+      status: 401,
+      body: { error: 'unauthorized' },
+    });
+    // A device signature never passes as the account's: the contexts differ.
+    const asDevice = await checkAccountRequest(
+      { ...request, signature: vectors.request.headers['zelamar-signature'] },
+      account,
+      vector.timestamp,
+    );
+    expect(asDevice).toEqual({ status: 401, body: { error: 'unauthorized' } });
+    expect(await checkAccountRequest(request, account, vector.timestamp + 600_000)).toEqual({
+      status: 400,
+      body: { error: 'stale_request' },
+    });
   });
 
   it('give a delivery frame the service reads as intended', () => {
