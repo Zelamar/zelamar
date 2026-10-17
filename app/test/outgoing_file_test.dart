@@ -47,4 +47,10 @@ void main() {
     expect(describeSize(2516582), '2.4 MB');
     expect(describeSize(25 * 1024 * 1024), '25 MB');
   });
+
+  test('lengths read like a clock', () {
+    expect(describeDuration(const Duration(milliseconds: 7400)), '0:07');
+    expect(describeDuration(const Duration(seconds: 83)), '1:23');
+    expect(describeDuration(const Duration(minutes: 5)), '5:00');
+  });
 }

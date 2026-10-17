@@ -13,6 +13,7 @@ import 'package:zelamar/src/ui/avatar.dart';
 import 'package:zelamar/src/ui/chat/attachments.dart';
 import 'package:zelamar/src/ui/chat/group_details_screen.dart';
 import 'package:zelamar/src/ui/chat/safety_code.dart';
+import 'package:zelamar/src/ui/chat/voice.dart';
 import 'package:zelamar/src/ui/words.dart';
 
 /// One conversation.
@@ -148,6 +149,21 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         return;
       }
       final file = await OutgoingFile.prepare(picked.name, bytes);
+      await widget.messenger.sendFile(widget.chat, file);
+    } on MessengerFailure catch (failure) {
+      say.showSnackBar(SnackBar(content: Text(describeFailure(failure.code))));
+    } finally {
+      if (mounted) {
+        setState(() => _attaching = false);
+      }
+    }
+  }
+
+  /// Sends a file made here, such as a voice message.
+  Future<void> _sendFile(OutgoingFile file) async {
+    setState(() => _attaching = true);
+    final say = ScaffoldMessenger.of(context);
+    try {
       await widget.messenger.sendFile(widget.chat, file);
     } on MessengerFailure catch (failure) {
       say.showSnackBar(SnackBar(content: Text(describeFailure(failure.code))));
@@ -515,6 +531,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 onCancel: _cancelMode,
                 onAttach: _attaching ? null : _attach,
                 attaching: _attaching,
+                onVoice: _sendFile,
                 banner: switch ((_editing, _replying)) {
                   (final editing?, _) => ComposerBanner(
                     icon: Icons.edit_outlined,
@@ -751,13 +768,30 @@ class MessageBubble extends StatelessWidget {
                   padding: EdgeInsets.only(
                     bottom: message.text.isEmpty ? ZSpace.xxs : ZSpace.xs,
                   ),
-                  child: file.mime.startsWith('image/') && loadFile != null
-                      ? ImageAttachment(file: file, load: loadFile!)
-                      : FileAttachment(
-                          file: file,
-                          load: loadFile ?? () async => Uint8List(0),
-                          outgoing: outgoing,
-                        ),
+                  child: switch (file) {
+                    _ when loadFile == null => FileAttachment(
+                      file: file,
+                      load: () async => Uint8List(0),
+                      outgoing: outgoing,
+                    ),
+                    _ when file.mime.startsWith('image/') => ImageAttachment(
+                      file: file,
+                      load: loadFile!,
+                    ),
+                    _
+                        when file.mime.startsWith('audio/') &&
+                            file.durationMs != null =>
+                      VoiceAttachment(
+                        file: file,
+                        load: loadFile!,
+                        outgoing: outgoing,
+                      ),
+                    _ => FileAttachment(
+                      file: file,
+                      load: loadFile!,
+                      outgoing: outgoing,
+                    ),
+                  },
                 ),
               Align(
                 alignment: Alignment.centerLeft,
@@ -1131,6 +1165,7 @@ class Composer extends StatefulWidget {
     this.onCancel,
     this.onAttach,
     this.attaching = false,
+    this.onVoice,
     super.key,
   });
 
@@ -1142,6 +1177,9 @@ class Composer extends StatefulWidget {
 
   /// A file is being prepared and uploaded.
   final bool attaching;
+
+  /// Sends a recorded voice message; without it there is no microphone.
+  final Future<void> Function(OutgoingFile voice)? onVoice;
 
   /// What the next message answers or edits, shown above the field.
   final Widget? banner;
@@ -1158,6 +1196,48 @@ class _ComposerState extends State<Composer> {
   late final _focus = FocusNode(onKeyEvent: _onKey);
 
   bool get _canSend => _text.text.trim().isNotEmpty;
+
+  /// Recording a voice message, while not `null`.
+  VoiceRecorder? _recorder;
+
+  Future<void> _record() async {
+    final recorder = VoiceRecorder();
+    final say = ScaffoldMessenger.of(context);
+    try {
+      if (await recorder.start()) {
+        setState(() => _recorder = recorder);
+        return;
+      }
+      say.showSnackBar(
+        const SnackBar(
+          content: Text('Allow Zelamar to use the microphone to record.'),
+        ),
+      );
+    } on Object {
+      say.showSnackBar(
+        const SnackBar(content: Text('Zelamar couldn’t start recording.')),
+      );
+    }
+    await recorder.dispose();
+  }
+
+  Future<void> _stopRecording({required bool send}) async {
+    final recorder = _recorder;
+    if (recorder == null) {
+      return;
+    }
+    setState(() => _recorder = null);
+    try {
+      if (send) {
+        final voice = await recorder.finish();
+        if (voice != null) {
+          await widget.onVoice?.call(voice);
+        }
+      }
+    } finally {
+      await recorder.dispose();
+    }
+  }
 
   @override
   void initState() {
@@ -1181,6 +1261,7 @@ class _ComposerState extends State<Composer> {
   void dispose() {
     _text.removeListener(_changed);
     _focus.dispose();
+    unawaited(_recorder?.dispose());
     super.dispose();
   }
 
@@ -1232,65 +1313,84 @@ class _ComposerState extends State<Composer> {
         mainAxisSize: MainAxisSize.min,
         children: [
           ?widget.banner,
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              SizedBox(
-                width: 44,
-                height: 44,
-                child: widget.attaching
-                    ? Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: colors.accent,
+          if (_recorder case final recorder?)
+            RecordingBar(
+              recorder: recorder,
+              onCancel: () => unawaited(_stopRecording(send: false)),
+              onSend: () => unawaited(_stopRecording(send: true)),
+            )
+          else
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                SizedBox(
+                  width: 44,
+                  height: 44,
+                  child: widget.attaching
+                      ? Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: colors.accent,
+                          ),
+                        )
+                      : IconButton(
+                          key: const Key('chat.attach'),
+                          tooltip: 'Attach a photo or file',
+                          onPressed: widget.onAttach,
+                          icon: Icon(
+                            Icons.attach_file_rounded,
+                            color: colors.textSecondary,
+                          ),
                         ),
-                      )
-                    : IconButton(
-                        key: const Key('chat.attach'),
-                        tooltip: 'Attach a photo or file',
-                        onPressed: widget.onAttach,
-                        icon: Icon(
-                          Icons.attach_file_rounded,
-                          color: colors.textSecondary,
-                        ),
-                      ),
-              ),
-              const SizedBox(width: ZSpace.xs),
-              Expanded(
-                child: TextField(
-                  key: const Key('chat.input'),
-                  controller: _text,
-                  focusNode: _focus,
-                  minLines: 1,
-                  maxLines: 6,
-                  keyboardType: TextInputType.multiline,
-                  textCapitalization: TextCapitalization.sentences,
-                  decoration: const InputDecoration(hintText: 'Message'),
-                  style: context.text.bodyLarge,
                 ),
-              ),
-              const SizedBox(width: ZSpace.sm),
-              AnimatedContainer(
-                duration: ZMotion.fast,
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: _canSend ? colors.accent : colors.surfaceSunken,
-                  shape: BoxShape.circle,
-                ),
-                child: IconButton(
-                  key: const Key('chat.send'),
-                  tooltip: 'Send',
-                  onPressed: _canSend ? _send : null,
-                  icon: Icon(
-                    Icons.arrow_upward_rounded,
-                    color: _canSend ? colors.onAccent : colors.textTertiary,
+                const SizedBox(width: ZSpace.xs),
+                Expanded(
+                  child: TextField(
+                    key: const Key('chat.input'),
+                    controller: _text,
+                    focusNode: _focus,
+                    minLines: 1,
+                    maxLines: 6,
+                    keyboardType: TextInputType.multiline,
+                    textCapitalization: TextCapitalization.sentences,
+                    decoration: const InputDecoration(hintText: 'Message'),
+                    style: context.text.bodyLarge,
                   ),
                 ),
-              ),
-            ],
-          ),
+                const SizedBox(width: ZSpace.sm),
+                if (!_canSend && widget.onVoice != null && !widget.attaching)
+                  SizedBox(
+                    width: 44,
+                    height: 44,
+                    child: IconButton(
+                      key: const Key('chat.record'),
+                      tooltip: 'Record a voice message',
+                      onPressed: () => unawaited(_record()),
+                      icon: Icon(Icons.mic_none_rounded, color: colors.accent),
+                    ),
+                  )
+                else
+                  AnimatedContainer(
+                    duration: ZMotion.fast,
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: _canSend ? colors.accent : colors.surfaceSunken,
+                      shape: BoxShape.circle,
+                    ),
+                    child: IconButton(
+                      key: const Key('chat.send'),
+                      tooltip: 'Send',
+                      onPressed: _canSend ? _send : null,
+                      icon: Icon(
+                        Icons.arrow_upward_rounded,
+                        color: _canSend ? colors.onAccent : colors.textTertiary,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
         ],
       ),
     );

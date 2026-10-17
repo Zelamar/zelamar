@@ -12,6 +12,10 @@ void main() {
     expect(manifest, contains('android.permission.INTERNET'));
   });
 
+  test('voice messages may use the microphone', () {
+    expect(manifest, contains('android.permission.RECORD_AUDIO'));
+  });
+
   test('release builds never back messages up to the cloud', () {
     expect(manifest, contains('android:allowBackup="false"'));
     expect(manifest, contains('@xml/data_extraction_rules'));

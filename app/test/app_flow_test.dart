@@ -397,6 +397,43 @@ void main() {
       expect(find.text('2.4 MB'), findsOneWidget);
       expect(find.byKey(const Key('chat.attach')), findsOneWidget);
     });
+
+    testWidgets('voice messages: a microphone when there is no text', (
+      tester,
+    ) async {
+      final messenger =
+          FakeMessenger(phaseValue: MessengerPhase.ready, usernameValue: 'ada')
+            ..addChat(
+              'c1',
+              '@bob',
+              messages: [
+                view(
+                  1,
+                  '',
+                  file: FileView(
+                    name: 'Voice message.m4a',
+                    mime: 'audio/mp4',
+                    size: BigInt.from(24000),
+                    durationMs: 7400,
+                  ),
+                ),
+              ],
+            );
+      await pumpApp(tester, messenger: messenger);
+      await tester.tap(find.byKey(const Key('chats.tile.c1')));
+      await pumpAWhile(tester);
+      expect(find.byKey(const Key('chat.voice.play')), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(const Key('chat.voice.time'))).data,
+        '0:07',
+      );
+      expect(find.byKey(const Key('chat.record')), findsOneWidget);
+      expect(find.byKey(const Key('chat.send')), findsNothing);
+      await tester.enterText(find.byKey(const Key('chat.input')), 'Hi');
+      await tester.pump();
+      expect(find.byKey(const Key('chat.record')), findsNothing);
+      expect(find.byKey(const Key('chat.send')), findsOneWidget);
+    });
   });
 
   group('chat requests', () {
