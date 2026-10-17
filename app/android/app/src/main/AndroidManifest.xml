@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Android 13+: asked once, after the account is created. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Voice messages: asked for when the user first records one. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- No cloud backups: messages must not leave the device, and a
          restored sealed key could not be opened on another phone anyway. -->
     <application

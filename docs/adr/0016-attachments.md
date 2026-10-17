@@ -59,6 +59,14 @@ some bytes, never what they are, nor who downloads them.
 - Decrypted files live in the app's own data directory, never in shared
   storage, until the user saves one.
 
+**Voice messages are files.**
+- They are recorded as AAC-LC in an MP4 container (`audio/mp4`): mono,
+  22.05 kHz, 32 kbit/s, about 240 KB a minute, at most 5 minutes.
+- `duration_ms` tells a voice message from any other audio file.
+- On playback, the decrypted audio lives in a temporary file only while its
+  bubble is on screen, because the players read files.
+- Recording asks for the microphone the first time, and only then.
+
 ## Consequences
 
 - No new product and no cost. The 5 GB cap, divided by 30 days of

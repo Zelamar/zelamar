@@ -46,6 +46,12 @@ String describeSize(int bytes) {
   return '${megabytes.toStringAsFixed(megabytes < 10 ? 1 : 0)} MB';
 }
 
+/// A length people read: `0:07`, `1:23`.
+String describeDuration(Duration duration) {
+  final seconds = duration.inSeconds;
+  return '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}';
+}
+
 /// A line for something that happened to a chat.
 String describeEvent(String author, ChatEvent event) => switch (event.kind) {
   ChatEventKind.named => '$author named the group “${event.name ?? ''}”',
