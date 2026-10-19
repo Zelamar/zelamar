@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:zelamar/src/design/theme.dart';
 import 'package:zelamar/src/design/tokens.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
@@ -71,7 +73,8 @@ class _ImageAttachmentState extends State<ImageAttachment> {
           ? (_failed ? _retry : null)
           : () => Navigator.of(context).push(
               MaterialPageRoute<void>(
-                builder: (_) => ImageViewer(bytes: full, name: file.name),
+                builder: (_) =>
+                    ImageViewer(bytes: full, name: file.name, mime: file.mime),
               ),
             ),
       child: ClipRRect(
@@ -114,10 +117,16 @@ class _ImageAttachmentState extends State<ImageAttachment> {
 
 /// A photo full screen, to zoom and save.
 class ImageViewer extends StatelessWidget {
-  const new({required this.bytes, required this.name, super.key});
+  const new({
+    required this.bytes,
+    required this.name,
+    required this.mime,
+    super.key,
+  });
 
   final Uint8List bytes;
   final String name;
+  final String mime;
 
   @override
   Widget build(BuildContext context) {
@@ -131,7 +140,8 @@ class ImageViewer extends StatelessWidget {
             key: const Key('viewer.save'),
             tooltip: 'Save',
             icon: const Icon(Icons.download_rounded),
-            onPressed: () => unawaited(saveFile(context, name, bytes)),
+            onPressed: () =>
+                unawaited(saveFile(context, name, bytes, mime: mime)),
           ),
         ],
       ),
@@ -169,7 +179,12 @@ class _FileAttachmentState extends State<FileAttachment> {
     try {
       final bytes = await widget.load();
       if (mounted) {
-        await saveFile(context, widget.file.name, bytes);
+        await saveFile(
+          context,
+          widget.file.name,
+          bytes,
+          mime: widget.file.mime,
+        );
       }
     } on MessengerFailure catch (failure) {
       if (mounted) {
@@ -238,14 +253,26 @@ class _FileAttachmentState extends State<FileAttachment> {
   }
 }
 
-/// Asks where to save [bytes] as [name], and saves them there.
+/// Asks where to save [bytes] as [name], and saves them there. Android has
+/// no save dialog for apps like this one: its share sheet saves to Files or
+/// opens the file in another app instead.
 Future<void> saveFile(
   BuildContext context,
   String name,
-  Uint8List bytes,
-) async {
+  Uint8List bytes, {
+  String? mime,
+}) async {
   final messenger = ScaffoldMessenger.of(context);
   try {
+    if (Platform.isAndroid) {
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile.fromData(bytes, name: name, mimeType: mime)],
+          fileNameOverrides: [name],
+        ),
+      );
+      return;
+    }
     final location = await getSaveLocation(suggestedName: name);
     if (location == null) {
       return;
