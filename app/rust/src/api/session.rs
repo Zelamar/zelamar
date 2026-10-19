@@ -943,13 +943,17 @@ impl Session {
         let opened = self.device.open_envelope(&bytes)?;
         let ack = (!opened.keep()).then(|| service::acknowledgement(&[opened.id]));
         Ok(match opened.result {
-            Ok(Received::Joined { chat, .. }) => InboxEvent {
+            Ok(Received::Joined { chat, by }) => InboxEvent {
                 ack,
                 chat: Some(chat_key(&chat)),
                 joined: true,
                 left: false,
                 refused: None,
-                notice: None,
+                // One's own other device bringing this one in is no news.
+                notice: (by.account != self.device.account()).then(|| Notice {
+                    title: self.name_of(by.account),
+                    body: "New chat request".to_owned(),
+                }),
             },
             Ok(Received::Message {
                 chat,
@@ -1235,6 +1239,16 @@ impl Session {
             .collect()
     }
 
+    /// `@name` for `account`, or "Someone new" when the name is unknown.
+    fn name_of(&self, account: zelamar_core::identity::AccountId) -> String {
+        self.device
+            .contacts()
+            .into_iter()
+            .find(|contact| contact.account == account)
+            .and_then(|contact| contact.username)
+            .map_or_else(|| "Someone new".to_owned(), |name| format!("@{name}"))
+    }
+
     /// The notification for a new text from `account` in `chat`, if it is
     /// one. In a named group the title is the group, and the text says who.
     fn notice(
@@ -1252,13 +1266,7 @@ impl Session {
             }
             _ => return None,
         };
-        let author = self
-            .device
-            .contacts()
-            .into_iter()
-            .find(|contact| contact.account == account)
-            .and_then(|contact| contact.username)
-            .map_or_else(|| "Someone new".to_owned(), |name| format!("@{name}"));
+        let author = self.name_of(account);
         Some(match self.device.chat_name(chat) {
             Some(group) => Notice {
                 title: group.to_owned(),
@@ -1796,13 +1804,18 @@ mod tests {
 
         let events = read(&mut stub, &mut bob);
         assert!(events[0].joined);
+        // Bob does not know Alice's name yet when the request arrives.
+        let request = events[0].notice.clone().expect("a notice for the request");
+        assert_eq!(request.title, "Someone new");
+        assert_eq!(request.body, "New chat request");
         let notice = events
             .iter()
+            .skip(1)
             .find_map(|event| event.notice.clone())
             .expect("a notice for Alice's text");
         assert_eq!(notice.title, "@alice");
         assert_eq!(notice.body, "Hello Bob");
-        assert_eq!(events.iter().filter(|e| e.notice.is_some()).count(), 1);
+        assert_eq!(events.iter().filter(|e| e.notice.is_some()).count(), 2);
         assert!(events
             .iter()
             .all(|event| event.ack.is_some() && event.refused.is_none()));
