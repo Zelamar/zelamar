@@ -6,7 +6,9 @@ Zelamar is a premium, end-to-end encrypted messenger: maximum privacy with no
 loss of comfort, an account in seconds (`@username`, no phone, no e-mail), and
 a long-term goal of working without internet (**Drift**).
 
-> Proprietary and confidential. © 2026 Zelamar. All rights reserved.
+> The source is public so anyone can check what Zelamar does with their
+> messages. It is not open source: © 2026 Zelamar. All rights reserved.
+> Security findings are welcome; see [`docs/threat-model.md`](docs/threat-model.md).
 
 ## Where to start
 
