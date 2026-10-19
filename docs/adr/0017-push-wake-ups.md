@@ -13,7 +13,11 @@ connection per phone and wake apps on request.
 Constraints:
 - **Privacy.** Google must learn nothing about content or senders.
 - **Budget.** FCM is free.
-- **Windows** keeps Zelamar running in the tray, so it needs no push in v1.
+- **Windows** needs no push in v1, because Zelamar keeps running in the
+  tray:
+  - closing the window only hides it;
+  - the tray icon's menu opens Zelamar again or quits it;
+  - launching a profile that is already running brings its window back.
 
 ## Decision
 

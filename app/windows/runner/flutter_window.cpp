@@ -4,8 +4,9 @@
 
 #include "flutter/generated_plugin_registrant.h"
 
-FlutterWindow::FlutterWindow(const flutter::DartProject& project)
-    : project_(project) {}
+FlutterWindow::FlutterWindow(const flutter::DartProject& project,
+                             UINT show_message)
+    : project_(project), show_message_(show_message) {}
 
 FlutterWindow::~FlutterWindow() {}
 
@@ -26,7 +27,7 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   notifier_ = std::make_unique<Notifier>(
-      flutter_controller_->engine()->messenger(), GetHandle());
+      flutter_controller_->engine()->messenger(), GetHandle(), show_message_);
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
