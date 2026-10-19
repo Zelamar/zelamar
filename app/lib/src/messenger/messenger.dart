@@ -146,6 +146,13 @@ abstract class Messenger extends ChangeNotifier {
   /// Everyone else in [chat].
   Future<List<MemberView>> members(String chat);
 
+  /// Whether Zelamar starts in the tray at sign-in; `null` where the
+  /// platform has no such thing.
+  Future<bool?> startsAtSignIn();
+
+  /// Turns starting at sign-in on or off; returns the new state.
+  Future<bool?> setStartsAtSignIn({required bool on});
+
   /// Up to [limit] messages of [chat], newest first, older than [before].
   Future<List<MessageView>> messages(
     String chat, {

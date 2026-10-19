@@ -24,6 +24,13 @@ abstract interface class Notifier {
   /// The token that wakes this app while it is closed (ADR-0017), or `null`
   /// where there is no such thing.
   Future<String?> pushToken();
+
+  /// Whether the platform starts Zelamar in the tray at sign-in; `null`
+  /// where that is not a thing (everywhere but Windows).
+  Future<bool?> startsAtSignIn();
+
+  /// Turns starting at sign-in on or off; returns the new state.
+  Future<bool?> setStartsAtSignIn({required bool on});
 }
 
 /// The native notifier, over the `zelamar/notify` channel. A notification
@@ -33,6 +40,34 @@ class PlatformNotifier implements Notifier {
 
   static const _channel = MethodChannel('zelamar/notify');
   static const _push = MethodChannel('zelamar/push');
+
+  @override
+  Future<bool?> startsAtSignIn() async {
+    if (!Platform.isWindows) {
+      return null;
+    }
+    try {
+      return await _channel.invokeMethod<bool>('startsAtSignIn');
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
+  @override
+  Future<bool?> setStartsAtSignIn({required bool on}) async {
+    if (!Platform.isWindows) {
+      return null;
+    }
+    try {
+      return await _channel.invokeMethod<bool>('setStartsAtSignIn', on);
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
 
   @override
   Future<String?> pushToken() async {
@@ -100,4 +135,10 @@ class SilentNotifier implements Notifier {
 
   @override
   Future<String?> pushToken() async => null;
+
+  @override
+  Future<bool?> startsAtSignIn() async => null;
+
+  @override
+  Future<bool?> setStartsAtSignIn({required bool on}) async => null;
 }

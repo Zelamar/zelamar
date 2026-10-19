@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:zelamar/src/design/theme.dart';
 import 'package:zelamar/src/design/tokens.dart';
@@ -100,6 +102,7 @@ class ProfileScreen extends StatelessWidget {
                       ),
                     ),
                   ),
+                  SignInSwitch(messenger: messenger),
                   ListTile(
                     key: const Key('profile.lab'),
                     contentPadding: EdgeInsets.zero,
@@ -124,6 +127,61 @@ class ProfileScreen extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// "Open at sign-in", where the platform has it (Windows): Zelamar starts in
+/// the tray, so messages keep arriving after a restart.
+class SignInSwitch extends StatefulWidget {
+  const new({required this.messenger, super.key});
+
+  final Messenger messenger;
+
+  @override
+  State<SignInSwitch> createState() => _SignInSwitchState();
+}
+
+class _SignInSwitchState extends State<SignInSwitch> {
+  bool? _on;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    final on = await widget.messenger.startsAtSignIn();
+    if (mounted) {
+      setState(() => _on = on);
+    }
+  }
+
+  Future<void> _set(bool on) async {
+    final now = await widget.messenger.setStartsAtSignIn(on: on);
+    if (mounted) {
+      setState(() => _on = now);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final on = _on;
+    if (on == null) {
+      return const SizedBox.shrink();
+    }
+    return SwitchListTile(
+      key: const Key('profile.signIn'),
+      contentPadding: EdgeInsets.zero,
+      secondary: Icon(Icons.login_rounded, color: context.colors.accent),
+      title: const Text('Open at sign-in'),
+      subtitle: const Text(
+        'Start in the tray when you sign in to Windows, so messages keep '
+        'arriving.',
+      ),
+      value: on,
+      onChanged: (value) => unawaited(_set(value)),
     );
   }
 }

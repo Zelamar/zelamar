@@ -43,6 +43,10 @@ class Notifier {
   void BringToFront();
   void ShowMenu();
 
+  // Whether Windows starts this profile in the tray at sign-in.
+  bool StartsAtSignIn() const;
+  void SetStartsAtSignIn(bool on);
+
   HWND window_;
   UINT show_message_;
   UINT taskbar_created_;
@@ -50,6 +54,9 @@ class Notifier {
   bool icon_added_ = false;
   bool told_about_tray_ = false;
   bool quitting_ = false;
+  // The Run entry for this profile: its name and the command it starts.
+  std::wstring run_name_;
+  std::wstring run_command_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;
 };
 
@@ -57,5 +64,9 @@ class Notifier {
 // profile runs once: "Zelamar-<profile>-<hash of the program's path>". The
 // path keeps a test build apart from the installed app.
 std::wstring InstanceName(const std::vector<std::string>& arguments);
+
+// The profile named on the command line (`--profile=`), safe characters
+// only; empty for the default profile.
+std::wstring ProfileArgument(const std::vector<std::string>& arguments);
 
 #endif  // RUNNER_NOTIFIER_H_

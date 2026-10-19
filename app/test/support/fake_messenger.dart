@@ -300,6 +300,19 @@ class FakeMessenger extends Messenger {
   Future<List<MemberView>> members(String chat) async =>
       membersOf[chat] ?? const [];
 
+  /// Starting at sign-in; `null` as on platforms without it.
+  bool? startsAtSignInValue;
+
+  @override
+  Future<bool?> startsAtSignIn() async => startsAtSignInValue;
+
+  @override
+  Future<bool?> setStartsAtSignIn({required bool on}) async {
+    startsAtSignInValue = on;
+    notifyListeners();
+    return on;
+  }
+
   @override
   Future<List<MessageView>> messages(
     String chat, {

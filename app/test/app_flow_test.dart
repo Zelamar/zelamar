@@ -598,6 +598,29 @@ void main() {
       expect(messenger.linkApproved, isFalse);
     });
 
+    testWidgets('Open at sign-in shows where it exists, and turns on', (
+      tester,
+    ) async {
+      final messenger = FakeMessenger(
+        phaseValue: MessengerPhase.ready,
+        usernameValue: 'ada',
+      )..startsAtSignInValue = false;
+      await pumpApp(tester, messenger: messenger);
+      await tester.tap(find.byKey(const Key('chats.profile')));
+      await tester.pumpAndSettle();
+      expect(find.text('Open at sign-in'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('profile.signIn')));
+      await tester.pumpAndSettle();
+      expect(messenger.startsAtSignInValue, isTrue);
+
+      messenger.startsAtSignInValue = null;
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('chats.profile')));
+      await tester.pumpAndSettle();
+      expect(find.text('Open at sign-in'), findsNothing);
+    });
+
     testWidgets('a lost device is removed after a confirmation', (
       tester,
     ) async {

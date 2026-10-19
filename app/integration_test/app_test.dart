@@ -50,6 +50,31 @@ void main() {
     expect(inFront, isA<bool>());
   });
 
+  testWidgets('Windows starts Zelamar at sign-in only when asked', (
+    tester,
+  ) async {
+    const notifier = PlatformNotifier();
+    expect(await notifier.startsAtSignIn(), isA<bool>());
+    // Only on CI: here, it would replace the real app's entry.
+    if (Platform.environment['CI'] != 'true') {
+      return;
+    }
+    Future<String> entry() async {
+      final query = await Process.run('reg', [
+        'query',
+        r'HKCU\Software\Microsoft\Windows\CurrentVersion\Run',
+        '/v',
+        'Zelamar',
+      ]);
+      return '${query.stdout}';
+    }
+
+    expect(await notifier.setStartsAtSignIn(on: true), isTrue);
+    expect(await entry(), contains('--tray'));
+    expect(await notifier.setStartsAtSignIn(on: false), isFalse);
+    expect(await entry(), isNot(contains('--tray')));
+  }, skip: !Platform.isWindows);
+
   testWidgets('welcome, onboarding, then an encrypted exchange in the lab', (
     tester,
   ) async {
