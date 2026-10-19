@@ -216,6 +216,18 @@ pub fn key_lookup(username: &str) -> Result<Request> {
     })
 }
 
+/// Longest push token accepted.
+pub const MAX_PUSH_TOKEN: usize = 4096;
+
+/// Reads the answer to [`Device::push_token`].
+///
+/// # Errors
+///
+/// [`CoreError::Service`] (`unauthorized`, `malformed`, ...).
+pub fn push_set(status: u16, body: &[u8]) -> Result<()> {
+    expect_success(status, body, &[200])
+}
+
 /// Reads the answer to [`Device::remove_device`].
 ///
 /// # Errors
@@ -592,6 +604,35 @@ impl Device {
         }
     }
 
+    /// Leaves this device's Firebase token with its mailbox, so a closed
+    /// app can be woken (ADR-0017), or takes it back with `None`.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Malformed`] for an empty or overlong token.
+    pub fn push_token(&self, token: Option<&str>) -> Result<Request> {
+        let path = format!("{}/push", self.mailbox_access().path);
+        let mut request = match token {
+            Some(token) => {
+                if token.is_empty() || token.len() > MAX_PUSH_TOKEN {
+                    return Err(CoreError::malformed("push token", "empty or too long"));
+                }
+                json_request("PUT", path, &json!({ "platform": "fcm", "token": token }))?
+            }
+            None => Request {
+                method: "DELETE",
+                path,
+                headers: Vec::new(),
+                body: Vec::new(),
+            },
+        };
+        request.headers.push((
+            "authorization",
+            format!("Bearer {}", b64(self.mailbox_secret())),
+        ));
+        Ok(request)
+    }
+
     /// Opens one envelope from the mailbox: a message, a chat update or an
     /// invitation into a chat.
     ///
@@ -832,6 +873,39 @@ mod tests {
             Err(CoreError::Service { status: 409, .. })
         ));
         assert!(commit_answer(503, b"").expect_err("busy").is_transient());
+    }
+
+    #[test]
+    fn push_tokens_go_to_the_mailbox_with_its_secret() {
+        let dir = tempfile::tempdir().expect("dir");
+        let device = Device::create(
+            &dir.path().join("push.db"),
+            &MasterKey::generate().expect("key"),
+            &AccountKey::generate().expect("account"),
+        )
+        .expect("device");
+        let access = device.mailbox_access();
+        let set = device.push_token(Some("fcm-token")).expect("set");
+        assert_eq!(set.method, "PUT");
+        assert_eq!(set.path, format!("{}/push", access.path));
+        assert_eq!(
+            body_json(&set),
+            serde_json::json!({ "platform": "fcm", "token": "fcm-token" })
+        );
+        assert!(
+            set.headers
+                .contains(&("authorization", access.authorization))
+        );
+        let clear = device.push_token(None).expect("clear");
+        assert_eq!((clear.method, clear.body.len()), ("DELETE", 0));
+        assert!(device.push_token(Some("")).is_err());
+        assert!(
+            device
+                .push_token(Some(&"x".repeat(MAX_PUSH_TOKEN + 1)))
+                .is_err()
+        );
+        assert!(push_set(200, b"{}").is_ok());
+        assert!(push_set(401, br#"{"error":"unauthorized"}"#).is_err());
     }
 
     #[test]

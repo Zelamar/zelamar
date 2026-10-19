@@ -61,6 +61,12 @@ jobs:
           ZELAMAR_KEYSTORE: ${{ runner.temp }}/upload.p12
           ZELAMAR_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           SERVICE: ${{ inputs.service }}
+          # Push wake-ups (ADR-0017): the Firebase app's public identifiers,
+          # as repository variables. Without them the APK has no push.
+          ZELAMAR_FIREBASE_APP_ID: ${{ vars.ZELAMAR_FIREBASE_APP_ID }}
+          ZELAMAR_FIREBASE_API_KEY: ${{ vars.ZELAMAR_FIREBASE_API_KEY }}
+          ZELAMAR_FIREBASE_PROJECT_ID: ${{ vars.ZELAMAR_FIREBASE_PROJECT_ID }}
+          ZELAMAR_FIREBASE_SENDER_ID: ${{ vars.ZELAMAR_FIREBASE_SENDER_ID }}
         run: >
           flutter build apk --release --target-platform android-arm64
           --dart-define=ZELAMAR_SERVICE="$SERVICE"

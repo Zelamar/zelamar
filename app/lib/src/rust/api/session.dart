@@ -18,6 +18,12 @@ Uint8List newMasterKey() => RustLib.instance.api.crateApiSessionNewMasterKey();
 bool sessionExists({required String directory}) =>
     RustLib.instance.api.crateApiSessionSessionExists(directory: directory);
 
+/// Reads the answer to [`Session::push_call`].
+void pushRegistered({required int status, required List<int> body}) => RustLib
+    .instance
+    .api
+    .crateApiSessionPushRegistered(status: status, body: body);
+
 /// Reads the answer to one of [`PreparedFile::calls`].
 void chunkUploaded({required int status, required List<int> body}) => RustLib
     .instance
@@ -256,6 +262,10 @@ abstract class Session implements RustOpaqueInterface {
 
   /// Seals `bytes` for upload under a fresh key (ADR-0016).
   Future<PreparedFile> prepareFile({required List<int> bytes});
+
+  /// Leaves this device's push token with its mailbox, or takes it back
+  /// with `None` (ADR-0017).
+  HttpCall pushCall({String? token});
 
   /// Sets the user's reaction to a message, or with `None` removes it.
   Future<void> react({

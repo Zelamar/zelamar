@@ -332,8 +332,50 @@ class LiveMessenger extends Messenger {
     await eraseThisDevice();
   });
 
+  /// The push token last left with the mailbox, kept next to the store.
+  File get _pushTokenFile =>
+      File('$directory${Platform.pathSeparator}push-token');
+
+  /// Leaves this device's push token with its mailbox, once per token.
+  Future<void> _registerPush() async {
+    try {
+      final token = await notifier.pushToken();
+      final file = _pushTokenFile;
+      if (token == null ||
+          (file.existsSync() && await file.readAsString() == token)) {
+        return;
+      }
+      final (status, body) = await transport.send(
+        _ready.pushCall(token: token),
+      );
+      pushRegistered(status: status, body: body);
+      await file.writeAsString(token, flush: true);
+    } on Object {
+      // The next start tries again; messages still arrive while open.
+    }
+  }
+
+  /// Takes the push token back, so an erased app is never woken.
+  Future<void> _forgetPush() async {
+    final file = _pushTokenFile;
+    if (!file.existsSync()) {
+      return;
+    }
+    try {
+      final session = _session;
+      if (session != null) {
+        final (status, body) = await transport.send(session.pushCall());
+        pushRegistered(status: status, body: body);
+      }
+    } on Object {
+      // The mailbox is orphaned anyway once the device is gone.
+    }
+    await file.delete();
+  }
+
   @override
   Future<void> eraseThisDevice() => _guard(() async {
+    await _forgetPush();
     _offline();
     final session = _session;
     _session = null;
@@ -612,6 +654,7 @@ class LiveMessenger extends Messenger {
     }
     _setPhase(MessengerPhase.ready);
     unawaited(notifier.requestPermission());
+    unawaited(_registerPush());
     await _refreshChats(null);
     unawaited(_runMailbox());
     unawaited(_flush());

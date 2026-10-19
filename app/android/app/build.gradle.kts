@@ -22,6 +22,20 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // Push wake-ups (ADR-0017): the Firebase app's public identifiers,
+        // given to release builds as environment variables. They become the
+        // resources Firebase reads at start-up; without them there is no
+        // push and nothing else changes.
+        val firebase = mapOf(
+            "google_app_id" to System.getenv("ZELAMAR_FIREBASE_APP_ID"),
+            "google_api_key" to System.getenv("ZELAMAR_FIREBASE_API_KEY"),
+            "project_id" to System.getenv("ZELAMAR_FIREBASE_PROJECT_ID"),
+            "gcm_defaultSenderId" to System.getenv("ZELAMAR_FIREBASE_SENDER_ID"),
+        )
+        if (firebase.values.all { !it.isNullOrBlank() }) {
+            firebase.forEach { (name, value) -> resValue("string", name, value!!) }
+        }
     }
 
     // Release builds are signed with Zelamar's upload key when CI provides
@@ -58,4 +72,9 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Apache-2.0; it brings Google Play services (ADR-0017).
+    implementation("com.google.firebase:firebase-messaging:24.1.0")
 }

@@ -20,6 +20,10 @@ abstract interface class Notifier {
 
   /// Asks for permission to notify, where the platform requires it.
   Future<void> requestPermission();
+
+  /// The token that wakes this app while it is closed (ADR-0017), or `null`
+  /// where there is no such thing.
+  Future<String?> pushToken();
 }
 
 /// The native notifier, over the `zelamar/notify` channel. A notification
@@ -28,6 +32,21 @@ class PlatformNotifier implements Notifier {
   const new();
 
   static const _channel = MethodChannel('zelamar/notify');
+  static const _push = MethodChannel('zelamar/push');
+
+  @override
+  Future<String?> pushToken() async {
+    if (!Platform.isAndroid) {
+      return null;
+    }
+    try {
+      return await _push.invokeMethod<String>('token');
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
 
   @override
   Future<void> show({required String title, required String body}) async {
@@ -78,4 +97,7 @@ class SilentNotifier implements Notifier {
 
   @override
   Future<void> requestPermission() async {}
+
+  @override
+  Future<String?> pushToken() async => null;
 }
