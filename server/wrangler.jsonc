@@ -16,6 +16,7 @@
       { "name": "GROUP", "class_name": "Group" },
       { "name": "LINK", "class_name": "Link" },
       { "name": "BLOB", "class_name": "Blob" },
+      { "name": "PUSH", "class_name": "Push" },
     ],
   },
   "migrations": [
@@ -23,9 +24,12 @@
     { "tag": "v2", "new_sqlite_classes": ["Group"] },
     { "tag": "v3", "new_sqlite_classes": ["Link"] },
     { "tag": "v4", "new_sqlite_classes": ["Blob"] },
+    { "tag": "v5", "new_sqlite_classes": ["Push"] },
   ],
   // Proof-of-work difficulty for claiming a username (protocol/directory.md).
   // INVITE_KEY (hex, 32+ bytes) is a secret: `wrangler secret put INVITE_KEY`.
+  // FCM_SERVICE_ACCOUNT (a Firebase service account key, JSON) is a secret
+  // too; without it push wake-ups are only counted (ADR-0017).
   "vars": { "WORK_BITS": "21" },
   // Per network address, until anonymous tokens take over (ADR-0012).
   "ratelimits": [

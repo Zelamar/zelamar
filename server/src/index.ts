@@ -30,6 +30,7 @@ export { Blob } from './blob';
 export { Group } from './group';
 export { Link } from './link';
 export { Mailbox } from './mailbox';
+export { Push } from './push';
 
 const SERVICE_NAME = 'zelamar';
 /** Largest JSON body: 100 key packages of 16 KiB, base64url, with room. */
@@ -68,6 +69,12 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
   if (resource === 'groups' && name !== undefined && sub === 'commits' && parts.length === 4) {
     return only(request, 'POST') ?? respond(await commit(request, env, name));
+  }
+  if (resource === 'mailboxes' && name !== undefined && sub === 'push' && parts.length === 4) {
+    if (request.method !== 'PUT' && request.method !== 'DELETE') {
+      return json({ error: 'method_not_allowed' }, 405, { allow: 'PUT, DELETE' });
+    }
+    return respond(await pushToken(request, env, name));
   }
   if (resource === 'mailboxes' && name !== undefined && parts.length === 3) {
     return only(request, 'GET') ?? mailbox(request, env, name);
@@ -202,6 +209,38 @@ async function commit(request: Request, env: Env, group: string): Promise<Reply>
   const delivered = await fanOut(env, frame.commit);
   const welcomed = frame.welcome === null ? 0 : await fanOut(env, frame.welcome);
   return { status: 202, body: { epoch: advance.epoch, delivered, welcomed } };
+}
+
+/** Largest push registration body. */
+const MAX_PUSH_BODY = 8 * 1024;
+
+/** Keeps (PUT) or forgets (DELETE) a mailbox's push token (ADR-0017). */
+async function pushToken(request: Request, env: Env, name: string): Promise<Reply> {
+  const secret = /^Bearer ([A-Za-z0-9_-]+)$/u.exec(request.headers.get('authorization') ?? '');
+  const secretBytes = fixedBase64Url(secret?.[1], 32);
+  if (fixedBase64Url(name, 32) === null || secretBytes === null) {
+    return failure(401, 'unauthorized');
+  }
+  if (!(await allowed(env.DELIVER_LIMITER, request))) {
+    return failure(429, 'rate_limited');
+  }
+  let token: string | null = null;
+  if (request.method === 'PUT') {
+    const body = await readBody(request, MAX_PUSH_BODY);
+    const fields = body === null ? null : parseObject(body);
+    const candidate = fields?.token;
+    if (
+      fields?.platform !== 'fcm' ||
+      typeof candidate !== 'string' ||
+      candidate.length === 0 ||
+      candidate.length > 4096
+    ) {
+      return failure(400, 'malformed');
+    }
+    token = candidate;
+  }
+  const outcome = await env.MAILBOX.getByName(name).setPush(buffer(secretBytes), token);
+  return outcome === 'ok' ? { status: 200, body: {} } : failure(401, 'unauthorized');
 }
 
 function mailbox(request: Request, env: Env, name: string): Promise<Response> | Response {

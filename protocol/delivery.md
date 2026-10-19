@@ -66,6 +66,29 @@ Errors: `400 malformed`, `413 too_large`, `429 rate_limited`.
 - One device may hold several connections. Each new envelope goes to all
   of them.
 
+## Push wake-ups
+
+A device that cannot stay connected, such as Android after the app is
+closed, may leave a push token with its mailbox (ADR-0017).
+
+`PUT /v0/mailboxes/{mailbox}/push`, with `Authorization: Bearer <secret>`
+and the JSON body `{"platform": "fcm", "token": "<FCM registration token>"}`.
+The token is 1–4096 characters. `DELETE` on the same path forgets it.
+
+| Answer | When |
+|---|---|
+| `200 {}` | kept, or forgotten |
+| `401 unauthorized` | the mailbox does not exist, or the secret is wrong |
+| `400 malformed` | another platform, or a bad token |
+
+Rules:
+- When an envelope is queued and no connection is open, the mailbox owes a
+  wake-up. It sends one at most every 30 seconds, and only if the envelope
+  is still unread when the wake-up goes out.
+- A wake-up carries the same fixed words every time ("Zelamar", "New
+  message"), never anything about the message.
+- A token that Firebase reports as unregistered is forgotten.
+
 ## Client rules
 
 Implemented without I/O in `core/zelamar-core/src/service.rs`. The app only

@@ -457,6 +457,12 @@ pub fn session_exists(directory: String) -> bool {
     store_path(&directory).exists()
 }
 
+/// Reads the answer to [`Session::push_call`].
+#[flutter_rust_bridge::frb(sync)]
+pub fn push_registered(status: u16, body: Vec<u8>) -> Result<(), SessionError> {
+    Ok(service::push_set(status, &body)?)
+}
+
 /// Reads the answer to one of [`PreparedFile::calls`].
 #[flutter_rust_bridge::frb(sync)]
 pub fn chunk_uploaded(status: u16, body: Vec<u8>) -> Result<(), SessionError> {
@@ -912,6 +918,13 @@ impl Session {
             .device
             .settle(zelamar_core::envelope::EnvelopeId(id), status, &body)?;
         Ok(settled == Settled::Refused)
+    }
+
+    /// Leaves this device's push token with its mailbox, or takes it back
+    /// with `None` (ADR-0017).
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn push_call(&self, token: Option<String>) -> Result<HttpCall, SessionError> {
+        Ok(self.device.push_token(token.as_deref())?.into())
     }
 
     /// How to read this device's mailbox.

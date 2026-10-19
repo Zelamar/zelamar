@@ -20,6 +20,9 @@ export const WINDOW = 64;
 /** Bytes of file chunks one mailbox may upload per UTC day (ADR-0016). */
 export const UPLOAD_QUOTA = 512 * 1024 * 1024;
 
+/** At most one push wake-up per mailbox in this long (ADR-0017). */
+export const PUSH_INTERVAL_MS = 30_000;
+
 /** Acknowledgement frame tag: `0x01` followed by 16-byte envelope ids. */
 const ACK = 0x01;
 
@@ -56,12 +59,7 @@ export class Mailbox extends DurableObject<Env> {
    * more of file chunks today; counts them if so.
    */
   async allowUpload(secret: ArrayBuffer, bytes: number): Promise<UploadAllowance> {
-    const owner = this.owner();
-    if (
-      owner === null ||
-      secret.byteLength !== 32 ||
-      !sameBytes(await sha256(new Uint8Array(secret)), owner)
-    ) {
+    if (!(await this.owns(secret))) {
       return 'unauthorized';
     }
     const sql = this.ctx.storage.sql;
@@ -83,6 +81,27 @@ export class Mailbox extends DurableObject<Env> {
       used + bytes,
     );
     return 'allowed';
+  }
+
+  /**
+   * Keeps the push token of this mailbox's device, or forgets it with
+   * `null`, for whoever proves the secret (ADR-0017).
+   */
+  async setPush(secret: ArrayBuffer, token: string | null): Promise<'ok' | 'unauthorized'> {
+    if (!(await this.owns(secret))) {
+      return 'unauthorized';
+    }
+    this.pushSchema();
+    if (token === null) {
+      this.ctx.storage.sql.exec('DELETE FROM push');
+    } else {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO push (id, token, last, pending) VALUES (1, ?, 0, 0)
+         ON CONFLICT (id) DO UPDATE SET token = excluded.token`,
+        token,
+      );
+    }
+    return 'ok';
   }
 
   /** Queues one envelope and pushes it to live connections. */
@@ -108,10 +127,15 @@ export class Mailbox extends DurableObject<Env> {
       return 'duplicate';
     }
     this.queued = queued + 1;
-    for (const socket of this.ctx.getWebSockets()) {
+    const sockets = this.ctx.getWebSockets();
+    for (const socket of sockets) {
       this.pump(socket);
     }
-    if ((await this.ctx.storage.getAlarm()) === null) {
+    if (sockets.length === 0 && this.wakeUpDue()) {
+      // The wake-up goes out from the alarm, so the sender does not wait
+      // for Google.
+      await this.ctx.storage.setAlarm(Date.now());
+    } else if ((await this.ctx.storage.getAlarm()) === null) {
       await this.ctx.storage.setAlarm(expires);
     }
     return 'queued';
@@ -174,6 +198,7 @@ export class Mailbox extends DurableObject<Env> {
     }
     this.ctx.storage.sql.exec('DELETE FROM envelopes WHERE expires <= ?', Date.now());
     this.queued = null;
+    await this.sendWakeUp();
     const next = this.ctx.storage.sql
       .exec<{ expires: number }>('SELECT MIN(expires) AS expires FROM envelopes')
       .one().expires;
@@ -217,6 +242,60 @@ export class Mailbox extends DurableObject<Env> {
   }
 
   /** The owner's secret hash; `null` while unclaimed (and nothing is stored). */
+  /** Whether `secret` is this mailbox's. */
+  private async owns(secret: ArrayBuffer): Promise<boolean> {
+    const owner = this.owner();
+    return (
+      owner !== null &&
+      secret.byteLength === 32 &&
+      sameBytes(await sha256(new Uint8Array(secret)), owner)
+    );
+  }
+
+  private pushSchema(): void {
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS push (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        token TEXT NOT NULL,
+        last INTEGER NOT NULL,
+        pending INTEGER NOT NULL
+      )
+    `);
+  }
+
+  /** Marks a wake-up as owed, if the device has a token and was not woken lately. */
+  private wakeUpDue(): boolean {
+    this.pushSchema();
+    const row = this.ctx.storage.sql
+      .exec<{ last: number; pending: number }>('SELECT last, pending FROM push WHERE id = 1')
+      .toArray()[0];
+    if (row === undefined || row.pending === 1 || Date.now() - row.last < PUSH_INTERVAL_MS) {
+      return false;
+    }
+    this.ctx.storage.sql.exec('UPDATE push SET pending = 1 WHERE id = 1');
+    return true;
+  }
+
+  /** Sends an owed wake-up, unless the device has meanwhile read its mail. */
+  private async sendWakeUp(): Promise<void> {
+    this.pushSchema();
+    const sql = this.ctx.storage.sql;
+    const row = sql
+      .exec<{ token: string; pending: number }>('SELECT token, pending FROM push WHERE id = 1')
+      .toArray()[0];
+    if (row?.pending !== 1) {
+      return;
+    }
+    sql.exec('UPDATE push SET pending = 0, last = ? WHERE id = 1', Date.now());
+    if (this.count() === 0 || this.ctx.getWebSockets().length > 0) {
+      return;
+    }
+    const outcome = await this.env.PUSH.getByName('fcm').send(row.token);
+    if (outcome === 'gone') {
+      sql.exec('DELETE FROM push WHERE token = ?', row.token);
+    }
+  }
+
   private owner(): Uint8Array | null {
     const exists = this.ctx.storage.sql
       .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'owner'")

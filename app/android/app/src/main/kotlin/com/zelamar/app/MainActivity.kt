@@ -11,6 +11,8 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import com.google.firebase.FirebaseApp
+import com.google.firebase.messaging.FirebaseMessaging
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -22,7 +24,8 @@ import javax.crypto.spec.GCMParameterSpec
 
 /**
  * Hosts the app; shows notifications for new messages ("zelamar/notify",
- * lib/src/messenger/notifier.dart); and seals Zelamar's master key with the
+ * lib/src/messenger/notifier.dart); hands out the Firebase token for push
+ * wake-ups ("zelamar/push", ADR-0017); and seals Zelamar's master key with the
  * Android Keystore
  * (lib/src/messenger/os_vault.dart): a hardware-backed AES-256-GCM key that
  * never leaves the device. Sealed bytes are `IV (12) || ciphertext || tag`.
@@ -44,6 +47,14 @@ class MainActivity : FlutterActivity() {
                     result.error("keystore", error.message ?: error.javaClass.simpleName, null)
                 }
             }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PUSH_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "token" -> pushToken { result.success(it) }
+                    else -> result.notImplemented()
+                }
+            }
+        createMessageChannel()
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, NOTIFY_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -73,10 +84,28 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    /** One notification per sender would be next; for now, the latest message. */
-    private fun notify(title: String, body: String) {
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    /**
+     * This device's Firebase token, or `null` when the build has no Firebase
+     * app or the token cannot be had right now.
+     */
+    private fun pushToken(done: (String?) -> Unit) {
+        if (FirebaseApp.getApps(this).isEmpty()) {
+            done(null)
+            return
+        }
+        try {
+            FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+                done(if (task.isSuccessful) task.result else null)
+            }
+        } catch (error: Exception) {
+            done(null)
+        }
+    }
+
+    /** The channel for messages, which push wake-ups use too. */
+    private fun createMessageChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(
                 NotificationChannel(
                     MESSAGES,
@@ -85,6 +114,12 @@ class MainActivity : FlutterActivity() {
                 ).apply { description = "New messages" },
             )
         }
+    }
+
+    /** One notification per sender would be next; for now, the latest message. */
+    private fun notify(title: String, body: String) {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        createMessageChannel()
         val open = PendingIntent.getActivity(
             this,
             0,
@@ -150,6 +185,7 @@ class MainActivity : FlutterActivity() {
 
     private companion object {
         const val NOTIFY_CHANNEL = "zelamar/notify"
+        const val PUSH_CHANNEL = "zelamar/push"
         const val MESSAGES = "messages"
         const val MESSAGE_NOTIFICATION = 1
         const val PERMISSION_REQUEST = 7
