@@ -452,6 +452,13 @@ class LiveMessenger extends Messenger {
   Future<List<MemberView>> members(String chat) =>
       _guard(() => _ready.members(chat: chat));
 
+  @override
+  Future<bool?> startsAtSignIn() => notifier.startsAtSignIn();
+
+  @override
+  Future<bool?> setStartsAtSignIn({required bool on}) =>
+      notifier.setStartsAtSignIn(on: on);
+
   /// Looks each of [usernames] up in the directory.
   Future<List<Invitee>> _invitees(List<String> usernames) async {
     final invitees = <Invitee>[];

@@ -15,7 +15,10 @@ class FlutterWindow : public Win32Window {
   // Creates a new FlutterWindow hosting a Flutter view running |project|.
   // `show_message` brings this window back when the same profile is
   // launched again (see InstanceName in notifier.h).
-  FlutterWindow(const flutter::DartProject& project, UINT show_message);
+  // `start_hidden` keeps the window in the tray at start (`--tray`, as
+  // when Windows starts Zelamar at sign-in).
+  FlutterWindow(const flutter::DartProject& project, UINT show_message,
+                bool start_hidden);
   virtual ~FlutterWindow();
 
  protected:
@@ -30,6 +33,8 @@ class FlutterWindow : public Win32Window {
   flutter::DartProject project_;
 
   UINT show_message_;
+
+  bool start_hidden_;
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;

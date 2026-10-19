@@ -7,12 +7,17 @@
 #include <cwctype>
 
 #include "resource.h"
+#include "utils.h"
 
 namespace {
 
 // Window message the tray icon sends back to us.
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kTrayId = 1;
+
+// Where Windows keeps what starts at sign-in, per user.
+constexpr wchar_t kRunKey[] =
+    L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 
 // Commands of the tray icon's menu.
 constexpr UINT kOpenCommand = 1;
@@ -42,8 +47,25 @@ std::string Argument(const flutter::EncodableMap& arguments, const char* key) {
 
 }  // namespace
 
-std::wstring InstanceName(const std::vector<std::string>& arguments) {
+std::wstring ProfileArgument(const std::vector<std::string>& arguments) {
   const std::string option = "--profile=";
+  std::wstring profile;
+  for (const auto& argument : arguments) {
+    if (argument.rfind(option, 0) != 0) {
+      continue;
+    }
+    profile.clear();
+    for (const char c : argument.substr(option.size())) {
+      if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+          (c >= '0' && c <= '9') || c == '-' || c == '_') {
+        profile.push_back(static_cast<wchar_t>(c));
+      }
+    }
+  }
+  return profile;
+}
+
+std::wstring InstanceName(const std::vector<std::string>& arguments) {
   std::wstring name = L"Zelamar";
   wchar_t path[MAX_PATH] = {};
   const DWORD length = GetModuleFileNameW(nullptr, path, MAX_PATH);
@@ -53,20 +75,9 @@ std::wstring InstanceName(const std::vector<std::string>& arguments) {
   }
   wchar_t hex[9] = {};
   StringCchPrintfW(hex, ARRAYSIZE(hex), L"%08x", hash);
-  for (const auto& argument : arguments) {
-    if (argument.rfind(option, 0) != 0) {
-      continue;
-    }
-    std::wstring profile;
-    for (const char c : argument.substr(option.size())) {
-      if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-          (c >= '0' && c <= '9') || c == '-' || c == '_') {
-        profile.push_back(static_cast<wchar_t>(c));
-      }
-    }
-    if (!profile.empty()) {
-      name += L"-" + profile;
-    }
+  const std::wstring profile = ProfileArgument(arguments);
+  if (!profile.empty()) {
+    name += L"-" + profile;
   }
   return name + L"-" + hex;
 }
@@ -76,6 +87,14 @@ Notifier::Notifier(flutter::BinaryMessenger* messenger, HWND window,
     : window_(window),
       show_message_(show_message),
       taskbar_created_(RegisterWindowMessageW(L"TaskbarCreated")) {
+  wchar_t path[MAX_PATH] = {};
+  GetModuleFileNameW(nullptr, path, MAX_PATH);
+  const std::wstring profile = ProfileArgument(GetCommandLineArguments());
+  run_name_ = profile.empty() ? L"Zelamar" : L"Zelamar (" + profile + L")";
+  run_command_ = L"\"" + std::wstring(path) + L"\" --tray";
+  if (!profile.empty()) {
+    run_command_ += L" --profile=" + profile;
+  }
   channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
       messenger, "zelamar/notify",
       &flutter::StandardMethodCodec::GetInstance());
@@ -92,6 +111,16 @@ Notifier::Notifier(flutter::BinaryMessenger* messenger, HWND window,
       result->Success();
     } else if (call.method_name() == "inFront") {
       result->Success(flutter::EncodableValue(InFront()));
+    } else if (call.method_name() == "startsAtSignIn") {
+      result->Success(flutter::EncodableValue(StartsAtSignIn()));
+    } else if (call.method_name() == "setStartsAtSignIn") {
+      const auto* on = std::get_if<bool>(call.arguments());
+      if (!on) {
+        result->Error("bad_arguments", "expected a bool");
+        return;
+      }
+      SetStartsAtSignIn(*on);
+      result->Success(flutter::EncodableValue(StartsAtSignIn()));
     } else {
       result->NotImplemented();
     }
@@ -158,6 +187,34 @@ void Notifier::Show(const std::wstring& title, const std::wstring& body) {
 void Notifier::BringToFront() {
   ShowWindow(window_, IsIconic(window_) ? SW_RESTORE : SW_SHOW);
   SetForegroundWindow(window_);
+}
+
+bool Notifier::StartsAtSignIn() const {
+  wchar_t value[2 * MAX_PATH] = {};
+  DWORD size = sizeof(value);
+  if (RegGetValueW(HKEY_CURRENT_USER, kRunKey, run_name_.c_str(), RRF_RT_REG_SZ,
+                   nullptr, value, &size) != ERROR_SUCCESS) {
+    return false;
+  }
+  // Only this copy of the app counts: a moved app must be set again.
+  return run_command_ == value;
+}
+
+void Notifier::SetStartsAtSignIn(bool on) {
+  HKEY key = nullptr;
+  if (RegCreateKeyExW(HKEY_CURRENT_USER, kRunKey, 0, nullptr, 0, KEY_SET_VALUE,
+                      nullptr, &key, nullptr) != ERROR_SUCCESS) {
+    return;
+  }
+  if (on) {
+    RegSetValueExW(
+        key, run_name_.c_str(), 0, REG_SZ,
+        reinterpret_cast<const BYTE*>(run_command_.c_str()),
+        static_cast<DWORD>((run_command_.size() + 1) * sizeof(wchar_t)));
+  } else {
+    RegDeleteValueW(key, run_name_.c_str());
+  }
+  RegCloseKey(key);
 }
 
 void Notifier::ShowMenu() {
