@@ -1227,10 +1227,11 @@ impl Session {
         limit: u32,
     ) -> Result<Vec<MessageView>, SessionError> {
         let chat = self.find_chat(&chat)?;
+        let others = self.device.others_in(&chat)?;
         self.device
             .history(&chat, before, limit)?
             .iter()
-            .map(|entry| self.view(&chat, entry))
+            .map(|entry| self.view(&chat, entry, others))
             .collect()
     }
 
@@ -1278,7 +1279,7 @@ impl Session {
             last: summary
                 .last
                 .as_ref()
-                .map(|entry| self.view(&summary.chat, entry))
+                .map(|entry| self.view(&summary.chat, entry, summary.members.len()))
                 .transpose()?,
             unread: summary.unread,
             request: summary.request,
@@ -1288,7 +1289,14 @@ impl Session {
 
     /// One message as the chat screen shows it, with its quote and
     /// reactions.
-    fn view(&self, chat: &ChatId, entry: &HistoryEntry) -> Result<MessageView, SessionError> {
+    /// `others` is how many other accounts are in the chat: in a group, a
+    /// message counts as delivered or read once all of them got that far.
+    fn view(
+        &self,
+        chat: &ChatId,
+        entry: &HistoryEntry,
+        others: usize,
+    ) -> Result<MessageView, SessionError> {
         let message = &entry.message;
         let (text, unsupported, answers) = match &message.content {
             StoredContent::Text { text } => (text.clone(), false, None),
@@ -1363,15 +1371,12 @@ impl Session {
             }
         }
         reactions.sort_by_key(|reaction| std::cmp::Reverse(reaction.count));
-        let status = if !message.read_by.is_empty() {
-            MessageStatus::Read
-        } else if !message.delivered_to.is_empty() {
-            MessageStatus::Delivered
-        } else if message.status == SendStatus::Sent {
-            MessageStatus::Sent
-        } else {
-            MessageStatus::Queued
-        };
+        let status = delivery_status(
+            message.read_by.len(),
+            message.delivered_to.len(),
+            message.status,
+            others,
+        );
         Ok(MessageView {
             id: URL_SAFE_NO_PAD.encode(message.id.0),
             seq: entry.seq,
@@ -1428,6 +1433,25 @@ fn master(bytes: &[u8]) -> Result<MasterKey, SessionError> {
 
 fn chat_key(chat: &ChatId) -> String {
     URL_SAFE_NO_PAD.encode(chat.as_bytes())
+}
+
+/// How far an outgoing message got: read or delivered once every other
+/// account in the chat got that far, else sent or still queued.
+fn delivery_status(
+    read: usize,
+    delivered: usize,
+    sent: SendStatus,
+    others: usize,
+) -> MessageStatus {
+    if others > 0 && read >= others {
+        MessageStatus::Read
+    } else if others > 0 && delivered >= others {
+        MessageStatus::Delivered
+    } else if sent == SendStatus::Sent {
+        MessageStatus::Sent
+    } else {
+        MessageStatus::Queued
+    }
 }
 
 /// A file in one line, for quotes and notifications.
@@ -1676,6 +1700,29 @@ mod tests {
             .into_iter()
             .map(|bytes| session.open_envelope(bytes).expect("envelope"))
             .collect()
+    }
+
+    #[test]
+    fn a_group_message_is_read_once_everyone_read_it() {
+        let status =
+            |read, delivered, others| delivery_status(read, delivered, SendStatus::Sent, others);
+        assert_eq!(status(1, 1, 1), MessageStatus::Read, "a chat for two");
+        assert_eq!(
+            status(1, 3, 3),
+            MessageStatus::Delivered,
+            "one of three read"
+        );
+        assert_eq!(status(3, 3, 3), MessageStatus::Read);
+        assert_eq!(
+            status(0, 2, 3),
+            MessageStatus::Sent,
+            "one still has not got it"
+        );
+        assert_eq!(status(0, 0, 0), MessageStatus::Sent, "just you");
+        assert_eq!(
+            delivery_status(0, 0, SendStatus::Queued, 2),
+            MessageStatus::Queued
+        );
     }
 
     #[test]

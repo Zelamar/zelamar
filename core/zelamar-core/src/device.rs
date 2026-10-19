@@ -1672,7 +1672,7 @@ impl Device {
         let unread: Vec<MessageId> = newest
             .iter()
             .take_while(|entry| entry.seq > mark)
-            .filter(|entry| !entry.message.outgoing && !entry.message.deleted)
+            .filter(|entry| unread_message(&entry.message))
             .map(|entry| entry.message.id)
             .collect();
         let count = unread.len();
@@ -1693,9 +1693,25 @@ impl Device {
             .history(chat, None, UNREAD_CAP + 1)?
             .iter()
             .take_while(|entry| entry.seq > mark)
-            .filter(|entry| !entry.message.outgoing && !entry.message.deleted)
+            .filter(|entry| unread_message(&entry.message))
             .count();
         Ok(u32::try_from(count).unwrap_or(UNREAD_CAP).min(UNREAD_CAP))
+    }
+
+    /// How many other accounts are in `chat`: the people a message there
+    /// must reach before it counts as delivered to everyone.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::UnknownChat`], or a malformed member.
+    pub fn others_in(&self, chat: &ChatId) -> Result<usize> {
+        let own = self.account();
+        let group = self.chats.get(chat).ok_or(CoreError::UnknownChat)?;
+        let accounts = group
+            .members()
+            .map(|member| certificate_of(&member.credential).map(|c| c.account()))
+            .collect::<Result<BTreeSet<AccountId>>>()?;
+        Ok(accounts.iter().filter(|account| **account != own).count())
     }
 
     /// Sends this device's profile into `chat`, once, before its first
@@ -2198,6 +2214,12 @@ fn encode_labels(labels: &BTreeMap<DeviceId, String>) -> Result<Vec<u8>> {
         source: e.into(),
     })?;
     Ok(out)
+}
+
+/// Whether `message` is someone else's message the user has not seen:
+/// events (a name, someone leaving) are lines, not messages.
+const fn unread_message(message: &StoredMessage) -> bool {
+    !message.outgoing && !message.deleted && !message.content.is_event()
 }
 
 /// The record `name` decoded, or the empty value if it was never written.

@@ -52,6 +52,18 @@ String describeDuration(Duration duration) {
   return '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}';
 }
 
+/// A file in one line, for the chat list: what the core says in
+/// notifications and quotes.
+String fileLine(FileView file) {
+  if (file.mime.startsWith('image/')) {
+    return '📷 Photo';
+  }
+  if (file.mime.startsWith('audio/') && file.durationMs != null) {
+    return '🎤 Voice message';
+  }
+  return '📎 ${file.name}';
+}
+
 /// A line for something that happened to a chat.
 String describeEvent(String author, ChatEvent event) => switch (event.kind) {
   ChatEventKind.named => '$author named the group “${event.name ?? ''}”',

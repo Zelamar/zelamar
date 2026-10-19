@@ -263,7 +263,7 @@ class ChatTile extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          preview(last),
+                          preview(last, group: chat.group),
                           style: text.bodyMedium?.copyWith(
                             color: unread ? colors.textPrimary : null,
                           ),
@@ -318,16 +318,26 @@ class UnreadBadge extends StatelessWidget {
 }
 
 /// The one-line summary of a chat's newest message.
-String preview(MessageView? last) {
+String preview(MessageView? last, {bool group = false}) {
   if (last == null) {
     return 'New chat';
   }
+  final event = last.event;
+  if (event != null) {
+    return describeEvent(last.author, event);
+  }
+  final file = last.file;
   final body = last.deleted
       ? 'Message deleted'
+      : file != null
+      ? fileLine(file)
       : last.unsupported
       ? 'Update Zelamar to see this message'
       : last.text.replaceAll('\n', ' ');
-  return last.outgoing ? 'You: $body' : body;
+  if (last.outgoing) {
+    return 'You: $body';
+  }
+  return group ? '${last.author}: $body' : body;
 }
 
 class _EmptyChats extends StatelessWidget {
