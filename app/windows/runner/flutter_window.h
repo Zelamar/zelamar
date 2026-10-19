@@ -13,7 +13,9 @@
 class FlutterWindow : public Win32Window {
  public:
   // Creates a new FlutterWindow hosting a Flutter view running |project|.
-  explicit FlutterWindow(const flutter::DartProject& project);
+  // `show_message` brings this window back when the same profile is
+  // launched again (see InstanceName in notifier.h).
+  FlutterWindow(const flutter::DartProject& project, UINT show_message);
   virtual ~FlutterWindow();
 
  protected:
@@ -26,6 +28,8 @@ class FlutterWindow : public Win32Window {
  private:
   // The project to run.
   flutter::DartProject project_;
+
+  UINT show_message_;
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;

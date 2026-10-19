@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include "flutter_window.h"
+#include "notifier.h"
 #include "utils.h"
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
@@ -22,9 +23,22 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
 
+  // One window per profile: a second launch brings the first one back,
+  // even from the tray, instead of opening the same data twice.
+  const std::wstring instance_name = InstanceName(command_line_arguments);
+  const UINT show_message =
+      ::RegisterWindowMessageW((instance_name + L"-show").c_str());
+  HANDLE running = ::CreateMutexW(nullptr, TRUE, (instance_name + L"-running").c_str());
+  if (running != nullptr && ::GetLastError() == ERROR_ALREADY_EXISTS) {
+    ::PostMessageW(HWND_BROADCAST, show_message, 0, 0);
+    ::CloseHandle(running);
+    ::CoUninitialize();
+    return EXIT_SUCCESS;
+  }
+
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 
-  FlutterWindow window(project);
+  FlutterWindow window(project, show_message);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
   if (!window.Create(L"Zelamar", origin, size)) {
@@ -38,6 +52,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     ::DispatchMessage(&msg);
   }
 
+  if (running != nullptr) {
+    ::CloseHandle(running);
+  }
   ::CoUninitialize();
   return EXIT_SUCCESS;
 }
