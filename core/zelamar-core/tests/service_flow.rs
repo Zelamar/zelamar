@@ -1312,6 +1312,12 @@ fn a_group_is_named_and_grows() {
         .filter(|entry| entry.message.content.is_event())
         .count();
     assert_eq!(events, 2, "two namings shown, not the repeat for Dave");
+    let carols_chat = &carol.device.chat_list().expect("chats")[0];
+    assert_eq!(
+        carols_chat.unread, 1,
+        "Bob's message; namings are not messages"
+    );
+    assert_eq!(carol.device.others_in(&chat).expect("others"), 3);
 }
 
 #[test]

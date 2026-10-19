@@ -436,6 +436,53 @@ void main() {
     });
   });
 
+  group('chat list', () {
+    testWidgets('previews say what a photo, an event or a group line is', (
+      tester,
+    ) async {
+      final messenger =
+          FakeMessenger(phaseValue: MessengerPhase.ready, usernameValue: 'ada')
+            ..addChat(
+              'photo',
+              '@bob',
+              messages: [
+                view(
+                  1,
+                  '',
+                  file: FileView(
+                    name: 'pier.jpg',
+                    mime: 'image/jpeg',
+                    size: BigInt.from(1000),
+                  ),
+                ),
+              ],
+            )
+            ..addChat(
+              'left',
+              'Pier crew',
+              group: true,
+              messages: [
+                view(
+                  2,
+                  '',
+                  author: '@carol',
+                  event: const ChatEvent(kind: ChatEventKind.left),
+                ),
+              ],
+            )
+            ..addChat(
+              'said',
+              'Family',
+              group: true,
+              messages: [view(3, 'Dinner at 8', author: '@dan')],
+            );
+      await pumpApp(tester, messenger: messenger);
+      expect(find.text('📷 Photo'), findsOneWidget);
+      expect(find.text('@carol left'), findsOneWidget);
+      expect(find.text('@dan: Dinner at 8'), findsOneWidget);
+    });
+  });
+
   group('chat requests', () {
     Future<FakeMessenger> openRequest(WidgetTester tester) async {
       final messenger =
