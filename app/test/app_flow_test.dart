@@ -128,6 +128,46 @@ void main() {
       expect(find.byKey(const Key('join.error')), findsNothing);
     });
 
+    testWidgets('a lost account comes back with its name and recovery key', (
+      tester,
+    ) async {
+      final messenger = await pumpApp(tester);
+      await tester.tap(find.byKey(const Key('welcome.join')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('join.recover')));
+      await tester.pumpAndSettle();
+      expect(find.text('Recover your account'), findsOneWidget);
+
+      final next = find.byKey(const Key('recover.continue'));
+      const key = 'abcde-fghij-klmno-pqrst-uvwxy';
+      await tester.enterText(find.byKey(const Key('recover.name')), '@Ada');
+      await tester.enterText(find.byKey(const Key('recover.key')), 'abcde');
+      await tester.pump();
+      expect(tester.widget<FilledButton>(next).onPressed, isNull);
+      await tester.enterText(find.byKey(const Key('recover.key')), key);
+      await tester.pump();
+      expect(tester.widget<FilledButton>(next).onPressed, isNotNull);
+
+      messenger.failNext = const MessengerFailure('wrong_recovery_key');
+      await tester.tap(next);
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<Text>(find.byKey(const Key('recover.error'))).data,
+        describeFailure('wrong_recovery_key'),
+      );
+
+      await tester.tap(next);
+      await pumpAWhile(tester);
+      await tester.pumpAndSettle();
+      expect(messenger.recoveredWith, ('Ada', key));
+      expect(find.byKey(const Key('devices.recovered')), findsOneWidget);
+      expect(find.byKey(const Key('devices.remove.d-phone')), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('app.chats')), findsOneWidget);
+      expect(find.byKey(const Key('chats.recovery')), findsNothing);
+    });
+
     testWidgets('a refused name is explained, and the form stays', (
       tester,
     ) async {
@@ -621,6 +661,87 @@ void main() {
       expect(find.text('Open at sign-in'), findsNothing);
     });
 
+    testWidgets('until there is a recovery key the chats remind; then it '
+        'shows, copies and is replaced', (tester) async {
+      String? copied;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied =
+                (call.arguments as Map<Object?, Object?>)['text'] as String?;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      final messenger = await pumpApp(
+        tester,
+        messenger: FakeMessenger(
+          phaseValue: MessengerPhase.ready,
+          usernameValue: 'ada',
+        ),
+      );
+      await tester.tap(find.byKey(const Key('chats.recovery')));
+      await tester.pumpAndSettle();
+      expect(find.text('Recovery key'), findsOneWidget);
+      expect(
+        find.text('Anyone who has it can take your account.'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const Key('recovery.create')));
+      await tester.pumpAndSettle();
+      expect(messenger.recoveryKeysMade, 1);
+      for (final group in ['abcde', 'fghij', 'klmno', 'pqrst', 'uvw2x']) {
+        expect(find.text(group), findsOneWidget);
+      }
+      expect(
+        tester.widget<Text>(find.byKey(const Key('recovery.status'))).data,
+        contains('sealed with this key'),
+      );
+      await tester.tap(find.byKey(const Key('recovery.copy')));
+      await tester.pumpAndSettle();
+      expect(copied, 'abcde-fghij-klmno-pqrst-uvw2x');
+      expect(find.text('Copied'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('recovery.show')));
+      await tester.pumpAndSettle();
+      expect(find.text('abcde'), findsNothing);
+      expect(find.text('•••••'), findsNWidgets(5));
+
+      messenger
+        ..recoveryKeySavedValue = false
+        ..notifyListeners();
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<Text>(find.byKey(const Key('recovery.status'))).data,
+        contains('Not sealed yet'),
+      );
+
+      await tester.tap(find.byKey(const Key('recovery.replace')));
+      await tester.pumpAndSettle();
+      expect(find.text('Replace your recovery key?'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('recovery.confirmReplace')));
+      await tester.pumpAndSettle();
+      expect(messenger.recoveryKeysMade, 2);
+      expect(find.text('uvw3x'), findsOneWidget, reason: 'shown once made');
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('chats.recovery')), findsNothing);
+      await tester.tap(find.byKey(const Key('chats.profile')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Brings your account back if you lose this device'),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('a lost device is removed after a confirmation', (
       tester,
     ) async {
@@ -658,12 +779,14 @@ void main() {
           usernameValue: 'ada',
         )..canLinkValue = false,
       );
+      expect(find.byKey(const Key('chats.recovery')), findsNothing);
       await tester.tap(find.byKey(const Key('chats.profile')));
       await tester.pumpAndSettle();
       expect(
         tester.widget<Text>(find.byKey(const Key('profile.keyNote'))).data,
         contains('this one is linked'),
       );
+      expect(find.byKey(const Key('profile.recovery')), findsNothing);
       await tester.tap(find.byKey(const Key('profile.devices')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('devices.link')), findsNothing);

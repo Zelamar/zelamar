@@ -7,8 +7,21 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `blob_id`, `chat_key`, `claim_with`, `device_id`, `device_key`, `entries`, `failure`, `file_line`, `file`, `find_chat`, `joining`, `master`, `member_title`, `message_id`, `notice`, `now_ms`, `offer`, `own_name`, `preview`, `send_body`, `shorten`, `store_path`, `title`, `view`, `with`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
+// These functions are ignored because they are not marked as `pub`: `blob_id`, `chat_key`, `claim_with`, `delivery_status`, `device_id`, `device_key`, `entries`, `failure`, `file_line`, `file`, `find_chat`, `joining`, `master`, `member_title`, `message_id`, `name_of`, `notice`, `now_ms`, `offer`, `own_name`, `preview`, `restoring`, `send_body`, `shorten`, `store_path`, `title`, `view`, `with`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
+
+/// Takes one key package of one device of `username`, to add it to a chat
+/// with [`Session::add_member_devices`] (ADR-0018).
+HttpCall memberDeviceCall({required String username, required String device}) =>
+    RustLib.instance.api.crateApiSessionMemberDeviceCall(
+      username: username,
+      device: device,
+    );
+
+/// Asks the directory for the devices of up to 64 `usernames` at once
+/// (ADR-0018).
+HttpCall devicesOfCall({required List<String> usernames}) =>
+    RustLib.instance.api.crateApiSessionDevicesOfCall(usernames: usernames);
 
 /// A fresh random master key for a new session. Keep it in the platform's
 /// secure storage; it opens the session's store.
@@ -82,11 +95,43 @@ abstract class Joiner implements RustOpaqueInterface {
   void requested({required int status, required List<int> body});
 }
 
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Restorer>>
+abstract class Restorer implements RustOpaqueInterface {
+  /// Asks the service for the account's sealed kit.
+  HttpCall fetchCall();
+
+  /// Reads the answer to [`Restorer::fetch_call`], opens the kit and
+  /// creates this device's session in `directory`, under `master_key`;
+  /// then register it with [`Session::register`]. `wrong_recovery_key`
+  /// when the name or the key is wrong.
+  Future<Session> finish({
+    required int status,
+    required List<int> body,
+    required String directory,
+    required List<int> masterKey,
+  });
+
+  /// Prepares to recover `username` with the recovery key typed as `key`.
+  /// `malformed` for a bad name or a mistyped key.
+  factory Restorer({required String username, required String key}) => RustLib
+      .instance
+      .api
+      .crateApiSessionRestorerNew(username: username, key: key);
+}
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Session>>
 abstract class Session implements RustOpaqueInterface {
   /// Accepts a chat request: the people there learn this account's
   /// username and, from now on, get receipts.
   Future<void> acceptChat({required String chat});
+
+  /// Adds devices of `username`, whose account is in `chat`, from the
+  /// answers to [`member_device_call`] for each, in one commit.
+  Future<void> addMemberDevices({
+    required String chat,
+    required String username,
+    required List<HttpAnswer> answers,
+  });
 
   /// Adds the people in `invitees` to `chat`.
   Future<void> addMembers({
@@ -172,6 +217,12 @@ abstract class Session implements RustOpaqueInterface {
   /// Lists this account's devices, to heal chats (ADR-0014).
   HttpCall devicesCall();
 
+  /// The names whose devices healing looks up for other accounts, this
+  /// account's own first: everyone known by name in the chats this
+  /// account has spoken in (ADR-0018). Ask in batches of 64 with
+  /// [`devices_of_call`].
+  Future<List<String>> directoryNames();
+
   /// The calls that fetch the file in message `message` of `chat`.
   Future<List<HttpCall>> downloadCalls({
     required String chat,
@@ -218,6 +269,11 @@ abstract class Session implements RustOpaqueInterface {
   /// [`Session::pending_sends`]). Returns how many messages it covered.
   Future<int> markRead({required String chat});
 
+  /// Reads the answers to [`devices_of_call`] for the names from
+  /// [`Session::directory_names`]: the chats that lack another account's
+  /// devices since it recovered.
+  Future<List<MemberGap>> memberGaps({required List<DirectoryAnswer> answers});
+
   /// Everyone else in `chat`.
   Future<List<MemberView>> members({required String chat});
 
@@ -232,6 +288,10 @@ abstract class Session implements RustOpaqueInterface {
   /// Usernames that someone in a chat claims but the directory has not
   /// confirmed yet. Look each up with [`key_lookup_call`].
   Future<List<String>> namesToConfirm();
+
+  /// Makes a new recovery key, replacing any earlier one; leave the kit at
+  /// the service with [`Session::recovery_call`] next.
+  Future<String> newRecoveryKey();
 
   /// Starts linking a new device: returns the code to show,
   /// `xxxxx-xxxxx-xxxxx-xxxxx`. A new offer replaces any earlier one.
@@ -273,6 +333,17 @@ abstract class Session implements RustOpaqueInterface {
     required String target,
     String? reaction,
   });
+
+  /// The recovery kit to leave at the service, or `None` when it already
+  /// holds the current one (or there is no key).
+  Future<HttpCall?> recoveryCall();
+
+  /// The recovery key, as shown; only the device holding the account key
+  /// has one, once made.
+  String? recoveryKey();
+
+  /// Reads the answer to [`Session::recovery_call`].
+  Future<void> recoverySaved({required int status, required List<int> body});
 
   /// Registers this device (mailbox and key packages) under the claimed
   /// username.
@@ -487,6 +558,25 @@ class DeviceView {
           id == other.id &&
           label == other.label &&
           thisDevice == other.thisDevice;
+}
+
+/// The answer to one [`devices_of_call`], with the names it asked about.
+class DirectoryAnswer {
+  final List<String> usernames;
+  final HttpAnswer answer;
+
+  const DirectoryAnswer({required this.usernames, required this.answer});
+
+  @override
+  int get hashCode => usernames.hashCode ^ answer.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DirectoryAnswer &&
+          runtimeType == other.runtimeType &&
+          usernames == other.usernames &&
+          answer == other.answer;
 }
 
 /// A file in a message, as the chat screen shows it (ADR-0016).
@@ -761,6 +851,44 @@ class MailboxLink {
           runtimeType == other.runtimeType &&
           path == other.path &&
           authorization == other.authorization;
+}
+
+/// Devices another account's chat lacks after it recovered (ADR-0018):
+/// add them with [`Session::add_member_devices`] when `first`, or once the
+/// gap has lasted.
+class MemberGap {
+  /// Chat id, base64url.
+  final String chat;
+
+  /// The account's username, normalized.
+  final String username;
+
+  /// Device ids, base64url.
+  final List<String> devices;
+
+  /// Whether this device is the one to add them now.
+  final bool first;
+
+  const MemberGap({
+    required this.chat,
+    required this.username,
+    required this.devices,
+    required this.first,
+  });
+
+  @override
+  int get hashCode =>
+      chat.hashCode ^ username.hashCode ^ devices.hashCode ^ first.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MemberGap &&
+          runtimeType == other.runtimeType &&
+          chat == other.chat &&
+          username == other.username &&
+          devices == other.devices &&
+          first == other.first;
 }
 
 /// One person in a chat, for its details screen.

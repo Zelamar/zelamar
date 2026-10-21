@@ -18,6 +18,7 @@ use zelamar_core::device::{ChatId, ChatSummary, Device, Received, Settled};
 use zelamar_core::history::{HistoryEntry, SendStatus, StoredContent};
 use zelamar_core::identity::{AccountKey, DeviceId, SafetyCode};
 use zelamar_core::link::{self, Applicant, Joining, Offer};
+use zelamar_core::recovery::{KitUpload, Restoring};
 use zelamar_core::service::{self, Request, CLAIM_WORK_BITS};
 use zelamar_core::store::MasterKey;
 use zelamar_core::CoreError;
@@ -339,6 +340,28 @@ pub struct HealPlan {
     pub this_device_listed: bool,
 }
 
+/// The answer to one [`devices_of_call`], with the names it asked about.
+#[derive(Debug, Clone)]
+pub struct DirectoryAnswer {
+    pub usernames: Vec<String>,
+    pub answer: HttpAnswer,
+}
+
+/// Devices another account's chat lacks after it recovered (ADR-0018):
+/// add them with [`Session::add_member_devices`] when `first`, or once the
+/// gap has lasted.
+#[derive(Debug, Clone)]
+pub struct MemberGap {
+    /// Chat id, base64url.
+    pub chat: String,
+    /// The account's username, normalized.
+    pub username: String,
+    /// Device ids, base64url.
+    pub devices: Vec<String>,
+    /// Whether this device is the one to add them now.
+    pub first: bool,
+}
+
 /// One device of this account, for the devices screen.
 #[derive(Debug, Clone)]
 pub struct DeviceView {
@@ -358,6 +381,8 @@ pub struct Session {
     applicant: Option<Applicant>,
     /// Files sealed for upload and not sent yet, by blob id.
     prepared: HashMap<[u8; 16], SealedFile>,
+    /// The recovery kit on its way to the service.
+    kit: Option<KitUpload>,
 }
 
 /// A new device joining an existing account by its link code, before it
@@ -441,6 +466,83 @@ impl Joiner {
         )?;
         Ok(Some(Session::with(device)))
     }
+}
+
+/// A new device recovering an account with its recovery key (ADR-0018),
+/// before it has a session of its own.
+#[flutter_rust_bridge::frb(opaque)]
+pub struct Restorer {
+    restoring: Option<Restoring>,
+}
+
+impl Restorer {
+    /// Prepares to recover `username` with the recovery key typed as `key`.
+    /// `malformed` for a bad name or a mistyped key.
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn new(username: String, key: String) -> Result<Self, SessionError> {
+        Ok(Self {
+            restoring: Some(Restoring::new(&username, &key)?),
+        })
+    }
+
+    fn restoring(&self) -> Result<&Restoring, SessionError> {
+        self.restoring
+            .as_ref()
+            .ok_or_else(|| failure("already_initialized", "this recovery is finished"))
+    }
+
+    /// Asks the service for the account's sealed kit.
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn fetch_call(&self) -> Result<HttpCall, SessionError> {
+        Ok(self.restoring()?.fetch()?.into())
+    }
+
+    /// Reads the answer to [`Restorer::fetch_call`], opens the kit and
+    /// creates this device's session in `directory`, under `master_key`;
+    /// then register it with [`Session::register`]. `wrong_recovery_key`
+    /// when the name or the key is wrong.
+    pub fn finish(
+        &mut self,
+        status: u16,
+        body: Vec<u8>,
+        directory: String,
+        master_key: Vec<u8>,
+    ) -> Result<Session, SessionError> {
+        let restoring = self
+            .restoring
+            .take()
+            .ok_or_else(|| failure("already_initialized", "this recovery is finished"))?;
+        let recovered = restoring
+            .recovered(status, &body)
+            .map_err(|error| match error {
+                CoreError::Unauthenticated(_) => {
+                    failure("wrong_recovery_key", "the kit did not open")
+                }
+                CoreError::Service { code, .. } if code == "wrong_key" => {
+                    failure("wrong_recovery_key", "no kit for this name and key")
+                }
+                other => other.into(),
+            })?;
+        std::fs::create_dir_all(&directory)
+            .map_err(|e| failure("storage", &format!("creating the directory: {e}")))?;
+        let device =
+            Device::create_recovered(&store_path(&directory), &master(&master_key)?, recovered)?;
+        Ok(Session::with(device))
+    }
+}
+
+/// Takes one key package of one device of `username`, to add it to a chat
+/// with [`Session::add_member_devices`] (ADR-0018).
+#[flutter_rust_bridge::frb(sync)]
+pub fn member_device_call(username: String, device: String) -> Result<HttpCall, SessionError> {
+    Ok(service::device_lookup(&username, device_id(&device)?)?.into())
+}
+
+/// Asks the directory for the devices of up to 64 `usernames` at once
+/// (ADR-0018).
+#[flutter_rust_bridge::frb(sync)]
+pub fn devices_of_call(usernames: Vec<String>) -> Result<HttpCall, SessionError> {
+    Ok(service::devices_of(&usernames)?.into())
 }
 
 /// A fresh random master key for a new session. Keep it in the platform's
@@ -528,7 +630,107 @@ impl Session {
             offer: None,
             applicant: None,
             prepared: HashMap::new(),
+            kit: None,
         }
+    }
+
+    /// The recovery key, as shown; only the device holding the account key
+    /// has one, once made.
+    #[flutter_rust_bridge::frb(sync)]
+    #[must_use]
+    pub fn recovery_key(&self) -> Option<String> {
+        self.device.recovery_key()
+    }
+
+    /// Makes a new recovery key, replacing any earlier one; leave the kit at
+    /// the service with [`Session::recovery_call`] next.
+    pub fn new_recovery_key(&mut self) -> Result<String, SessionError> {
+        Ok(self.device.new_recovery_key()?)
+    }
+
+    /// The recovery kit to leave at the service, or `None` when it already
+    /// holds the current one (or there is no key).
+    pub fn recovery_call(&mut self) -> Result<Option<HttpCall>, SessionError> {
+        self.kit = self.device.recovery_upload(now_ms())?;
+        Ok(self.kit.as_ref().map(|kit| kit.request.clone().into()))
+    }
+
+    /// Reads the answer to [`Session::recovery_call`].
+    pub fn recovery_saved(&mut self, status: u16, body: Vec<u8>) -> Result<(), SessionError> {
+        let Some(kit) = self.kit.take() else {
+            return Ok(());
+        };
+        Ok(self.device.recovery_uploaded(&kit, status, &body)?)
+    }
+
+    /// The names whose devices healing looks up for other accounts, this
+    /// account's own first: everyone known by name in the chats this
+    /// account has spoken in (ADR-0018). Ask in batches of 64 with
+    /// [`devices_of_call`].
+    pub fn directory_names(&self) -> Result<Vec<String>, SessionError> {
+        let accounts = self.device.chat_accounts()?;
+        let mut names = vec![self.own_name()?];
+        names.extend(
+            self.device
+                .contacts()
+                .into_iter()
+                .filter(|contact| accounts.contains(&contact.account))
+                .filter_map(|contact| contact.username),
+        );
+        Ok(names)
+    }
+
+    /// Reads the answers to [`devices_of_call`] for the names from
+    /// [`Session::directory_names`]: the chats that lack another account's
+    /// devices since it recovered.
+    pub fn member_gaps(
+        &self,
+        answers: Vec<DirectoryAnswer>,
+    ) -> Result<Vec<MemberGap>, SessionError> {
+        let mut names = HashMap::new();
+        let mut lists = Vec::new();
+        for answer in &answers {
+            for (name, account, devices) in
+                service::device_lists(&answer.usernames, answer.answer.status, &answer.answer.body)?
+            {
+                names.insert(account, name);
+                lists.push((account, devices));
+            }
+        }
+        Ok(self
+            .device
+            .foreign_gaps(&lists)?
+            .into_iter()
+            .filter_map(|gap| {
+                Some(MemberGap {
+                    chat: chat_key(&gap.chat),
+                    username: names.get(&gap.account)?.clone(),
+                    devices: gap.devices.iter().map(device_key).collect(),
+                    first: gap.first,
+                })
+            })
+            .collect())
+    }
+
+    /// Adds devices of `username`, whose account is in `chat`, from the
+    /// answers to [`member_device_call`] for each, in one commit.
+    pub fn add_member_devices(
+        &mut self,
+        chat: String,
+        username: String,
+        answers: Vec<HttpAnswer>,
+    ) -> Result<(), SessionError> {
+        let entries = answers
+            .iter()
+            .map(|answer| service::directory_entry(&username, answer.status, &answer.body))
+            .collect::<Result<Vec<_>, _>>()?;
+        let account = entries
+            .first()
+            .map(|entry| entry.account)
+            .ok_or_else(|| failure("malformed", "no device to add"))?;
+        let chat = self.find_chat(&chat)?;
+        self.device.add_devices(&chat, account, &entries)?;
+        Ok(())
     }
 
     /// Whether this device can link others: only the one holding the

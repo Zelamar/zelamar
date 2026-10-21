@@ -106,6 +106,47 @@ class FakeMessenger extends Messenger {
     }
   }
 
+  /// The name and key [recoverAccount] was given.
+  (String, String)? recoveredWith;
+
+  @override
+  Future<void> recoverAccount({
+    required String username,
+    required String key,
+  }) async {
+    _maybeFail();
+    recoveredWith = (username, key);
+    usernameValue = username;
+    canLinkValue = true;
+    recoveryKeyValue = key;
+    phaseValue = MessengerPhase.ready;
+    notifyListeners();
+  }
+
+  /// The recovery key, once made.
+  String? recoveryKeyValue;
+
+  /// Whether the service holds the kit.
+  bool recoveryKeySavedValue = true;
+
+  /// How many recovery keys [newRecoveryKey] made.
+  int recoveryKeysMade = 0;
+
+  @override
+  String? get recoveryKey => recoveryKeyValue;
+
+  @override
+  bool get recoveryKeySaved => recoveryKeySavedValue;
+
+  @override
+  Future<String> newRecoveryKey() async {
+    _maybeFail();
+    recoveryKeysMade++;
+    recoveryKeyValue = 'abcde-fghij-klmno-pqrst-uvw${recoveryKeysMade + 1}x';
+    notifyListeners();
+    return recoveryKeyValue!;
+  }
+
   @override
   Future<String> offerLink() async {
     _maybeFail();

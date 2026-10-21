@@ -34,6 +34,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner;
 
   CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_RestorerPtr => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer;
+
+  CrossPlatformFinalizerArg
   get rust_arc_decrement_strong_count_SessionPtr => wire
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession;
 
@@ -46,6 +50,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   Joiner
   dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
+    dynamic raw,
+  );
+
+  @protected
+  Restorer
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer(
     dynamic raw,
   );
 
@@ -68,6 +78,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  Restorer
+  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer(
+    dynamic raw,
+  );
+
+  @protected
   Session
   dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     dynamic raw,
@@ -86,6 +102,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  Restorer
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer(
+    dynamic raw,
+  );
+
+  @protected
   Session
   dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     dynamic raw,
@@ -100,6 +122,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   Joiner
   dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
+    dynamic raw,
+  );
+
+  @protected
+  Restorer
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer(
     dynamic raw,
   );
 
@@ -129,6 +157,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   HttpAnswer dco_decode_box_autoadd_http_answer(dynamic raw);
+
+  @protected
+  HttpCall dco_decode_box_autoadd_http_call(dynamic raw);
 
   @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
@@ -165,6 +196,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   DeviceView dco_decode_device_view(dynamic raw);
+
+  @protected
+  DirectoryAnswer dco_decode_directory_answer(dynamic raw);
 
   @protected
   FileView dco_decode_file_view(dynamic raw);
@@ -221,6 +255,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<DeviceView> dco_decode_list_device_view(dynamic raw);
 
   @protected
+  List<DirectoryAnswer> dco_decode_list_directory_answer(dynamic raw);
+
+  @protected
   List<HttpAnswer> dco_decode_list_http_answer(dynamic raw);
 
   @protected
@@ -234,6 +271,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<LabParticipant> dco_decode_list_lab_participant(dynamic raw);
+
+  @protected
+  List<MemberGap> dco_decode_list_member_gap(dynamic raw);
 
   @protected
   List<MemberView> dco_decode_list_member_view(dynamic raw);
@@ -255,6 +295,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   MailboxLink dco_decode_mailbox_link(dynamic raw);
+
+  @protected
+  MemberGap dco_decode_member_gap(dynamic raw);
 
   @protected
   MemberView dco_decode_member_view(dynamic raw);
@@ -285,6 +328,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   HttpAnswer? dco_decode_opt_box_autoadd_http_answer(dynamic raw);
+
+  @protected
+  HttpCall? dco_decode_opt_box_autoadd_http_call(dynamic raw);
 
   @protected
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
@@ -356,6 +402,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  Restorer
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   Session
   sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     SseDeserializer deserializer,
@@ -370,6 +422,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   Joiner
   sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  Restorer
+  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer(
     SseDeserializer deserializer,
   );
 
@@ -392,6 +450,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  Restorer
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   Session
   sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     SseDeserializer deserializer,
@@ -406,6 +470,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   Joiner
   sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  Restorer
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer(
     SseDeserializer deserializer,
   );
 
@@ -435,6 +505,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   HttpAnswer sse_decode_box_autoadd_http_answer(SseDeserializer deserializer);
+
+  @protected
+  HttpCall sse_decode_box_autoadd_http_call(SseDeserializer deserializer);
 
   @protected
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
@@ -473,6 +546,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   DeviceView sse_decode_device_view(SseDeserializer deserializer);
+
+  @protected
+  DirectoryAnswer sse_decode_directory_answer(SseDeserializer deserializer);
 
   @protected
   FileView sse_decode_file_view(SseDeserializer deserializer);
@@ -529,6 +605,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<DeviceView> sse_decode_list_device_view(SseDeserializer deserializer);
 
   @protected
+  List<DirectoryAnswer> sse_decode_list_directory_answer(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<HttpAnswer> sse_decode_list_http_answer(SseDeserializer deserializer);
 
   @protected
@@ -544,6 +625,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<LabParticipant> sse_decode_list_lab_participant(
     SseDeserializer deserializer,
   );
+
+  @protected
+  List<MemberGap> sse_decode_list_member_gap(SseDeserializer deserializer);
 
   @protected
   List<MemberView> sse_decode_list_member_view(SseDeserializer deserializer);
@@ -565,6 +649,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   MailboxLink sse_decode_mailbox_link(SseDeserializer deserializer);
+
+  @protected
+  MemberGap sse_decode_member_gap(SseDeserializer deserializer);
 
   @protected
   MemberView sse_decode_member_view(SseDeserializer deserializer);
@@ -599,6 +686,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   HttpAnswer? sse_decode_opt_box_autoadd_http_answer(
     SseDeserializer deserializer,
   );
+
+  @protected
+  HttpCall? sse_decode_opt_box_autoadd_http_call(SseDeserializer deserializer);
 
   @protected
   PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
@@ -677,6 +767,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer(
+    Restorer self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
   sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     Session self,
     SseSerializer serializer,
@@ -693,6 +790,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
     Joiner self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer(
+    Restorer self,
     SseSerializer serializer,
   );
 
@@ -719,6 +823,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer(
+    Restorer self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
   sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     Session self,
     SseSerializer serializer,
@@ -735,6 +846,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
     Joiner self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer(
+    Restorer self,
     SseSerializer serializer,
   );
 
@@ -773,6 +891,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_http_answer(
     HttpAnswer self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_http_call(
+    HttpCall self,
     SseSerializer serializer,
   );
 
@@ -820,6 +944,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_device_view(DeviceView self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_directory_answer(
+    DirectoryAnswer self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_file_view(FileView self, SseSerializer serializer);
@@ -888,6 +1018,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_directory_answer(
+    List<DirectoryAnswer> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_http_answer(
     List<HttpAnswer> self,
     SseSerializer serializer,
@@ -908,6 +1044,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_lab_participant(
     List<LabParticipant> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_member_gap(
+    List<MemberGap> self,
     SseSerializer serializer,
   );
 
@@ -943,6 +1085,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_mailbox_link(MailboxLink self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_member_gap(MemberGap self, SseSerializer serializer);
 
   @protected
   void sse_encode_member_view(MemberView self, SseSerializer serializer);
@@ -981,6 +1126,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_http_answer(
     HttpAnswer? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_http_call(
+    HttpCall? self,
     SseSerializer serializer,
   );
 
@@ -1095,6 +1246,22 @@ class RustLibWire implements BaseWire {
       );
 
   void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer(
+        ptr,
+      );
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer(
+        ptr,
+      );
+
+  void
   rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     int ptr,
   ) => wasmModule
@@ -1134,6 +1301,16 @@ extension type RustLibWasmModule._(JSObject _) implements JSObject {
 
   external void
   rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerJoiner(
+    int ptr,
+  );
+
+  external void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer(
+    int ptr,
+  );
+
+  external void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRestorer(
     int ptr,
   );
 

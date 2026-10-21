@@ -47,6 +47,7 @@ class LiveMessenger extends Messenger {
     required this.transport,
     Notifier? notifier,
     this.linkPoll = const Duration(seconds: 2),
+    this.memberHealing = const Duration(minutes: 5),
   }) : notifier = notifier ?? Notifier.forPlatform();
 
   /// Where the encrypted store lives.
@@ -59,6 +60,14 @@ class LiveMessenger extends Messenger {
 
   /// How often both devices look at their link slot while linking.
   final Duration linkPoll;
+
+  /// How often healing runs while connected, and looks up other accounts'
+  /// devices (ADR-0018).
+  final Duration memberHealing;
+
+  /// How long a gap another member should fill may last before this
+  /// device fills it instead (ADR-0018).
+  static const _gapPatience = Duration(hours: 1);
 
   Session? _session;
   MessengerPhase _phase = MessengerPhase.starting;
@@ -87,6 +96,20 @@ class LiveMessenger extends Messenger {
 
   /// A device just approved: healing waits until it has registered.
   String? _awaitedDevice;
+
+  /// When healing last looked up other accounts' devices.
+  DateTime? _membersHealed;
+
+  /// Heals every [memberHealing], so a long-running app (in the tray)
+  /// still brings a recovered contact back into its chats.
+  Timer? _healTimer;
+
+  /// When each gap in another account's devices was first seen, by
+  /// `chat/username`.
+  final _gapsSeen = <String, DateTime>{};
+
+  bool _savingKit = false;
+  bool _kitSaved = true;
 
   /// Files opened lately, by `chat/message`, oldest first.
   final _files = <String, Uint8List>{};
@@ -239,6 +262,79 @@ class LiveMessenger extends Messenger {
 
   @override
   void cancelJoin() => _joinGeneration++;
+
+  @override
+  Future<void> recoverAccount({
+    required String username,
+    required String key,
+  }) => _guard(() async {
+    final Restorer restorer;
+    try {
+      restorer = Restorer(username: username, key: key);
+    } on SessionError catch (error) {
+      throw MessengerFailure('bad_recovery_key', error.message);
+    }
+    try {
+      await _discardUnclaimed();
+      final (status, body) = await transport.send(restorer.fetchCall());
+      final masterKey = newMasterKey();
+      // As for a new account: the key is safe before the store exists.
+      await vault.storeMasterKey(masterKey);
+      final session = await restorer.finish(
+        status: status,
+        body: body,
+        directory: directory,
+        masterKey: masterKey,
+      );
+      _session = session;
+      _username = session.username();
+    } finally {
+      restorer.dispose();
+    }
+    await _register(_session!);
+  });
+
+  @override
+  String? get recoveryKey => _session?.recoveryKey();
+
+  @override
+  bool get recoveryKeySaved => _kitSaved;
+
+  @override
+  Future<String> newRecoveryKey() => _guard(() async {
+    final key = await _ready.newRecoveryKey();
+    _kitSaved = false;
+    notifyListeners();
+    await _saveKit();
+    return key;
+  });
+
+  /// Leaves the recovery kit at the service whenever what it holds changed:
+  /// a new key, contact or chat (ADR-0018).
+  Future<void> _saveKit() async {
+    if (_savingKit || _closed) {
+      return;
+    }
+    _savingKit = true;
+    final saved = _kitSaved;
+    try {
+      final session = _ready;
+      final call = await session.recoveryCall();
+      if (call != null) {
+        final (status, body) = await transport.send(call);
+        await session.recoverySaved(status: status, body: body);
+      }
+      _kitSaved = true;
+    } on Object {
+      // The next change, or the next connection, tries again.
+      _kitSaved = false;
+    } finally {
+      _savingKit = false;
+      if (saved != _kitSaved) {
+        notifyListeners();
+      }
+    }
+  }
 
   /// Removes an account that never got a name, so this device can join
   /// another one instead. Nothing in it can be lost.
@@ -636,6 +732,7 @@ class LiveMessenger extends Messenger {
   void dispose() {
     _closed = true;
     _retry?.cancel();
+    _healTimer?.cancel();
     unawaited(_socket?.close());
     unawaited(_changes.close());
     transport.close();
@@ -665,6 +762,12 @@ class LiveMessenger extends Messenger {
     await _refreshChats(null);
     unawaited(_runMailbox());
     unawaited(_flush());
+    unawaited(_saveKit());
+    _healTimer ??= Timer.periodic(memberHealing, (_) {
+      if (_link == Link.online) {
+        unawaited(_heal());
+      }
+    });
   }
 
   /// Keeps one live connection to the mailbox, reconnecting with backoff.
@@ -758,6 +861,8 @@ class LiveMessenger extends Messenger {
         // still missing, and healing finds it again.
         unawaited(_heal());
       }
+      // A new chat or contact belongs in the recovery kit.
+      unawaited(_saveKit());
     } on Object {
       _retry?.cancel();
       _retry = Timer(const Duration(seconds: 5), () => unawaited(_flush()));
@@ -819,10 +924,68 @@ class LiveMessenger extends Messenger {
           unawaited(_flush());
         }
       } while (_healAgain && !_closed);
+      await _healMembers();
     } on Object {
       // The next connection heals again.
     } finally {
       _healing = false;
+    }
+  }
+
+  /// Brings other accounts' devices into the chats where none of theirs is
+  /// left, as after a recovery (ADR-0018). The member with the lowest leaf
+  /// does it at once; any other after [_gapPatience]. Looks at most every
+  /// [memberHealing].
+  Future<void> _healMembers() async {
+    final now = DateTime.now();
+    final last = _membersHealed;
+    if (last != null && now.difference(last) < memberHealing) {
+      return;
+    }
+    _membersHealed = now;
+    final session = _ready;
+    final names = await session.directoryNames();
+    final answers = <DirectoryAnswer>[];
+    for (var at = 0; at < names.length; at += 64) {
+      final batch = names.sublist(at, min(at + 64, names.length));
+      final (status, body) = await transport.send(
+        devicesOfCall(usernames: batch),
+      );
+      answers.add(
+        DirectoryAnswer(
+          usernames: batch,
+          answer: HttpAnswer(status: status, body: body),
+        ),
+      );
+    }
+    final gaps = await session.memberGaps(answers: answers);
+    final open = <String>{};
+    var changed = false;
+    for (final gap in gaps) {
+      final key = '${gap.chat}/${gap.username}';
+      open.add(key);
+      final seen = _gapsSeen.putIfAbsent(key, () => now);
+      if (!gap.first && now.difference(seen) < _gapPatience) {
+        continue;
+      }
+      final lookups = <HttpAnswer>[];
+      for (final device in gap.devices) {
+        final (status, body) = await transport.send(
+          memberDeviceCall(username: gap.username, device: device),
+        );
+        lookups.add(HttpAnswer(status: status, body: body));
+      }
+      await session.addMemberDevices(
+        chat: gap.chat,
+        username: gap.username,
+        answers: lookups,
+      );
+      changed = true;
+    }
+    _gapsSeen.removeWhere((key, _) => !open.contains(key));
+    if (changed) {
+      await _refreshChats(null);
+      unawaited(_flush());
     }
   }
 

@@ -4,6 +4,7 @@ import 'package:zelamar/src/design/theme.dart';
 import 'package:zelamar/src/design/tokens.dart';
 import 'package:zelamar/src/design/typography.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
+import 'package:zelamar/src/ui/onboarding/recover_screen.dart';
 import 'package:zelamar/src/ui/words.dart';
 
 /// Joining an account this person already has, by the code their other
@@ -171,6 +172,18 @@ class _JoinScreenState extends State<JoinScreen> {
           'on your other device.',
           style: text.bodySmall?.copyWith(color: colors.textTertiary),
           textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: ZSpace.xl),
+        TextButton(
+          key: const Key('join.recover'),
+          onPressed: _busy
+              ? null
+              : () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => RecoverScreen(messenger: widget.messenger),
+                  ),
+                ),
+          child: const Text('Lost your other device? Use your recovery key'),
         ),
       ],
     );

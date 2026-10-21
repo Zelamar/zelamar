@@ -11,9 +11,13 @@ import 'package:zelamar/src/ui/words.dart';
 /// The account's devices: link one, remove a lost one, or unlink this one
 /// (ADR-0014).
 class DevicesScreen extends StatefulWidget {
-  const new({required this.messenger, super.key});
+  const new({required this.messenger, this.recovered = false, super.key});
 
   final Messenger messenger;
+
+  /// Shown right after a recovery: the lost device should go first
+  /// (ADR-0018).
+  final bool recovered;
 
   @override
   State<DevicesScreen> createState() => _DevicesScreenState();
@@ -167,6 +171,31 @@ class _DevicesScreenState extends State<DevicesScreen> {
                     'all your chats.',
                     style: text.bodyMedium,
                   ),
+                  if (widget.recovered) ...[
+                    const SizedBox(height: ZSpace.xl),
+                    Container(
+                      key: const Key('devices.recovered'),
+                      padding: const EdgeInsets.all(ZSpace.lg),
+                      decoration: BoxDecoration(
+                        color: colors.surface,
+                        borderRadius: BorderRadius.circular(ZRadius.field),
+                        border: Border.all(color: colors.hairline),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Welcome back', style: text.titleMedium),
+                          const SizedBox(height: ZSpace.xs),
+                          Text(
+                            'Remove the devices you no longer have. Until '
+                            'then they still get your messages, and your '
+                            'chats can’t come back here.',
+                            style: text.bodyMedium,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: ZSpace.xl),
                   if (devices == null && _error == null)
                     const Center(child: CircularProgressIndicator()),

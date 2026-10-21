@@ -9,6 +9,7 @@ import 'package:zelamar/src/lab/lab_engine.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/ui/avatar.dart';
 import 'package:zelamar/src/ui/profile/devices_screen.dart';
+import 'package:zelamar/src/ui/profile/recovery_key_screen.dart';
 import 'package:zelamar/src/version.dart';
 
 /// "You": the account's name and key, and how Zelamar protects it.
@@ -71,13 +72,12 @@ class ProfileScreen extends StatelessWidget {
                         const SizedBox(height: ZSpace.sm),
                         Text(
                           messenger.canLinkDevices
-                              ? 'Created on this device; it never leaves it. '
-                                    'Your safety code with each person comes '
-                                    'from it.'
-                              : 'It stays on the device that created your '
-                                    'account; this one is linked to it. Your '
-                                    'safety code with each person comes from '
-                                    'it.',
+                              ? 'Kept on this device; only your recovery key '
+                                    'can bring it to another. Your safety '
+                                    'code with each person comes from it.'
+                              : 'It stays on your account’s first device; '
+                                    'this one is linked to it. Your safety '
+                                    'code with each person comes from it.',
                           key: const Key('profile.keyNote'),
                           style: text.bodySmall,
                         ),
@@ -102,6 +102,27 @@ class ProfileScreen extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (messenger.canLinkDevices)
+                    ListTile(
+                      key: const Key('profile.recovery'),
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.key_outlined, color: colors.accent),
+                      title: const Text('Recovery key'),
+                      subtitle: Text(
+                        messenger.recoveryKey == null
+                            ? 'Not set up: losing this device loses your '
+                                  'account'
+                            : 'Brings your account back if you lose this '
+                                  'device',
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              RecoveryKeyScreen(messenger: messenger),
+                        ),
+                      ),
+                    ),
                   SignInSwitch(messenger: messenger),
                   ListTile(
                     key: const Key('profile.lab'),

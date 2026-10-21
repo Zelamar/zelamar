@@ -29,6 +29,10 @@ String describeFailure(String code) => switch (code) {
   'unknown_link' =>
     'This code has expired. Make a new one on your other device.',
   'too_many_devices' => 'This account already has 5 devices.',
+  'bad_recovery_key' =>
+    'That key doesn’t look right. It has 25 letters and digits.',
+  'wrong_recovery_key' =>
+    'That name and recovery key don’t match. Check both and try again.',
   'already_initialized' =>
     'This device already has an account, so it can’t join another one.',
   _ => 'Something went wrong. Please try again.',

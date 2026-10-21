@@ -9,6 +9,7 @@ import 'package:zelamar/src/ui/avatar.dart';
 import 'package:zelamar/src/ui/chat/chat_screen.dart';
 import 'package:zelamar/src/ui/chats/new_chat_sheet.dart';
 import 'package:zelamar/src/ui/profile/profile_screen.dart';
+import 'package:zelamar/src/ui/profile/recovery_key_screen.dart';
 import 'package:zelamar/src/ui/words.dart';
 
 /// Every conversation, most recent first.
@@ -106,6 +107,14 @@ class ChatsScreen extends StatelessWidget {
                     ],
                   ),
                 ),
+                if (messenger.canLinkDevices && messenger.recoveryKey == null)
+                  _RecoveryReminder(
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => RecoveryKeyScreen(messenger: messenger),
+                      ),
+                    ),
+                  ),
                 Expanded(
                   child: chats.isEmpty
                       ? _EmptyChats(onStart: () => _newChat(context))
@@ -170,6 +179,66 @@ extension on ChatsScreen {
         ChatTile(chat, onTap: () => _open(context, chat.id)),
       ],
     ];
+  }
+}
+
+/// A quiet reminder, until there is a recovery key, that losing this device
+/// would lose the account (ADR-0018).
+class _RecoveryReminder extends StatelessWidget {
+  const new({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final text = context.text;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        ZSpace.gutter,
+        ZSpace.xs,
+        ZSpace.gutter,
+        ZSpace.md,
+      ),
+      child: Material(
+        color: colors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(ZRadius.field),
+          side: BorderSide(color: colors.hairline),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          key: const Key('chats.recovery'),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: ZSpace.lg,
+              vertical: ZSpace.md,
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.key_outlined, color: colors.accent),
+                const SizedBox(width: ZSpace.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Save a recovery key', style: text.titleSmall),
+                      const SizedBox(height: ZSpace.xxs),
+                      Text(
+                        'Without it, losing this device loses your account.',
+                        style: text.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right, color: colors.textTertiary),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

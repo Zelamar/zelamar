@@ -100,6 +100,23 @@ abstract class Messenger extends ChangeNotifier {
   /// Stops [joinAccount] waiting.
   void cancelJoin();
 
+  /// Recovers the account [username] on this device with its recovery
+  /// [key] (ADR-0018); completes once this device is ready. Fails with
+  /// `wrong_recovery_key` when the name or the key is wrong.
+  Future<void> recoverAccount({required String username, required String key});
+
+  /// The recovery key, as shown: only on the device that holds the
+  /// account key ([canLinkDevices]), once made.
+  String? get recoveryKey;
+
+  /// Whether the service holds the newest recovery kit; `false` while it
+  /// waits for a connection.
+  bool get recoveryKeySaved;
+
+  /// Makes a new recovery key, replacing any earlier one, and leaves the
+  /// sealed kit at the service; returns the key to show.
+  Future<String> newRecoveryKey();
+
   /// Starts linking a new device; returns the code to show.
   Future<String> offerLink();
 
