@@ -28,6 +28,7 @@ pub mod error;
 pub mod history;
 pub mod identity;
 pub mod link;
+pub mod recovery;
 pub mod service;
 pub mod store;
 

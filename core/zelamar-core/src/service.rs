@@ -42,6 +42,9 @@ pub const KEY_PACKAGES_LOW_WATER: u64 = 10;
 /// Most recipients one delivery frame can name.
 pub const MAX_RECIPIENTS: usize = 255;
 
+/// Most names one [`devices_of`] request may ask about.
+pub const MAX_DIRECTORY_BATCH: usize = 64;
+
 const CLAIM_CONTEXT: &[u8] = b"zelamar/claim/v0";
 const WORK_CONTEXT: &[u8] = b"zelamar/work/v0";
 const REQUEST_CONTEXT: &[u8] = b"zelamar/request/v0";
@@ -289,6 +292,86 @@ pub fn device_list(
         .map(|device| certified(&device.certificate, account))
         .collect::<Result<Vec<_>>>()?;
     Ok((account, certificates))
+}
+
+/// Asks the directory which devices each of `usernames` has registered, in
+/// one request, without taking any key package (ADR-0018).
+///
+/// # Errors
+///
+/// [`CoreError::Malformed`] for a bad username, or for none or more than
+/// [`MAX_DIRECTORY_BATCH`].
+pub fn devices_of(usernames: &[String]) -> Result<Request> {
+    if usernames.is_empty() || usernames.len() > MAX_DIRECTORY_BATCH {
+        return Err(CoreError::malformed(
+            "directory request",
+            "no names, or too many",
+        ));
+    }
+    let names = usernames
+        .iter()
+        .map(|name| normalize_username(name))
+        .collect::<Result<Vec<_>>>()?;
+    json_request(
+        "POST",
+        "/v0/directory/devices".to_owned(),
+        &json!({ "usernames": names }),
+    )
+}
+
+/// Reads the answer to [`devices_of`]: for each name the directory knows,
+/// the account and its devices' certificates, each verified under it.
+///
+/// # Errors
+///
+/// [`CoreError::Malformed`] for an answer about a name nobody asked about,
+/// [`CoreError::Unauthenticated`] for a certificate of another account, or
+/// [`CoreError::Service`].
+pub fn device_lists(
+    requested: &[String],
+    status: u16,
+    body: &[u8],
+) -> Result<Vec<(String, AccountId, Vec<DeviceCertificate>)>> {
+    #[derive(Deserialize)]
+    struct Found {
+        accounts: Vec<Entry>,
+    }
+    #[derive(Deserialize)]
+    struct Entry {
+        username: String,
+        account: String,
+        devices: Vec<Listed>,
+    }
+    #[derive(Deserialize)]
+    struct Listed {
+        certificate: String,
+    }
+
+    expect_success(status, body, &[200])?;
+    let asked = requested
+        .iter()
+        .map(|name| normalize_username(name))
+        .collect::<Result<std::collections::BTreeSet<_>>>()?;
+    let found: Found = parse(body)?;
+    found
+        .accounts
+        .into_iter()
+        .map(|entry| {
+            if !asked.contains(&entry.username) {
+                return Err(CoreError::malformed(
+                    "directory answer",
+                    "about a name nobody asked about",
+                ));
+            }
+            let account = account_of(&entry.account)?;
+            let certificates = entry
+                .devices
+                .iter()
+                .map(|device| certified(&device.certificate, account))
+                .collect::<Result<Vec<_>>>()?;
+            Ok((entry.username, account, certificates))
+        })
+        .collect()
 }
 
 /// Takes one key package of one device of `username`, for adding that
@@ -676,14 +759,7 @@ impl Device {
         let account = self.account_key().ok_or(CoreError::Unauthenticated(
             "only the device holding the account key can remove other devices",
         ))?;
-        let mut request = json_request("DELETE", path, &json!({}))?;
-        let signature =
-            account.sign(&request_payload(ACCOUNT_REQUEST_CONTEXT, &request, now_ms))?;
-        request.headers.extend([
-            ("zelamar-timestamp", now_ms.to_string()),
-            ("zelamar-account-signature", b64(&signature)),
-        ]);
-        Ok(request)
+        account_signed(account, "DELETE", path, &json!({}), now_ms)
     }
 
     fn device_path(&self, username: &str) -> String {
@@ -707,6 +783,23 @@ impl Device {
         ]);
         Ok(request)
     }
+}
+
+/// A request signed by the account key itself (`protocol/directory.md`).
+pub(crate) fn account_signed(
+    account: &AccountKey,
+    method: &'static str,
+    path: String,
+    body: &serde_json::Value,
+    now_ms: u64,
+) -> Result<Request> {
+    let mut request = json_request(method, path, body)?;
+    let signature = account.sign(&request_payload(ACCOUNT_REQUEST_CONTEXT, &request, now_ms))?;
+    request.headers.extend([
+        ("zelamar-timestamp", now_ms.to_string()),
+        ("zelamar-account-signature", b64(&signature)),
+    ]);
+    Ok(request)
 }
 
 fn device_path(username: &str, device: DeviceId) -> String {

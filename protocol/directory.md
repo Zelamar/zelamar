@@ -141,3 +141,8 @@ package. Clients use it to confirm a username someone claims in a chat
 device. `DELETE` on the same path removes the device, signed by the device
 itself or by the account key. All three serve linked devices and are
 specified in `linking.md`.
+
+`POST /v0/directory/devices` lists the devices of up to 64 names in one
+request, for healing chats across accounts. `PUT` and `POST` on
+`/v0/accounts/{username}/recovery` leave and fetch a sealed recovery kit.
+Both are specified in `recovery.md`.

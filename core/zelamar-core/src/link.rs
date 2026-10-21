@@ -55,36 +55,58 @@ struct LinkSecret {
     key: Zeroizing<[u8; 32]>,
 }
 
+/// `len` (at most 32) random characters of the code alphabet: link codes
+/// and recovery keys.
+pub(crate) fn draw_code(len: usize, what: &'static str) -> Result<Zeroizing<String>> {
+    let random: Zeroizing<[u8; 32]> = Zeroizing::new(
+        RustCrypto::default()
+            .random_array()
+            .map_err(|e| CoreError::crypto(what, e))?,
+    );
+    // 32 divides 256, so every character is uniform.
+    Ok(Zeroizing::new(
+        random
+            .iter()
+            .take(len)
+            .map(|byte| char::from(ALPHABET[usize::from(byte & 31)]))
+            .collect(),
+    ))
+}
+
+/// Reads a code of `len` characters as people type it: case, dashes and
+/// spaces do not matter.
+pub(crate) fn read_code(text: &str, len: usize, what: &'static str) -> Result<Zeroizing<String>> {
+    let code: Zeroizing<String> = Zeroizing::new(
+        text.chars()
+            .filter(|c| *c != '-' && !c.is_whitespace())
+            .map(|c| c.to_ascii_lowercase())
+            .collect(),
+    );
+    if code.len() != len || !code.bytes().all(|b| ALPHABET.contains(&b)) {
+        return Err(CoreError::malformed(
+            what,
+            "not the right number of letters and digits",
+        ));
+    }
+    Ok(code)
+}
+
+/// A code as shown: groups of five joined by dashes.
+pub(crate) fn show_code(code: &str) -> String {
+    code.as_bytes()
+        .chunks(5)
+        .map(|group| String::from_utf8_lossy(group).into_owned())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 impl LinkSecret {
     fn generate() -> Result<Self> {
-        let random: Zeroizing<[u8; CODE_LEN]> = Zeroizing::new(
-            RustCrypto::default()
-                .random_array()
-                .map_err(|e| CoreError::crypto("drawing a link code", e))?,
-        );
-        // 32 divides 256, so every character is uniform.
-        let code = random
-            .iter()
-            .map(|byte| char::from(ALPHABET[usize::from(byte & 31)]))
-            .collect();
-        Self::from_code(Zeroizing::new(code))
+        Self::from_code(draw_code(CODE_LEN, "drawing a link code")?)
     }
 
-    /// Reads a code as people type it: case, dashes and spaces do not matter.
     fn parse(text: &str) -> Result<Self> {
-        let code: Zeroizing<String> = Zeroizing::new(
-            text.chars()
-                .filter(|c| *c != '-' && !c.is_whitespace())
-                .map(|c| c.to_ascii_lowercase())
-                .collect(),
-        );
-        if code.len() != CODE_LEN || !code.bytes().all(|b| ALPHABET.contains(&b)) {
-            return Err(CoreError::malformed(
-                "link code",
-                "not 20 letters and digits",
-            ));
-        }
-        Self::from_code(code)
+        Self::from_code(read_code(text, CODE_LEN, "link code")?)
     }
 
     fn from_code(code: Zeroizing<String>) -> Result<Self> {
@@ -99,12 +121,7 @@ impl LinkSecret {
 
     /// The code as shown: four groups of five.
     fn display(&self) -> String {
-        self.code
-            .as_bytes()
-            .chunks(5)
-            .map(|group| String::from_utf8_lossy(group).into_owned())
-            .collect::<Vec<_>>()
-            .join("-")
+        show_code(&self.code)
     }
 
     fn path(&self) -> String {
@@ -245,7 +262,7 @@ pub(crate) struct AnswerBody {
     pub(crate) labels: Vec<(DeviceId, String)>,
 }
 
-fn cbor<T: Serialize>(value: &T, what: &'static str) -> Result<Zeroizing<Vec<u8>>> {
+pub(crate) fn cbor<T: Serialize>(value: &T, what: &'static str) -> Result<Zeroizing<Vec<u8>>> {
     let mut out = Zeroizing::new(Vec::new());
     ciborium::into_writer(value, &mut *out).map_err(|e| CoreError::Encoding {
         what,
@@ -254,7 +271,10 @@ fn cbor<T: Serialize>(value: &T, what: &'static str) -> Result<Zeroizing<Vec<u8>
     Ok(out)
 }
 
-fn from_cbor<T: for<'de> Deserialize<'de>>(bytes: &[u8], what: &'static str) -> Result<T> {
+pub(crate) fn from_cbor<T: for<'de> Deserialize<'de>>(
+    bytes: &[u8],
+    what: &'static str,
+) -> Result<T> {
     ciborium::from_reader(bytes).map_err(|_| CoreError::malformed(what, "invalid encoding"))
 }
 

@@ -8,7 +8,7 @@
 // loudly too, because a failed expectation is exactly what a test reports.
 #![allow(clippy::expect_used, clippy::panic)]
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -21,6 +21,7 @@ use zelamar_core::envelope::{Envelope, EnvelopeId, MailboxId};
 use zelamar_core::history::{SendStatus, StoredContent};
 use zelamar_core::identity::{AccountId, AccountKey};
 use zelamar_core::link::{self, Joining, Offer};
+use zelamar_core::recovery::Restoring;
 use zelamar_core::service::{self, DirectoryEntry, KEY_PACKAGES_AT_REGISTRATION, Request};
 use zelamar_core::store::MasterKey;
 
@@ -55,6 +56,8 @@ struct Service {
     links: HashMap<String, (Vec<u8>, Option<Vec<u8>>)>,
     /// Stored file chunks, by blob and index.
     blobs: HashMap<(String, String), Vec<u8>>,
+    /// Recovery kits by username: the token's hash and the sealed kit.
+    kits: HashMap<String, (String, String)>,
 }
 
 /// One delivery frame read from the start of `frame`, and its length.
@@ -86,6 +89,12 @@ impl Service {
         let unknown = || answer(404, &json!({ "error": "unknown_account" }));
         if let ["links", slot @ ..] = parts.as_slice() {
             return self.link_slot(request, slot);
+        }
+        if let ["accounts", name, "recovery"] = parts.as_slice() {
+            return self.recovery(request, name);
+        }
+        if parts == ["directory", "devices"] {
+            return self.recovery(request, "");
         }
         if let ["blobs", blob, index] = parts.as_slice() {
             let key = ((*blob).to_owned(), (*index).to_owned());
@@ -283,6 +292,55 @@ impl Service {
                 (204, Vec::new())
             }
             other => panic!("the stand-in service does not route {other:?}"),
+        }
+    }
+
+    /// Recovery kits (`protocol/recovery.md`) and device lists for many
+    /// names at once.
+    fn recovery(&mut self, request: &Request, name: &str) -> (u16, Vec<u8>) {
+        use sha2::{Digest, Sha256};
+        let answer = |status: u16, body: &Value| (status, serde_json::to_vec(body).expect("json"));
+        let body = serde_json::from_slice::<Value>(&request.body).expect("json body");
+        match request.method {
+            "PUT" => {
+                assert!(
+                    request
+                        .headers
+                        .iter()
+                        .any(|(header, _)| *header == "zelamar-account-signature"),
+                    "only the account key leaves a kit"
+                );
+                let hash = body["token_hash"].as_str().expect("hash").to_owned();
+                let kit = body["kit"].as_str().expect("kit").to_owned();
+                self.kits.insert(name.to_owned(), (hash, kit));
+                answer(200, &json!({}))
+            }
+            "POST" if name.is_empty() => {
+                let accounts: Vec<Value> = body["usernames"]
+                    .as_array()
+                    .expect("names")
+                    .iter()
+                    .filter_map(|name| {
+                        let name = name.as_str().expect("name");
+                        let (key, devices) = self.accounts.get(name)?;
+                        let listed: Vec<Value> = devices
+                            .iter()
+                            .map(|device| json!({ "certificate": device.certificate }))
+                            .collect();
+                        Some(json!({ "username": name, "account": key, "devices": listed }))
+                    })
+                    .collect();
+                answer(200, &json!({ "accounts": accounts }))
+            }
+            _ => {
+                let token = unb64(body["token"].as_str().expect("token"));
+                match self.kits.get(name) {
+                    Some((hash, kit)) if *hash == b64(&Sha256::digest(&token)) => {
+                        answer(200, &json!({ "kit": kit }))
+                    }
+                    _ => answer(403, &json!({ "error": "wrong_key" })),
+                }
+            }
         }
     }
 
@@ -1439,4 +1497,196 @@ fn a_file_travels_sealed_and_opens_only_for_the_chat() {
         attachment::downloaded(status, &body),
         Err(CoreError::Service { code, .. }) if code == "unknown_blob"
     ));
+}
+
+impl Person {
+    /// Leaves the kit for the recovery key at the service, if it changed;
+    /// returns whether it did.
+    fn save_kit(&mut self, service: &mut Service) -> bool {
+        let Some(upload) = self.device.recovery_upload(NOW).expect("kit") else {
+            return false;
+        };
+        let (status, body) = service.handle(&upload.request);
+        self.device
+            .recovery_uploaded(&upload, status, &body)
+            .expect("kit saved");
+        true
+    }
+
+    /// Brings other accounts' registered devices into the chats where none
+    /// of theirs is left, where this device is the one to do it; returns
+    /// how many chats changed.
+    fn heal_others(&mut self, service: &mut Service) -> usize {
+        let names: Vec<String> = self
+            .device
+            .contacts()
+            .into_iter()
+            .filter_map(|contact| contact.username)
+            .chain(self.device.username().map(str::to_owned))
+            .collect();
+        let (status, body) = service.handle(&service::devices_of(&names).expect("request"));
+        let found = service::device_lists(&names, status, &body).expect("lists");
+        let by_account: BTreeMap<AccountId, String> = found
+            .iter()
+            .map(|(name, account, _)| (*account, name.clone()))
+            .collect();
+        let lists: Vec<_> = found
+            .into_iter()
+            .map(|(_, account, devices)| (account, devices))
+            .collect();
+        let gaps = self.device.foreign_gaps(&lists).expect("gaps");
+        let mut healed = 0;
+        for gap in gaps.iter().filter(|gap| gap.first) {
+            let name = &by_account[&gap.account];
+            let entries: Vec<_> = gap
+                .devices
+                .iter()
+                .map(|device| {
+                    let lookup = service::device_lookup(name, *device).expect("lookup");
+                    let (status, body) = service.handle(&lookup);
+                    service::directory_entry(name, status, &body).expect("entry")
+                })
+                .collect();
+            self.device
+                .add_devices(&gap.chat, gap.account, &entries)
+                .expect("add devices");
+            healed += 1;
+        }
+        healed
+    }
+
+    /// Recovers `name` on a new device with the recovery key `key`.
+    fn recover(service: &mut Service, name: &str, key: &str) -> Self {
+        let restoring = Restoring::new(name, key).expect("restoring");
+        let (status, body) = service.handle(&restoring.fetch().expect("fetch"));
+        let recovered = restoring.recovered(status, &body).expect("kit");
+        let dir = tempfile::tempdir().expect("dir");
+        let mut device = Device::create_recovered(
+            &dir.path().join("device.db"),
+            &MasterKey::generate().expect("master key"),
+            recovered,
+        )
+        .expect("recovered device");
+        let (status, body) = service.handle(&device.register(name, NOW).expect("register"));
+        service::key_package_count(status, &body).expect("registered");
+        Self {
+            account: device.account(),
+            device,
+            _dir: dir,
+        }
+    }
+}
+
+#[test]
+fn a_recovery_key_brings_the_account_back_on_a_new_device() {
+    let mut service = Service::default();
+    let mut alice = Person::join(&mut service, "alice");
+    let mut bob = Person::join(&mut service, "bob");
+    let chat = alice.start_chat_with(&mut service, "bob");
+    alice.device.send(&chat, &text(1, "hi Bob")).expect("send");
+    alice.flush(&mut service);
+    bob.read(&mut service);
+    bob.device.send(&chat, &text(5, "hi Alice")).expect("send");
+    bob.flush(&mut service);
+    alice.read(&mut service);
+
+    // Alice writes down a recovery key; the service keeps her kit.
+    assert_eq!(alice.device.recovery_key(), None);
+    assert!(!alice.save_kit(&mut service), "no key, no kit");
+    let key = alice.device.new_recovery_key().expect("recovery key");
+    assert_eq!(alice.device.recovery_key().as_deref(), Some(key.as_str()));
+    assert!(alice.save_kit(&mut service));
+    assert!(!alice.save_kit(&mut service), "the service already has it");
+    let carol = Person::join(&mut service, "carol");
+    let other = alice.start_chat_with(&mut service, "carol");
+    alice
+        .device
+        .send(&other, &text(2, "hi Carol"))
+        .expect("send");
+    alice.flush(&mut service);
+    assert!(alice.save_kit(&mut service), "a new contact and chat");
+
+    // A wrong key or another name gets nothing.
+    let wrong = alice.device.new_recovery_key().expect("another key");
+    alice
+        .device
+        .new_recovery_key()
+        .expect("the key replaced again");
+    for (name, typed) in [("alice", wrong.as_str()), ("bob", key.as_str())] {
+        let restoring = Restoring::new(name, typed).expect("restoring");
+        let (status, body) = service.handle(&restoring.fetch().expect("fetch"));
+        assert!(matches!(
+            restoring.recovered(status, &body),
+            Err(CoreError::Service { .. })
+        ));
+    }
+    let key = alice.device.new_recovery_key().expect("the final key");
+    assert!(alice.save_kit(&mut service));
+
+    // Alice loses her only device and recovers on a new one.
+    let lost_phone = alice.device.id();
+    drop(alice);
+    let typed = key.to_uppercase().replace('-', " ");
+    let mut alice = Person::recover(&mut service, "Alice", &typed);
+    assert!(alice.device.holds_account_key());
+    assert_eq!(alice.device.username(), Some("alice"));
+    assert_eq!(alice.device.recovery_key().as_deref(), Some(key.as_str()));
+    let mut names: Vec<_> = alice
+        .device
+        .contacts()
+        .into_iter()
+        .filter_map(|contact| contact.username)
+        .collect();
+    names.sort();
+    assert_eq!(names, ["bob", "carol"], "contacts come back");
+    assert!(
+        alice.device.chats().is_empty(),
+        "chats come from the others"
+    );
+
+    // While the lost phone is registered, Bob leaves Alice's chats to it.
+    assert_eq!(bob.heal_others(&mut service), 0);
+    let removal = alice
+        .device
+        .remove_device("alice", lost_phone, NOW)
+        .expect("removal");
+    let (status, body) = service.handle(&removal);
+    service::device_removed(status, &body).expect("removed");
+
+    // Now Bob brings the new device in, and it takes the lost one out.
+    assert_eq!(bob.heal_others(&mut service), 1);
+    assert_eq!(bob.heal_others(&mut service), 0, "waiting for the answer");
+    assert_eq!(bob.flush(&mut service), vec![Settled::Applied]);
+    assert_eq!(bob.heal_others(&mut service), 0, "nothing left to heal");
+    let joined = alice.read(&mut service);
+    assert!(
+        matches!(&joined[0], Received::Joined { chat: c, by } if *c == chat && *by == bob.author())
+    );
+    let list = alice.device.chat_list().expect("chats");
+    assert_eq!(list.len(), 1);
+    assert!(!list[0].request, "Alice spoke there before");
+    assert_eq!(alice.heal(&mut service), 1, "the lost device leaves");
+    assert_eq!(alice.flush(&mut service), vec![Settled::Applied]);
+    let got = bob.read(&mut service);
+    assert!(
+        matches!(got.last(), Some(Received::ChatUpdated { .. })),
+        "a receipt from before, then the update: {got:?}"
+    );
+
+    // They talk again.
+    bob.device
+        .send(&chat, &text(3, "welcome back"))
+        .expect("send");
+    bob.flush(&mut service);
+    assert_eq!(
+        texts(&alice.read(&mut service)),
+        vec![(bob.author(), "welcome back".to_owned())]
+    );
+    alice.device.send(&chat, &text(4, "thanks")).expect("send");
+    alice.flush(&mut service);
+    assert_eq!(
+        texts(&bob.read(&mut service)),
+        vec![(alice.author(), "thanks".to_owned())]
+    );
+    drop(carol);
 }

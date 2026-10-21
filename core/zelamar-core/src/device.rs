@@ -30,6 +30,7 @@ use crate::error::{CoreError, Result};
 use crate::history::{self, HistoryEntry, HistoryReader, SendStatus, StoredMessage};
 use crate::identity::{AccountId, AccountKey, DeviceCertificate, DeviceId};
 use crate::link::{AnswerBody, Applicant, Joining, Linked, Offer};
+use crate::recovery::{self, KitBody, KitUpload, Recovered, RecoveryKey};
 use crate::service::{self, CommitAnswer, DirectoryEntry};
 use crate::store::{Batch, MasterKey, Store};
 
@@ -62,6 +63,7 @@ const RECORD_INTRODUCED: &str = "device.introduced";
 const RECORD_READ_MARKS: &str = "device.read_marks";
 const RECORD_LABELS: &str = "device.labels";
 const RECORD_CHAT_META: &str = "device.chat_meta";
+const RECORD_RECOVERY: &str = "account.recovery";
 
 /// Most accounts in one chat (ADR-0015).
 pub const MAX_MEMBERS: usize = 50;
@@ -214,6 +216,37 @@ struct ChatMeta {
     departed: BTreeSet<AccountId>,
 }
 
+/// The recovery key this device made, and the digest of the kit the service
+/// last took (ADR-0018).
+#[derive(Clone, Serialize, Deserialize)]
+struct RecoveryRecord {
+    code: String,
+    #[serde(default)]
+    uploaded: Option<[u8; 32]>,
+}
+
+impl Drop for RecoveryRecord {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.code);
+    }
+}
+
+/// Devices of another account that a chat lacks while none of that
+/// account's devices left in it is still registered, as after a recovery
+/// (ADR-0018).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignGap {
+    /// The chat.
+    pub chat: ChatId,
+    /// The account.
+    pub account: AccountId,
+    /// Its registered devices, to add.
+    pub devices: Vec<DeviceId>,
+    /// Whether this device holds the lowest registered leaf among the other
+    /// members, and so is the one to add them.
+    pub first: bool,
+}
+
 /// One Zelamar device: its keys and the chats it takes part in.
 pub struct Device {
     provider: OpenMlsRustCrypto,
@@ -255,6 +288,8 @@ pub struct Device {
     /// Names and departures per chat, in memory and as on disk.
     meta: BTreeMap<ChatId, ChatMeta>,
     persisted_meta: BTreeMap<ChatId, ChatMeta>,
+    /// The recovery key, on the device holding the account key.
+    recovery: Option<RecoveryRecord>,
 }
 
 /// Freshly built key packages, TLS-encoded.
@@ -351,6 +386,41 @@ impl Device {
         Ok(device)
     }
 
+    /// Creates a device for an account recovered from its kit (ADR-0018):
+    /// a new device certified by the recovered account key, which it then
+    /// holds, as the account's first device did.
+    ///
+    /// # Errors
+    ///
+    /// As [`Device::create`].
+    pub fn create_recovered(path: &Path, master: &MasterKey, recovered: Recovered) -> Result<Self> {
+        let store = Self::fresh_store(path, master)?;
+        let signer = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
+            .map_err(|e| CoreError::crypto("generating the device signature key", e))?;
+        let certificate = recovered
+            .account
+            .certify_device(DeviceId::random()?, signer.public())?;
+        let mut device = Self::assemble(store, signer, certificate, Some(recovered.account))?;
+        let own = device.account();
+        device.contacts.extend(
+            recovered
+                .contacts
+                .into_iter()
+                .filter(|contact| contact.account != own)
+                .map(|contact| (contact.account, contact)),
+        );
+        device.introduced.extend(recovered.introduced);
+        device.username = Some(recovered.username);
+        device.labels.extend(recovered.labels);
+        device.recovery = Some(RecoveryRecord {
+            code: recovered.key.code().to_owned(),
+            uploaded: None,
+        });
+        let records = device.base_records()?;
+        device.persist_with(records)?;
+        Ok(device)
+    }
+
     fn fresh_store(path: &Path, master: &MasterKey) -> Result<Store> {
         let store = Store::open(path, master)?;
         if store.record(RECORD_CERTIFICATE)?.is_some() {
@@ -401,6 +471,7 @@ impl Device {
             labels: BTreeMap::new(),
             meta: BTreeMap::new(),
             persisted_meta: BTreeMap::new(),
+            recovery: None,
         })
     }
 
@@ -419,6 +490,9 @@ impl Device {
         }
         if !self.labels.is_empty() {
             records.push((RECORD_LABELS, encode_labels(&self.labels)?));
+        }
+        if let Some(recovery) = &self.recovery {
+            records.push((RECORD_RECOVERY, encode_recovery(recovery)?));
         }
         Ok(records)
     }
@@ -474,6 +548,10 @@ impl Device {
         let read_marks = decoded_or_default(&store, RECORD_READ_MARKS, decode_read_marks)?;
         let labels = decoded_or_default(&store, RECORD_LABELS, decode_labels)?;
         let meta = decoded_or_default(&store, RECORD_CHAT_META, decode_meta)?;
+        let recovery = store
+            .record(RECORD_RECOVERY)?
+            .map(|bytes| decode_recovery(&bytes))
+            .transpose()?;
 
         let provider = OpenMlsRustCrypto::default();
         let persisted = store.load_mls_state()?;
@@ -518,6 +596,7 @@ impl Device {
             labels,
             persisted_meta: meta.clone(),
             meta,
+            recovery,
         })
     }
 
@@ -573,6 +652,106 @@ impl Device {
             ..Batch::default()
         })?;
         self.labels = labels;
+        Ok(())
+    }
+
+    /// The recovery key, as shown (ADR-0018); only the device holding the
+    /// account key has one.
+    #[must_use]
+    pub fn recovery_key(&self) -> Option<String> {
+        self.recovery
+            .as_ref()
+            .and_then(|record| RecoveryKey::parse(&record.code).ok())
+            .map(|key| key.display())
+    }
+
+    /// Makes a new recovery key, replacing any earlier one, and returns it
+    /// as shown. The service takes the kit at the next
+    /// [`Device::recovery_upload`]; the old key stops working then.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Unauthenticated`] on a device without the account key,
+    /// or a crypto or storage error.
+    pub fn new_recovery_key(&mut self) -> Result<String> {
+        if self.account_key.is_none() {
+            return Err(CoreError::Unauthenticated(
+                "only the device holding the account key makes recovery keys",
+            ));
+        }
+        let key = RecoveryKey::generate()?;
+        let record = RecoveryRecord {
+            code: key.code().to_owned(),
+            uploaded: None,
+        };
+        self.store.apply(&Batch {
+            records: vec![(RECORD_RECOVERY, encode_recovery(&record)?)],
+            ..Batch::default()
+        })?;
+        self.recovery = Some(record);
+        Ok(key.display())
+    }
+
+    /// The kit to leave at the service, when it no longer holds what this
+    /// device would put in it: the account key, the name, the contacts, the
+    /// chats this account has spoken in and the device labels (ADR-0018).
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::TooLarge`], or a crypto or encoding error.
+    pub fn recovery_upload(&self, now_ms: u64) -> Result<Option<KitUpload>> {
+        let (Some(record), Some(account), Some(username)) =
+            (&self.recovery, &self.account_key, &self.username)
+        else {
+            return Ok(None);
+        };
+        let kit = KitBody {
+            account_key: account.to_secret_bytes()?.to_vec(),
+            username: username.clone(),
+            contacts: self.contacts(),
+            introduced: self.introduced.iter().cloned().collect(),
+            labels: self
+                .labels
+                .iter()
+                .map(|(device, label)| (*device, label.clone()))
+                .collect(),
+        };
+        let encoded = kit.encode()?;
+        if record.uploaded == Some(encoded.1) {
+            return Ok(None);
+        }
+        let key = RecoveryKey::parse(&record.code)?;
+        recovery::upload(&key, account, username, encoded, now_ms).map(Some)
+    }
+
+    /// Reads the answer to a [`Device::recovery_upload`]: the service holds
+    /// that kit now, unless the key changed in the meantime.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Service`], or a storage error.
+    pub fn recovery_uploaded(
+        &mut self,
+        upload: &KitUpload,
+        status: u16,
+        body: &[u8],
+    ) -> Result<()> {
+        service::expect_success(status, body, &[200])?;
+        let Some(record) = &self.recovery else {
+            return Ok(());
+        };
+        if record.code != *upload.code {
+            return Ok(());
+        }
+        let record = RecoveryRecord {
+            code: record.code.clone(),
+            uploaded: Some(upload.digest),
+        };
+        self.store.apply(&Batch {
+            records: vec![(RECORD_RECOVERY, encode_recovery(&record)?)],
+            ..Batch::default()
+        })?;
+        self.recovery = Some(record);
         Ok(())
     }
 
@@ -682,6 +861,29 @@ impl Device {
     #[must_use]
     pub const fn mailbox(&self) -> MailboxId {
         self.mailbox
+    }
+
+    /// Every other account in the chats this account has spoken in: the
+    /// names whose devices healing looks up (ADR-0018).
+    ///
+    /// # Errors
+    ///
+    /// A malformed member.
+    pub fn chat_accounts(&self) -> Result<BTreeSet<AccountId>> {
+        let own = self.account();
+        let mut accounts = BTreeSet::new();
+        for (chat, group) in &self.chats {
+            if !self.introduced.contains(chat) {
+                continue;
+            }
+            for member in group.members() {
+                let account = certificate_of(&member.credential)?.account();
+                if account != own {
+                    accounts.insert(account);
+                }
+            }
+        }
+        Ok(accounts)
     }
 
     /// Every chat this device takes part in, in a stable order.
@@ -1289,6 +1491,86 @@ impl Device {
         Ok(missing)
     }
 
+    /// Which other accounts' devices each chat lacks, given the devices the
+    /// directory lists for them ([`service::device_lists`]) (ADR-0018).
+    ///
+    /// An account heals itself while one of its devices in the chat is still
+    /// registered, so only accounts with none left there count, as after a
+    /// recovery. Accounts not in `lists` count as registered. Chats this
+    /// account has not spoken in, or still waiting for an answer to a
+    /// commit, are left for later.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Unauthenticated`] for a certificate of another account
+    /// than its list's, or a malformed member.
+    pub fn foreign_gaps(
+        &self,
+        lists: &[(AccountId, Vec<DeviceCertificate>)],
+    ) -> Result<Vec<ForeignGap>> {
+        let mut registered: BTreeMap<AccountId, BTreeSet<DeviceId>> = BTreeMap::new();
+        for (account, certificates) in lists {
+            if certificates
+                .iter()
+                .any(|certificate| certificate.account() != *account)
+            {
+                return Err(CoreError::Unauthenticated(
+                    "a listed device belongs to another account",
+                ));
+            }
+            registered
+                .entry(*account)
+                .or_default()
+                .extend(certificates.iter().map(DeviceCertificate::device));
+        }
+        let own = self.account();
+        let live = |account: &AccountId, device: &DeviceId| {
+            registered
+                .get(account)
+                .is_none_or(|devices| devices.contains(device))
+        };
+        let mut gaps = Vec::new();
+        for chat in self.chats() {
+            let group = &self.chats[&chat];
+            if !self.introduced.contains(&chat) || group.pending_commit().is_some() {
+                continue;
+            }
+            let mut leaves = Vec::new();
+            for member in group.members() {
+                let certificate = certificate_of(&member.credential)?;
+                leaves.push((
+                    member.index.u32(),
+                    certificate.account(),
+                    certificate.device(),
+                ));
+            }
+            let accounts: BTreeSet<AccountId> = leaves.iter().map(|leaf| leaf.1).collect();
+            for account in accounts {
+                let Some(listed) = registered.get(&account) else {
+                    continue;
+                };
+                let still_there = leaves
+                    .iter()
+                    .any(|leaf| leaf.1 == account && listed.contains(&leaf.2));
+                if account == own || still_there || listed.is_empty() {
+                    continue;
+                }
+                let healer = leaves
+                    .iter()
+                    .filter(|leaf| leaf.1 != account && live(&leaf.1, &leaf.2))
+                    .map(|leaf| leaf.0)
+                    .min();
+                gaps.push(ForeignGap {
+                    chat: chat.clone(),
+                    account,
+                    devices: listed.iter().copied().collect(),
+                    first: healer == Some(group.own_leaf_index().u32()),
+                });
+            }
+        }
+        Ok(gaps)
+    }
+
     /// Which devices of this account each chat still holds although the
     /// directory no longer lists them ([`service::device_list`]): removed
     /// devices, to take out of every chat (ADR-0014). Chats still waiting
@@ -1401,6 +1683,36 @@ impl Device {
         chat: &ChatId,
         entries: &[DirectoryEntry],
     ) -> Result<Invitation> {
+        self.add_devices(chat, self.account(), entries)
+    }
+
+    /// Adds devices of `account`, which already has a device in `chat`, in
+    /// one commit, each from a directory answer about that device alone:
+    /// one's own new devices, or another account's after a recovery
+    /// ([`Device::foreign_gaps`]).
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Unauthenticated`] for a device of another account,
+    /// [`CoreError::Malformed`] when `account` is not in the chat, or as
+    /// [`Device::invite`].
+    pub fn add_devices(
+        &mut self,
+        chat: &ChatId,
+        account: AccountId,
+        entries: &[DirectoryEntry],
+    ) -> Result<Invitation> {
+        let group = self.chats.get(chat).ok_or(CoreError::UnknownChat)?;
+        let mut in_chat = false;
+        for member in group.members() {
+            in_chat |= certificate_of(&member.credential)?.account() == account;
+        }
+        if !in_chat {
+            return Err(CoreError::malformed(
+                "device lookup",
+                "the account is not in the chat",
+            ));
+        }
         if entries.is_empty() {
             return Err(CoreError::malformed("device lookup", "no device to add"));
         }
@@ -1416,8 +1728,8 @@ impl Device {
                 };
                 let key_package = device.validate_key_package(bytes)?;
                 let leaf = key_package.leaf_node();
-                if entry.account != device.account()
-                    || certificate_of(leaf.credential())?.account() != device.account()
+                if entry.account != account
+                    || certificate_of(leaf.credential())?.account() != account
                 {
                     return Err(CoreError::Unauthenticated("not a device of this account"));
                 }
@@ -2250,6 +2562,20 @@ fn decode_meta(bytes: &[u8]) -> Result<BTreeMap<ChatId, ChatMeta>> {
     let list: Vec<(ChatId, ChatMeta)> = ciborium::from_reader(bytes)
         .map_err(|_| CoreError::malformed("store", "chat details are malformed"))?;
     Ok(list.into_iter().collect())
+}
+
+fn encode_recovery(record: &RecoveryRecord) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    ciborium::into_writer(record, &mut out).map_err(|e| CoreError::Encoding {
+        what: "recovery key",
+        source: e.into(),
+    })?;
+    Ok(out)
+}
+
+fn decode_recovery(bytes: &[u8]) -> Result<RecoveryRecord> {
+    ciborium::from_reader(bytes)
+        .map_err(|_| CoreError::malformed("store", "recovery key is malformed"))
 }
 
 fn decode_labels(bytes: &[u8]) -> Result<BTreeMap<DeviceId, String>> {
