@@ -45,6 +45,8 @@
       "namespace_id": "1006",
       "simple": { "limit": 600, "period": 60 },
     },
+    // Fetching a recovery kit: a person types a key a few times at most.
+    { "name": "RECOVER_LIMITER", "namespace_id": "1007", "simple": { "limit": 10, "period": 60 } },
   ],
   "observability": {
     "enabled": true,

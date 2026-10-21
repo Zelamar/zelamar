@@ -21,6 +21,10 @@ export const MAX_DEVICES = 5;
 export const MAX_KEY_PACKAGES = 100;
 /** Largest key package accepted. */
 export const MAX_KEY_PACKAGE_BYTES = 16 * 1024;
+/** Largest sealed recovery kit kept (ADR-0018). */
+export const MAX_RECOVERY_KIT = 64 * 1024;
+/** Most names one request for device lists may ask about (ADR-0018). */
+export const MAX_DIRECTORY_BATCH = 64;
 
 export type AccountState = 'free' | 'same' | 'taken';
 export type ClaimOutcome = 'created' | 'same' | 'taken';
@@ -127,6 +131,64 @@ export class Account extends DurableObject<Env> {
     sql.exec('DELETE FROM devices WHERE device = ?', buffer(id));
     const left = sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM devices').one().n;
     return { status: 200, body: { devices: left } };
+  }
+
+  /**
+   * Keeps the account's sealed recovery kit and the hash of the token that
+   * fetches it (ADR-0018), replacing any earlier one. Only the account key
+   * may sign this.
+   */
+  async saveRecovery(request: SignedRequest): Promise<Reply> {
+    const key = this.accountKey();
+    if (key === null) {
+      return failure(404, 'unknown_account');
+    }
+    const auth = await checkAccountRequest(request, key, Date.now());
+    if (auth !== true) {
+      return auth;
+    }
+    const body = parseObject(new Uint8Array(request.body));
+    const tokenHash = fixedBase64Url(body?.token_hash, 32);
+    const kit = typeof body?.kit === 'string' ? fromBase64Url(body.kit) : null;
+    if (tokenHash === null || kit === null || kit.length === 0) {
+      return failure(400, 'malformed');
+    }
+    if (kit.length > MAX_RECOVERY_KIT) {
+      return failure(413, 'too_large');
+    }
+    this.createSchema();
+    this.ctx.storage.sql.exec(
+      `INSERT INTO recovery (id, token_hash, kit, updated) VALUES (1, ?, ?, ?)
+       ON CONFLICT (id) DO UPDATE SET
+         token_hash = excluded.token_hash,
+         kit = excluded.kit,
+         updated = excluded.updated`,
+      buffer(tokenHash),
+      buffer(kit),
+      Date.now(),
+    );
+    return { status: 200, body: {} };
+  }
+
+  /**
+   * The sealed recovery kit, for whoever presents its token. A wrong token,
+   * no kit and no account all look the same.
+   */
+  async openRecovery(token: ArrayBuffer): Promise<Reply> {
+    const hash = await sha256(new Uint8Array(token));
+    if (this.holder() === null) {
+      return failure(403, 'wrong_key');
+    }
+    this.createSchema();
+    const row = this.ctx.storage.sql
+      .exec<{ token_hash: ArrayBuffer; kit: ArrayBuffer }>(
+        'SELECT token_hash, kit FROM recovery WHERE id = 1',
+      )
+      .toArray()[0];
+    if (row === undefined || !sameBytes(hash, new Uint8Array(row.token_hash))) {
+      return failure(403, 'wrong_key');
+    }
+    return { status: 200, body: { kit: toBase64Url(new Uint8Array(row.kit)) } };
   }
 
   /** Adds one-time key packages (and optionally a new last-resort one). */
@@ -318,6 +380,12 @@ export class Account extends DurableObject<Env> {
         key_package BLOB NOT NULL
       );
       CREATE INDEX IF NOT EXISTS key_packages_by_device ON key_packages (device, seq);
+      CREATE TABLE IF NOT EXISTS recovery (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        token_hash BLOB NOT NULL,
+        kit BLOB NOT NULL,
+        updated INTEGER NOT NULL
+      );
     `);
   }
 }

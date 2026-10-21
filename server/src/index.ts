@@ -8,6 +8,7 @@
  * sent a message.
  */
 import packageJson from '../package.json';
+import { MAX_DIRECTORY_BATCH } from './account';
 import { buffer, fixedBase64Url, toBase64Url } from './bytes';
 import { checkClaim } from './claim';
 import {
@@ -37,6 +38,10 @@ const SERVICE_NAME = 'zelamar';
 const MAX_JSON_BODY = 3 * 1024 * 1024;
 /** Largest claim body. */
 const MAX_CLAIM_BODY = 4 * 1024;
+/** Largest request leaving a recovery kit: the kit in base64 and a hash. */
+const MAX_RECOVERY_BODY = 96 * 1024;
+/** Largest request for a recovery kit, or for many device lists. */
+const MAX_SMALL_BODY = 8 * 1024;
 /** Mailboxes written to at once while fanning out one delivery. */
 const FAN_OUT_BATCH = 8;
 
@@ -87,6 +92,15 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
   if (resource === 'accounts' && name !== undefined && sub === 'key' && parts.length === 4) {
     return only(request, 'GET') ?? respond(await lookup(request, env, name, 'key'));
+  }
+  if (resource === 'accounts' && name !== undefined && sub === 'recovery' && parts.length === 4) {
+    if (request.method === 'PUT') {
+      return respond(await saveRecovery(request, env, name));
+    }
+    return only(request, 'POST') ?? respond(await openRecovery(request, env, name));
+  }
+  if (resource === 'directory' && name === 'devices' && parts.length === 3) {
+    return only(request, 'POST') ?? respond(await deviceLists(request, env));
   }
   if (resource === 'accounts' && name !== undefined && sub === 'devices' && parts.length === 4) {
     return only(request, 'GET') ?? respond(await lookup(request, env, name, 'list'));
@@ -314,6 +328,85 @@ async function lookup(
   }
   const device = fixedBase64Url(what.device, 16);
   return device === null ? failure(404, 'unknown_device') : holder.lookupDevice(buffer(device));
+}
+
+/**
+ * The registered devices of up to {@link MAX_DIRECTORY_BATCH} names in one
+ * request, rate-limited as one lookup (ADR-0018). Names nobody holds are
+ * left out.
+ */
+async function deviceLists(request: Request, env: Env): Promise<Reply> {
+  if (!(await allowed(env.LOOKUP_LIMITER, request))) {
+    return failure(429, 'rate_limited');
+  }
+  const body = await readBody(request, MAX_SMALL_BODY);
+  const names = (body === null ? null : parseObject(body))?.usernames;
+  if (!Array.isArray(names) || names.length === 0 || names.length > MAX_DIRECTORY_BATCH) {
+    return failure(400, 'malformed');
+  }
+  const usernames = new Set<string>();
+  for (const name of names) {
+    if (typeof name !== 'string' || normalizeUsername(name) !== name) {
+      return failure(400, 'invalid_username');
+    }
+    usernames.add(name);
+  }
+  const accounts: unknown[] = [];
+  const queue = [...usernames];
+  for (let at = 0; at < queue.length; at += FAN_OUT_BATCH) {
+    const replies = await Promise.all(
+      queue
+        .slice(at, at + FAN_OUT_BATCH)
+        .map((name) => replyOf(env.ACCOUNT.getByName(name).listDevices())),
+    );
+    accounts.push(...replies.filter((reply) => reply.status === 200).map((reply) => reply.body));
+  }
+  return { status: 200, body: { accounts } };
+}
+
+/**
+ * A Durable Object's reply. RPC typing cannot express a JSON body, so a stub
+ * call reads as `never` until it passes through here.
+ */
+function replyOf(call: Reply | Promise<Reply>): Promise<Reply> {
+  return Promise.resolve(call);
+}
+
+/** Leaves an account's sealed recovery kit, signed by the account key (ADR-0018). */
+async function saveRecovery(request: Request, env: Env, name: string): Promise<Reply> {
+  const username = normalizeUsername(name);
+  if (username === null || name !== username) {
+    return failure(404, 'unknown_account');
+  }
+  const body = await readBody(request, MAX_RECOVERY_BODY);
+  if (body === null) {
+    return failure(413, 'too_large');
+  }
+  return env.ACCOUNT.getByName(username).saveRecovery({
+    method: request.method,
+    path: new URL(request.url).pathname,
+    certificate: null,
+    timestamp: request.headers.get('zelamar-timestamp'),
+    signature: request.headers.get('zelamar-account-signature'),
+    body: buffer(body),
+  });
+}
+
+/** Hands out a sealed recovery kit for its token (ADR-0018). */
+async function openRecovery(request: Request, env: Env, name: string): Promise<Reply> {
+  if (!(await allowed(env.RECOVER_LIMITER, request))) {
+    return failure(429, 'rate_limited');
+  }
+  const body = await readBody(request, MAX_SMALL_BODY);
+  const token = fixedBase64Url((body === null ? null : parseObject(body))?.token, 32);
+  if (token === null) {
+    return failure(400, 'malformed');
+  }
+  const username = normalizeUsername(name);
+  if (username === null) {
+    return failure(403, 'wrong_key');
+  }
+  return env.ACCOUNT.getByName(username).openRecovery(buffer(token));
 }
 
 /** A chunk index from the path, or `null`. */
