@@ -10,7 +10,8 @@ rounding up. ADRs give the reasons; `protocol/` gives the exact rules.
 |---|---|
 | Message content: text, files, voice, reactions, edits, names | Only on the devices in the chat; in transit sealed by MLS (ADR-0003) |
 | Who talks to whom | Implied by MLS membership on devices; the server sees only mailbox ids (see below) |
-| The account key | Only on the device that created the account (ADR-0009, ADR-0014) |
+| The account key | On the account's first device (ADR-0009, ADR-0014); at the service only inside a kit sealed with the recovery key (ADR-0018) |
+| The recovery key | Only where the person wrote it down, and in the first device's encrypted store (ADR-0018) |
 | History at rest | Each device's store, encrypted under a key sealed by the OS: DPAPI or Android Keystore (ADR-0010, ADR-0013) |
 
 ## Adversaries
@@ -34,6 +35,8 @@ It **cannot**:
   the code. Certificates are signed by the account key and checked by
   every client (ADR-0009, ADR-0014);
 - open a link slot. The key comes from a code it never sees;
+- open a recovery kit, or hand one to anyone else. It keeps only a hash of
+  the fetch token and would have to guess 125 bits (ADR-0018);
 - fork a chat on purpose. A sequencer that lies can only stall changes:
   every client verifies commits under MLS.
 
@@ -49,6 +52,8 @@ It **can see**, and this is metadata we accept for v1:
   Rate limits key on them. Our code logs no addresses, but Cloudflare's own
   request logs may record them.
 - **How many devices** an account has, and when it links or removes one.
+- **Whether an account has a recovery kit**, how large it is and when it
+  changes: roughly when the account gains a contact or a chat.
 - **Group sizes**, from how many mailboxes a commit or message goes to.
 
 It **can deny service**: drop, delay or refuse anything. Clients retry, and
@@ -67,8 +72,9 @@ message from a file chunk except by size.
   rate-limited; usernames cost an invite and a proof of work.
 - **A contact** sees what is sent in the chat, of course. Their device
   verifies our device certificates, and safety codes let two people check
-  that no one sits between them. One limit: a contact's new linked device
-  joins a chat silently, as it does in other messengers.
+  that no one sits between them. One limit: a contact's new device, linked
+  or recovered, joins a chat silently, as it does in other messengers. A
+  "new device" notice is a later feature.
 - **A group member** can add people. Nobody can remove others through the
   app, but a modified client could. Everyone would see it and could add
   the person back (ADR-0015).
@@ -84,8 +90,14 @@ message from a file chunk except by size.
 - **A lost linked device:** the account's first device removes it. It
   then leaves every chat and gets nothing new (ADR-0014). Its local
   history stays on it until it is erased.
-- **Losing the device with the account key** means no new devices can be
-  linked. Account recovery is a later decision.
+- **Losing the device with the account key** loses the account, unless
+  the person saved a recovery key. With it, a new device takes the account
+  back and removes the lost one; contacts bring it back into its chats.
+  Messages from before stay on the lost device (ADR-0018).
+- **Someone with the recovery key** can take the account the same way.
+  The app says so where it shows the key. The real owner sees the extra
+  device under Devices and can remove it, but whoever holds the key can
+  remove the owner's devices too. Treat it like a password.
 
 ## Cryptography in one table
 
@@ -95,6 +107,7 @@ message from a file chunk except by size.
 | Identity | Ed25519 account key → device certificates |
 | Store at rest | XChaCha20-Poly1305 per row, HKDF-SHA256 from a 32-byte master key |
 | Linking | HKDF-SHA256 from a 100-bit code → XChaCha20-Poly1305 |
+| Recovery | HKDF-SHA256 from a 125-bit key → XChaCha20-Poly1305; SHA-256 of a fetch token at the service |
 | Files | ChaCha20-Poly1305 per 1 MiB chunk, fresh key per file |
 | Service requests | Ed25519 signatures with domain-separated contexts |
 
