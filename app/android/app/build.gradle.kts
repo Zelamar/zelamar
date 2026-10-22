@@ -14,6 +14,12 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // The Firebase identifiers below are resource values, which the Android
+    // Gradle plugin leaves off unless asked.
+    buildFeatures {
+        resValues = true
+    }
+
     defaultConfig {
         applicationId = "com.zelamar.app"
         // You can update the following values to match your application needs.
