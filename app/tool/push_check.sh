@@ -9,7 +9,7 @@ set -uo pipefail
 app=com.zelamar.app
 mkdir -p screenshots
 log=screenshots/push-test.log
-# The test leaves marker files in the app's cache directory; its printed
+# The test leaves marker files in the app's temporary directory; its printed
 # output would arrive only once it ends.
 adb logcat -c
 
@@ -21,7 +21,7 @@ test_pid=$!
 # Waits up to $2 seconds for the app to leave the marker zelamar-push-$1.
 wait_for() {
   for _ in $(seq 1 "$2"); do
-    adb shell run-as "$app" ls cache 2>/dev/null | grep -q "zelamar-push-$1" && return 0
+    adb shell run-as "$app" find . -name "zelamar-push-$1" 2>/dev/null | grep -q . && return 0
     kill -0 "$test_pid" 2>/dev/null || return 1
     sleep 1
   done
@@ -52,6 +52,7 @@ fi
 
 wait "$test_pid"
 test_status=$?
+adb shell run-as "$app" find . -name 'zelamar-push-*' >screenshots/markers.txt 2>&1
 adb logcat -d -s FirebaseMessaging:V FirebaseInstanceId:V >screenshots/firebase-logcat.txt
 tail -n 40 "$log"
 echo "notification found: $found, test status: $test_status"

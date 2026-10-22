@@ -16,7 +16,7 @@ import 'package:zelamar/src/rust/frb_generated.dart';
 /// Alice's app registers its Firebase token and goes away; Bob writes; the
 /// service asks Firebase to wake her. `tool/push_check.sh` runs this test,
 /// sends the app to the background once it leaves the marker
-/// `zelamar-push-away` in its cache directory, and looks for the
+/// `zelamar-push-away` in its temporary directory, and looks for the
 /// notification after `zelamar-push-sent`
 /// (`.github/workflows/push-check.yml`). Files, because a test's printed
 /// output reaches neither the device log nor the console in time.
