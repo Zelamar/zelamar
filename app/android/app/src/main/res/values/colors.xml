@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Sunset bronze: the notification icon's colour, as MainActivity's own
+         notifications use it. -->
+    <color name="zelamar_bronze">#8A5A30</color>
+</resources>

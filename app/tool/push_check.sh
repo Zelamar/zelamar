@@ -51,6 +51,12 @@ if wait_for away 900; then
     sleep 3
     adb exec-out screencap -p >screenshots/push.png
   fi
+  # Android may hold the app frozen in the background: bring it back and
+  # tell the test it may end.
+  marker=$(adb shell run-as "$app" find . -name zelamar-push-away | tr -d '\r' | head -n 1)
+  adb shell run-as "$app" touch "${marker%/*}/zelamar-push-done"
+  adb shell cmd statusbar collapse
+  adb shell am start -n "$app/.MainActivity" >/dev/null
 fi
 
 wait "$test_pid"

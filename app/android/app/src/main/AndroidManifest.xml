@@ -42,6 +42,9 @@
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@drawable/ic_stat_zelamar" />
         <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/zelamar_bronze" />
+        <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="messages" />
         <!-- No usage analytics from the messaging library. -->

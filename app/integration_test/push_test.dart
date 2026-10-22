@@ -57,11 +57,17 @@ void main() {
       }
 
       /// Leaves a marker the script outside the app looks for.
-      void mark(String step) {
-        final directory = Directory.systemTemp.path;
-        File('$directory${Platform.pathSeparator}zelamar-push-$step')
-            .writeAsStringSync(step, flush: true);
-      }
+      /// A marker shared with the script outside the app.
+      File marker(String step) => File(
+        [
+          Directory.systemTemp.path,
+          'zelamar-push-$step',
+        ].join(Platform.pathSeparator),
+      );
+
+      /// Leaves a marker for the script.
+      void mark(String step) =>
+          marker(step).writeAsStringSync(step, flush: true);
 
       Future<void> until(bool Function() condition, String what) async {
         final deadline = DateTime.now().add(const Duration(seconds: 60));
@@ -110,8 +116,13 @@ void main() {
 
       await bob.sendText(chat, 'Are you there?');
       mark('sent');
-      // The script looks for the notification meanwhile.
-      await Future<void>.delayed(const Duration(minutes: 5));
+      // The script looks for the notification meanwhile, then brings the app
+      // back and leaves `zelamar-push-done`.
+      final done = marker('done');
+      final deadline = DateTime.now().add(const Duration(minutes: 8));
+      while (!done.existsSync() && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
     },
     skip: invites.isEmpty ? 'needs a service with a Firebase key' : false,
     timeout: const Timeout(Duration(minutes: 10)),
