@@ -108,7 +108,7 @@ jobs:
 
       - name: Service log
         if: always()
-        run: grep -E "mailboxes|deliver|push_failed|rror" "$RUNNER_TEMP/wrangler.log" | tail -n 40 || true
+        run: grep -E "mailboxes|deliver|push_|rror" "$RUNNER_TEMP/wrangler.log" | tail -n 40 || true
 
       - uses: actions/upload-artifact@v7
         if: always()

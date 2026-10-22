@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:math';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:zelamar/src/messenger/key_vault.dart';
@@ -16,9 +15,11 @@ import 'package:zelamar/src/rust/frb_generated.dart';
 ///
 /// Alice's app registers its Firebase token and goes away; Bob writes; the
 /// service asks Firebase to wake her. `tool/push_check.sh` runs this test,
-/// sends the app to the background when it logs `ZELAMAR_PUSH: away`, and
-/// looks for the notification after `ZELAMAR_PUSH: sent`
-/// (`.github/workflows/push-check.yml`).
+/// sends the app to the background once it leaves the marker
+/// `zelamar-push-away` in its cache directory, and looks for the
+/// notification after `zelamar-push-sent`
+/// (`.github/workflows/push-check.yml`). Files, because a test's printed
+/// output reaches neither the device log nor the console in time.
 ///
 /// Skipped without a service and two invites.
 void main() {
@@ -53,6 +54,13 @@ void main() {
         });
         await messenger.start();
         return (messenger, directory);
+      }
+
+      /// Leaves a marker the script outside the app looks for.
+      void mark(String step) {
+        final directory = Directory.systemTemp.path;
+        File('$directory${Platform.pathSeparator}zelamar-push-$step')
+            .writeAsStringSync(step, flush: true);
       }
 
       Future<void> until(bool Function() condition, String what) async {
@@ -94,14 +102,14 @@ void main() {
       );
 
       // Alice's app goes to the background and lets go of its mailbox.
-      debugPrint('ZELAMAR_PUSH: away');
+      mark('away');
       await Future<void>.delayed(const Duration(seconds: 5));
       away.add(alice);
       alice.dispose();
       await Future<void>.delayed(const Duration(seconds: 3));
 
       await bob.sendText(chat, 'Are you there?');
-      debugPrint('ZELAMAR_PUSH: sent');
+      mark('sent');
       // The script looks for the notification meanwhile.
       await Future<void>.delayed(const Duration(seconds: 90));
     },

@@ -125,6 +125,7 @@ export class Push extends DurableObject<Env> {
         },
       );
       if (response.ok) {
+        console.log(JSON.stringify({ event: 'push_sent' }));
         return 'sent';
       }
       const text = await response.text();
