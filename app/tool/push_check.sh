@@ -30,16 +30,19 @@ wait_for() {
 
 found=0
 if wait_for away 900; then
-  echo "app is away: to the background"
+  echo "$(date -u +%T) app is away: to the background"
   adb shell pm grant "$app" android.permission.POST_NOTIFICATIONS
   adb shell input keyevent KEYCODE_HOME
   if wait_for sent 60; then
-    echo "message sent: looking for the notification"
-    for _ in $(seq 1 45); do
+    echo "$(date -u +%T) message sent: looking for the notification"
+    # Android may freeze a background app until a wake-up arrives; give
+    # Firebase a few minutes.
+    for _ in $(seq 1 150); do
       adb shell dumpsys notification --noredact >screenshots/notifications.txt
       if grep -q "pkg=$app" screenshots/notifications.txt &&
         grep -q 'New message' screenshots/notifications.txt; then
         found=1
+        echo "$(date -u +%T) notification shown"
         break
       fi
       sleep 2

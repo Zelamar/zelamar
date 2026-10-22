@@ -78,7 +78,8 @@ jobs:
           ' "$key"
           invites=$(INVITE_KEY=$key node scripts/invites.mjs 1 2 | awk '{print $2}' | paste -sd, -)
           echo "ZELAMAR_TEST_INVITES=$invites" >> "$GITHUB_ENV"
-          nohup npx wrangler dev --port 8787 > "$RUNNER_TEMP/wrangler.log" 2>&1 &
+          # Each line of the service log gets the time, to line up with the device.
+          nohup bash -c 'npx wrangler dev --port 8787 2>&1 | while IFS= read -r line; do echo "$(date -u +%T) $line"; done' > "$RUNNER_TEMP/wrangler.log" &
           for _ in $(seq 1 60); do
             curl -sf http://127.0.0.1:8787/health && exit 0
             sleep 2

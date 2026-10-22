@@ -111,9 +111,9 @@ void main() {
       await bob.sendText(chat, 'Are you there?');
       mark('sent');
       // The script looks for the notification meanwhile.
-      await Future<void>.delayed(const Duration(seconds: 90));
+      await Future<void>.delayed(const Duration(minutes: 5));
     },
     skip: invites.isEmpty ? 'needs a service with a Firebase key' : false,
-    timeout: const Timeout(Duration(minutes: 5)),
+    timeout: const Timeout(Duration(minutes: 10)),
   );
 }
