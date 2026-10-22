@@ -9,16 +9,23 @@ set -uo pipefail
 app=com.zelamar.app
 mkdir -p screenshots
 log=screenshots/push-test.log
+# The test's own output may arrive only once it ends; the device log is
+# live, so the markers are read from there.
+markers=screenshots/flutter-logcat.txt
 
-flutter test integration_test/push_test.dart -d emulator-5554 \
+adb logcat -c
+adb logcat -v brief 'flutter:I' '*:S' >"$markers" 2>&1 &
+logcat_pid=$!
+
+flutter test integration_test/push_test.dart -d emulator-5554 -r expanded \
   --dart-define=ZELAMAR_SERVICE="$ZELAMAR_SERVICE" \
   --dart-define=ZELAMAR_TEST_INVITES="$ZELAMAR_TEST_INVITES" >"$log" 2>&1 &
 test_pid=$!
 
-# Waits up to $2 seconds for the test to log $1.
+# Waits up to $2 seconds for the app to log $1.
 wait_for() {
   for _ in $(seq 1 "$2"); do
-    grep -q "$1" "$log" && return 0
+    grep -q "$1" "$markers" && return 0
     kill -0 "$test_pid" 2>/dev/null || return 1
     sleep 1
   done
@@ -27,9 +34,11 @@ wait_for() {
 
 found=0
 if wait_for 'ZELAMAR_PUSH: away' 900; then
+  echo "app is away: to the background"
   adb shell pm grant "$app" android.permission.POST_NOTIFICATIONS
   adb shell input keyevent KEYCODE_HOME
   if wait_for 'ZELAMAR_PUSH: sent' 60; then
+    echo "message sent: looking for the notification"
     for _ in $(seq 1 45); do
       adb shell dumpsys notification --noredact >screenshots/notifications.txt
       if grep -q "pkg=$app" screenshots/notifications.txt &&
@@ -47,6 +56,7 @@ fi
 
 wait "$test_pid"
 test_status=$?
+kill "$logcat_pid" 2>/dev/null
 tail -n 40 "$log"
 echo "notification found: $found, test status: $test_status"
 [ "$found" = 1 ] && [ "$test_status" = 0 ]
