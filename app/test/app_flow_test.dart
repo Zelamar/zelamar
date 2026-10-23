@@ -663,23 +663,24 @@ void main() {
 
     testWidgets('until there is a recovery key the chats remind; then it '
         'shows, copies and is replaced', (tester) async {
+      // The key goes to the platform as a secret, never as ordinary text.
       String? copied;
-      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        SystemChannels.platform,
-        (call) async {
-          if (call.method == 'Clipboard.setData') {
-            copied =
-                (call.arguments as Map<Object?, Object?>)['text'] as String?;
-          }
+      var ordinary = false;
+      const secrets = MethodChannel('zelamar/clipboard');
+      final channels = tester.binding.defaultBinaryMessenger
+        ..setMockMethodCallHandler(secrets, (call) async {
+          copied = call.arguments as String?;
+          return true;
+        })
+        ..setMockMethodCallHandler(SystemChannels.platform, (call) async {
+          ordinary |= call.method == 'Clipboard.setData';
           return null;
-        },
-      );
-      addTearDown(
-        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-          SystemChannels.platform,
-          null,
-        ),
-      );
+        });
+      addTearDown(() {
+        channels
+          ..setMockMethodCallHandler(secrets, null)
+          ..setMockMethodCallHandler(SystemChannels.platform, null);
+      });
       final messenger = await pumpApp(
         tester,
         messenger: FakeMessenger(
@@ -708,6 +709,7 @@ void main() {
       await tester.tap(find.byKey(const Key('recovery.copy')));
       await tester.pumpAndSettle();
       expect(copied, 'abcde-fghij-klmno-pqrst-uvw2x');
+      expect(ordinary, isFalse);
       expect(find.text('Copied'), findsOneWidget);
       await tester.tap(find.byKey(const Key('recovery.show')));
       await tester.pumpAndSettle();

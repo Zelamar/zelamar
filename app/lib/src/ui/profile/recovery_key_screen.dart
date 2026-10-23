@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:zelamar/src/design/theme.dart';
 import 'package:zelamar/src/design/tokens.dart';
 import 'package:zelamar/src/design/typography.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
+import 'package:zelamar/src/messenger/secret_clipboard.dart';
 import 'package:zelamar/src/ui/words.dart';
 
 /// The recovery key: what brings the account back on a new device after
@@ -77,7 +77,7 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
   }
 
   Future<void> _copy(String key) async {
-    await Clipboard.setData(ClipboardData(text: key));
+    await copySecret(key);
     if (mounted) {
       setState(() => _copied = true);
     }
