@@ -99,6 +99,35 @@ message from a file chunk except by size.
   device under Devices and can remove it, but whoever holds the key can
   remove the owner's devices too. Treat it like a password.
 
+What could otherwise leak from a device:
+- **Decrypted copies.** A voice message is decrypted to a temporary file
+  while it is recorded or played. A file sent to Android's share sheet is
+  copied the same way. Each copy is deleted when done; a crash can leave
+  one behind, so every start sweeps copies older than ten minutes.
+- **The locked screen.** Android shows a message notification there in
+  full only if the person allows private content on the locked screen.
+  Otherwise it reads "Zelamar — New message", like a push wake-up.
+- **The clipboard.** Copying the recovery key marks it as a secret:
+  - Windows keeps it out of the clipboard history and the cloud
+    clipboard, and clipboard monitors skip it;
+  - Android 13+ shows dots in the clipboard preview.
+
+  It stays on the clipboard until something else replaces it.
+- **Backups.** Android's cloud backup and device-to-device transfer
+  exclude all of Zelamar's data.
+
+## The code we ship
+
+- **Dependencies.** CI fails on a known vulnerability (`cargo deny`,
+  RustSec), a disallowed license or an unknown source. The server's npm
+  dependencies are audited too. Dependabot proposes updates weekly.
+- **Build steps.** Every GitHub Action is pinned to a commit, not a tag
+  its owner could move. Signing secrets reach only the release job, and
+  the Firebase key only the push check.
+- **The repository** is public, with an anonymous project identity. No
+  secret has ever been committed: keys live sealed with DPAPI on the
+  CEO's machine, in Cloudflare secrets and in GitHub secrets.
+
 ## Cryptography in one table
 
 | Purpose | Primitive |

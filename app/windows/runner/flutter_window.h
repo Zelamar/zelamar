@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "notifier.h"
+#include "secret_clipboard.h"
 #include "win32_window.h"
 
 // A window that does nothing but host a Flutter view.
@@ -41,6 +42,7 @@ class FlutterWindow : public Win32Window {
 
   // Native notifications (tray toast, taskbar flash).
   std::unique_ptr<Notifier> notifier_;
+  std::unique_ptr<SecretClipboard> clipboard_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

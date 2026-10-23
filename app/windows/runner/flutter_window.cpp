@@ -30,6 +30,8 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   notifier_ = std::make_unique<Notifier>(
       flutter_controller_->engine()->messenger(), GetHandle(), show_message_);
+  clipboard_ = std::make_unique<SecretClipboard>(
+      flutter_controller_->engine()->messenger(), GetHandle());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -48,6 +50,7 @@ bool FlutterWindow::OnCreate() {
 
 void FlutterWindow::OnDestroy() {
   notifier_ = nullptr;
+  clipboard_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
