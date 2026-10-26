@@ -625,6 +625,7 @@ fn usernames_are_claimed_in_chat_and_confirmed_by_the_directory() {
             account: bob.account,
             username: Some("bob".into()),
             verified: true,
+            refuted: None,
         }]
     );
     let unconfirmed = bob.device.unconfirmed_contacts();
@@ -634,6 +635,7 @@ fn usernames_are_claimed_in_chat_and_confirmed_by_the_directory() {
             account: alice.account,
             username: Some("alice".into()),
             verified: false,
+            refuted: None,
         }]
     );
 
@@ -651,6 +653,13 @@ fn usernames_are_claimed_in_chat_and_confirmed_by_the_directory() {
     let (status, body) = service.handle(&service::key_lookup("bob").expect("key lookup"));
     let other = service::directory_entry("bob", status, &body).expect("entry");
     assert!(!bob.device.confirm_contact(&other).expect("confirm"));
+    assert!(
+        bob.device
+            .contacts()
+            .iter()
+            .any(|c| c.username.as_deref() == Some("alice")),
+        "and refutes no one"
+    );
 
     let chats = bob.device.chat_list().expect("chat list");
     assert_eq!(chats.len(), 1);
@@ -660,6 +669,7 @@ fn usernames_are_claimed_in_chat_and_confirmed_by_the_directory() {
             account: alice.account,
             username: Some("alice".into()),
             verified: true,
+            refuted: None,
         }]
     );
     let newest = chats[0].last.as_ref().expect("a last message");
@@ -1689,4 +1699,60 @@ fn a_recovery_key_brings_the_account_back_on_a_new_device() {
         vec![(alice.author(), "thanks".to_owned())]
     );
     drop(carol);
+}
+
+#[test]
+fn a_name_the_directory_refutes_is_never_shown_again() {
+    let mut service = Service::default();
+    let mut alice = Person::join(&mut service, "alice");
+    let mut bob = Person::join(&mut service, "bob");
+    let carol = Person::join(&mut service, "carol");
+    let chat = alice.start_chat_with(&mut service, "bob");
+    alice.device.send(&chat, &text(1, "Hi")).expect("send");
+    alice.flush(&mut service);
+    bob.read(&mut service);
+    let alices = alice.account;
+    let claimed = |bob: &Person| {
+        bob.device
+            .contacts()
+            .into_iter()
+            .find(|c| c.account == alices)
+            .expect("Alice")
+    };
+    assert_eq!(claimed(&bob).username.as_deref(), Some("alice"));
+
+    // The directory says "alice" is Carol's (as if Alice had claimed
+    // Carol's name): Alice's claim is dropped.
+    let body = json!({ "username": "alice", "account": b64(carol.account.as_bytes()) });
+    let entry = service::directory_entry("alice", 200, body.to_string().as_bytes()).expect("entry");
+    assert!(!bob.device.confirm_contact(&entry).expect("confirm"));
+    let refuted = claimed(&bob);
+    assert_eq!(refuted.username, None);
+    assert_eq!(refuted.refuted.as_deref(), Some("alice"));
+    assert_eq!(bob.device.unconfirmed_contacts(), Vec::new());
+    let title = &bob.device.chat_list().expect("chats")[0].members[0];
+    assert_eq!(title.username, None, "the chat shows no name for her");
+
+    // Her next claim of the same name is ignored.
+    alice
+        .device
+        .send(&chat, &text(2, "It is me"))
+        .expect("send");
+    alice.flush(&mut service);
+    bob.read(&mut service);
+    assert_eq!(claimed(&bob).username, None);
+
+    // A name no one holds is refuted the same way.
+    let mut dave = Person::join(&mut service, "dave");
+    let other = dave.start_chat_with(&mut service, "bob");
+    dave.device.send(&other, &text(3, "Hello")).expect("send");
+    dave.flush(&mut service);
+    bob.read(&mut service);
+    bob.device.refute_name("dave").expect("refute");
+    assert!(
+        !bob.device
+            .contacts()
+            .iter()
+            .any(|c| c.username.as_deref() == Some("dave"))
+    );
 }

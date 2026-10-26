@@ -3,8 +3,9 @@
 //!
 //! A username reaches a device two ways. Looking someone up in the
 //! directory confirms it. A profile message from the account itself only
-//! claims it, until the directory confirms it too. Only a confirmed name is
-//! shown as plain fact; the app marks a claimed one.
+//! claims it, until the directory confirms it too. A claim the directory
+//! refutes (the name is someone else's, or no one's) is dropped for good:
+//! that account is never shown by that name.
 
 use std::collections::BTreeMap;
 
@@ -22,6 +23,10 @@ pub struct Contact {
     pub username: Option<String>,
     /// Whether the directory confirmed that `username` belongs to `account`.
     pub verified: bool,
+    /// A name this account claimed and the directory refuted; its claims of
+    /// that name are ignored from then on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refuted: Option<String>,
 }
 
 impl Contact {
@@ -32,6 +37,7 @@ impl Contact {
             account,
             username: None,
             verified: false,
+            refuted: None,
         }
     }
 }
@@ -45,6 +51,9 @@ pub(crate) fn claimed(contacts: &mut Contacts, account: AccountId, username: &st
     let contact = contacts
         .entry(account)
         .or_insert_with(|| Contact::unknown(account));
+    if contact.refuted.as_deref() == Some(username) {
+        return;
+    }
     if contact.username.as_deref() != Some(username) {
         contact.username = Some(username.to_owned());
         contact.verified = false;
@@ -59,8 +68,21 @@ pub(crate) fn confirmed(contacts: &mut Contacts, account: AccountId, username: &
             account,
             username: Some(username.to_owned()),
             verified: true,
+            refuted: None,
         },
     );
+}
+
+/// The directory says `username` is not `account`'s: the claim is dropped
+/// and ignored from now on.
+pub(crate) fn refuted(contacts: &mut Contacts, account: AccountId, username: &str) {
+    if let Some(contact) = contacts.get_mut(&account)
+        && !contact.verified
+        && contact.username.as_deref() == Some(username)
+    {
+        contact.username = None;
+        contact.refuted = Some(username.to_owned());
+    }
 }
 
 pub(crate) fn encode(contacts: &Contacts) -> Result<Vec<u8>> {

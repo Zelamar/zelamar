@@ -1225,8 +1225,15 @@ impl Session {
         status: u16,
         body: Vec<u8>,
     ) -> Result<bool, SessionError> {
-        let entry = service::directory_entry(&username, status, &body)?;
-        Ok(self.device.confirm_contact(&entry)?)
+        match service::directory_entry(&username, status, &body) {
+            Ok(entry) => Ok(self.device.confirm_contact(&entry)?),
+            // No one holds the name: whoever claimed it made it up.
+            Err(CoreError::Service { code, .. }) if code == "unknown_account" => {
+                self.device.refute_name(&username)?;
+                Ok(false)
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// Marks `chat` as read; in a chat the user has written in, the authors

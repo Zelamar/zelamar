@@ -795,17 +795,58 @@ impl Device {
     ///
     /// A storage error.
     pub fn confirm_contact(&mut self, entry: &DirectoryEntry) -> Result<bool> {
+        let name = entry.username.as_str();
         let agrees = self
             .contacts
             .get(&entry.account)
-            .is_some_and(|contact| contact.username.as_deref() == Some(entry.username.as_str()));
-        if agrees {
+            .is_some_and(|contact| contact.username.as_deref() == Some(name));
+        // Anyone else claiming the name is impersonating its holder.
+        let impostors = self.claimants(name, Some(entry.account));
+        if agrees || !impostors.is_empty() {
             self.transact(|device| {
-                contacts::confirmed(&mut device.contacts, entry.account, &entry.username);
+                for account in &impostors {
+                    contacts::refuted(&mut device.contacts, *account, name);
+                }
+                if agrees {
+                    contacts::confirmed(&mut device.contacts, entry.account, name);
+                }
                 Ok(())
             })?;
         }
         Ok(agrees)
+    }
+
+    /// Drops every unconfirmed claim of `username`, which the directory says
+    /// no one holds.
+    ///
+    /// # Errors
+    ///
+    /// A storage error.
+    pub fn refute_name(&mut self, username: &str) -> Result<()> {
+        let claimants = self.claimants(username, None);
+        if claimants.is_empty() {
+            return Ok(());
+        }
+        self.transact(|device| {
+            for account in &claimants {
+                contacts::refuted(&mut device.contacts, *account, username);
+            }
+            Ok(())
+        })
+    }
+
+    /// Accounts other than `except` claiming `username` without the
+    /// directory's word.
+    fn claimants(&self, username: &str, except: Option<AccountId>) -> Vec<AccountId> {
+        self.contacts
+            .values()
+            .filter(|contact| {
+                !contact.verified
+                    && contact.username.as_deref() == Some(username)
+                    && Some(contact.account) != except
+            })
+            .map(|contact| contact.account)
+            .collect()
     }
 
     /// Every chat for the chat list, most recently active first.
