@@ -9,6 +9,7 @@ import 'package:zelamar/src/messenger/key_vault.dart';
 import 'package:zelamar/src/messenger/live_messenger.dart';
 import 'package:zelamar/src/messenger/notifier.dart';
 import 'package:zelamar/src/messenger/transport.dart';
+import 'package:zelamar/src/rust/api/lab.dart';
 import 'package:zelamar/src/rust/frb_generated.dart';
 
 /// Pumps frames until [finder] matches, for work that completes off the UI
@@ -103,34 +104,19 @@ void main() {
     await tester.pageBack();
     await tester.pumpAndSettle();
 
-    // Open the lab: two real devices start on real encrypted stores.
-    await tester.tap(find.byKey(const Key('welcome.lab')));
-    final aliceComposer = find.descendant(
-      of: find.byKey(const Key('lab.composer.alice')),
-      matching: find.byType(TextField),
+    // The real core on this device, no service needed: two devices on
+    // real encrypted stores seal a message, open it, and do it again after
+    // reopening their stores.
+    final lab = await CryptoLab.create(
+      directory: [directory.path, 'self-test'].join(Platform.pathSeparator),
     );
-    await pumpUntil(tester, aliceComposer);
-
-    await tester.enterText(aliceComposer, 'Hello, Bob');
-    await tester.tap(find.byKey(const Key('lab.send.alice')));
-    await pumpUntil(tester, find.text('Hello, Bob'));
-    await screenshot(tester, 'lab-alice');
-
-    final tabbed = find.byType(TabBar).evaluate().isNotEmpty;
-    if (tabbed) {
-      await tester.tap(find.byKey(const Key('lab.tab.wire')));
-      await tester.pumpAndSettle();
-    }
-    expect(find.text('Alice → Bob'), findsOneWidget);
-    await screenshot(tester, 'lab-wire');
-
-    if (tabbed) {
-      await tester.tap(find.byKey(const Key('lab.tab.bob')));
-      await tester.pumpAndSettle();
-    }
-    // Bob decrypted Alice's message and authenticated her account.
-    expect(find.text('Sender verified'), findsWidgets);
-    expect(find.text('Hello, Bob'), findsWidgets);
-    await screenshot(tester, 'lab-bob');
+    final sent = await lab.send(from: LabSide.alice, text: 'Hello, Bob');
+    expect(sent.deliveredText, 'Hello, Bob');
+    expect(sent.authorVerified, isTrue, reason: 'Bob authenticated Alice');
+    expect(sent.envelopeBytes, greaterThan(0));
+    await lab.restart();
+    final answer = await lab.send(from: LabSide.bob, text: 'Hi Alice');
+    expect(answer.deliveredText, 'Hi Alice');
+    expect(answer.authorVerified, isTrue);
   });
 }

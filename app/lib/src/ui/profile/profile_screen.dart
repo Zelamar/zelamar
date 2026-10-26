@@ -3,8 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:zelamar/src/design/theme.dart';
 import 'package:zelamar/src/design/tokens.dart';
-import 'package:zelamar/src/lab/crypto_lab_screen.dart';
-import 'package:zelamar/src/lab/lab_engine.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/ui/avatar.dart';
 import 'package:zelamar/src/ui/profile/devices_screen.dart';
@@ -13,10 +11,9 @@ import 'package:zelamar/src/version.dart';
 
 /// "You": the account's name and key, and how Zelamar protects it.
 class ProfileScreen extends StatelessWidget {
-  const new({required this.messenger, required this.startLab, super.key});
+  const new({required this.messenger, super.key});
 
   final Messenger messenger;
-  final LabEngineFactory startLab;
 
   @override
   Widget build(BuildContext context) {
@@ -77,18 +74,6 @@ class ProfileScreen extends StatelessWidget {
                       ),
                     ),
                   SignInSwitch(messenger: messenger),
-                  ListTile(
-                    key: const Key('profile.lab'),
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.shield_outlined, color: colors.accent),
-                    title: const Text('See how your messages are protected'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => CryptoLabScreen(startEngine: startLab),
-                      ),
-                    ),
-                  ),
                   const SizedBox(height: ZSpace.xxl),
                   Text(
                     'Zelamar $appVersion',
@@ -105,7 +90,7 @@ class ProfileScreen extends StatelessWidget {
   }
 }
 
-/// "Open at sign-in", where the platform has it (Windows): Zelamar starts in
+/// "Start with Windows", where the platform has it: Zelamar starts in
 /// the tray, so messages keep arriving after a restart.
 class SignInSwitch extends StatefulWidget {
   const new({required this.messenger, super.key});
@@ -149,7 +134,7 @@ class _SignInSwitchState extends State<SignInSwitch> {
       key: const Key('profile.signIn'),
       contentPadding: EdgeInsets.zero,
       secondary: Icon(Icons.login_rounded, color: context.colors.accent),
-      title: const Text('Open at sign-in'),
+      title: const Text('Start with Windows'),
       value: on,
       onChanged: (value) => unawaited(_set(value)),
     );

@@ -7,7 +7,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zelamar/src/app.dart';
-import 'package:zelamar/src/lab/lab_engine.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/rust/api/session.dart';
 
@@ -21,9 +20,6 @@ import 'support/fake_messenger.dart';
 /// Skipped unless ZELAMAR_TOUR names a directory.
 final String? _out = Platform.environment['ZELAMAR_TOUR'];
 final GlobalKey _shot = GlobalKey();
-
-Future<LabEngine> _noLab() =>
-    Future.error(UnsupportedError('no lab in the tour'));
 
 Future<void> _loadFonts() async {
   Future<void> load(String family, List<String> paths) async {
@@ -64,7 +60,7 @@ Future<FakeMessenger> _pump(
   await tester.pumpWidget(
     RepaintBoundary(
       key: _shot,
-      child: ZelamarApp(messenger: messenger, startLab: _noLab),
+      child: ZelamarApp(messenger: messenger),
     ),
   );
   await tester.pumpAndSettle();

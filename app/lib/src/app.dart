@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:zelamar/src/design/emblem.dart';
 import 'package:zelamar/src/design/theme.dart';
 import 'package:zelamar/src/design/tokens.dart';
-import 'package:zelamar/src/lab/lab_engine.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/ui/chats/chats_screen.dart';
 import 'package:zelamar/src/ui/onboarding/welcome_screen.dart';
@@ -10,17 +9,12 @@ import 'package:zelamar/src/ui/words.dart';
 
 /// Root widget of Zelamar: shows whatever the messenger's phase calls for.
 ///
-/// Receives the messenger and the lab as parameters, so the widget tree
-/// stays testable without the native library.
+/// Receives the messenger as a parameter, so the widget tree stays testable
+/// without the native library.
 class ZelamarApp extends StatelessWidget {
-  const new({
-    required this.messenger,
-    this.startLab = RustLabEngine.start,
-    super.key,
-  });
+  const new({required this.messenger, super.key});
 
   final Messenger messenger;
-  final LabEngineFactory startLab;
 
   @override
   Widget build(BuildContext context) {
@@ -40,12 +34,10 @@ class ZelamarApp extends StatelessWidget {
             MessengerPhase.needsAccount => WelcomeScreen(
               key: const Key('app.welcome'),
               messenger: messenger,
-              startLab: startLab,
             ),
             MessengerPhase.ready => ChatsScreen(
               key: const Key('app.chats'),
               messenger: messenger,
-              startLab: startLab,
             ),
             MessengerPhase.failed => _Failure(
               messenger.failure?.code ?? '',

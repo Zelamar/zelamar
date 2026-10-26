@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:zelamar/src/design/emblem.dart';
 import 'package:zelamar/src/design/theme.dart';
 import 'package:zelamar/src/design/tokens.dart';
-import 'package:zelamar/src/lab/lab_engine.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/rust/api/session.dart';
 import 'package:zelamar/src/ui/avatar.dart';
@@ -14,10 +13,9 @@ import 'package:zelamar/src/ui/words.dart';
 
 /// Every conversation, most recent first.
 class ChatsScreen extends StatelessWidget {
-  const new({required this.messenger, required this.startLab, super.key});
+  const new({required this.messenger, super.key});
 
   final Messenger messenger;
-  final LabEngineFactory startLab;
 
   Future<void> _open(BuildContext context, String chat) =>
       Navigator.of(context).push(
@@ -88,10 +86,7 @@ class ChatsScreen extends StatelessWidget {
                         tooltip: 'You',
                         onPressed: () => Navigator.of(context).push(
                           MaterialPageRoute<void>(
-                            builder: (_) => ProfileScreen(
-                              messenger: messenger,
-                              startLab: startLab,
-                            ),
+                            builder: (_) => ProfileScreen(messenger: messenger),
                           ),
                         ),
                         icon: Icon(
@@ -225,10 +220,10 @@ class _RecoveryReminder extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Save a recovery key', style: text.titleSmall),
+                      Text('Save your recovery key', style: text.titleSmall),
                       const SizedBox(height: ZSpace.xxs),
                       Text(
-                        'Without it, losing this device loses your account.',
+                        'In case you lose this device.',
                         style: text.bodySmall,
                       ),
                     ],
@@ -257,7 +252,10 @@ class LinkDot extends StatelessWidget {
     final (color, label) = switch (link) {
       Link.online => (colors.online, 'Connected'),
       Link.connecting => (colors.accent, 'Connecting…'),
-      Link.offline => (colors.textTertiary, 'Offline: messages will wait'),
+      Link.offline => (
+        colors.textTertiary,
+        'Offline. Messages send when you’re back online.',
+      ),
     };
     return Tooltip(
       message: label,

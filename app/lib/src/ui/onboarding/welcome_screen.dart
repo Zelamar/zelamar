@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:zelamar/src/design/emblem.dart';
 import 'package:zelamar/src/design/theme.dart';
 import 'package:zelamar/src/design/tokens.dart';
-import 'package:zelamar/src/lab/crypto_lab_screen.dart';
-import 'package:zelamar/src/lab/lab_engine.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/ui/onboarding/account_screen.dart';
 import 'package:zelamar/src/ui/onboarding/join_screen.dart';
@@ -11,10 +9,9 @@ import 'package:zelamar/src/ui/onboarding/join_screen.dart';
 /// The first thing anyone sees: the emblem, the name, one promise, and one
 /// way forward.
 class WelcomeScreen extends StatelessWidget {
-  const new({required this.messenger, required this.startLab, super.key});
+  const new({required this.messenger, super.key});
 
   final Messenger messenger;
-  final LabEngineFactory startLab;
 
   @override
   Widget build(BuildContext context) {
@@ -74,17 +71,7 @@ class WelcomeScreen extends StatelessWidget {
                     style: text.bodySmall?.copyWith(color: colors.textTertiary),
                     textAlign: TextAlign.center,
                   ),
-                  const SizedBox(height: ZSpace.lg),
-                  TextButton(
-                    key: const Key('welcome.lab'),
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => CryptoLabScreen(startEngine: startLab),
-                      ),
-                    ),
-                    child: const Text('See how your messages are protected'),
-                  ),
-                  const SizedBox(height: ZSpace.md),
+                  const SizedBox(height: ZSpace.xl),
                 ],
               ),
             ),
