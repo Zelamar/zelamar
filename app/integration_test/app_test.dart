@@ -76,7 +76,7 @@ void main() {
     expect(await entry(), isNot(contains('--tray')));
   }, skip: !Platform.isWindows);
 
-  testWidgets('welcome, onboarding, then an encrypted exchange in the lab', (
+  testWidgets('welcome, onboarding, and the core checking itself here', (
     tester,
   ) async {
     if (Platform.isAndroid) await binding.convertFlutterSurfaceToImage();
@@ -107,9 +107,18 @@ void main() {
     // The real core on this device, no service needed: two devices on
     // real encrypted stores seal a message, open it, and do it again after
     // reopening their stores.
-    final lab = await CryptoLab.create(
-      directory: [directory.path, 'self-test'].join(Platform.pathSeparator),
-    );
+    // Its stores live apart from the messenger's: they stay open until the
+    // check is disposed, and Windows deletes no open file.
+    final stores = await Directory.systemTemp.createTemp('zelamar-self-test-');
+    final lab = await CryptoLab.create(directory: stores.path);
+    addTearDown(() async {
+      lab.dispose();
+      try {
+        await stores.delete(recursive: true);
+      } on FileSystemException {
+        // The temporary directory is cleaned anyway.
+      }
+    });
     final sent = await lab.send(from: LabSide.alice, text: 'Hello, Bob');
     expect(sent.deliveredText, 'Hello, Bob');
     expect(sent.authorVerified, isTrue, reason: 'Bob authenticated Alice');
