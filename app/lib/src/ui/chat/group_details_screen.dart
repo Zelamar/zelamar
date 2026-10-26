@@ -220,6 +220,7 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen> {
                       const ListTile(
                         contentPadding: EdgeInsets.zero,
                         title: Text('You'),
+                        leading: SizedBox.square(dimension: 36),
                       ),
                       if (members == null)
                         const Center(child: CircularProgressIndicator())
@@ -229,9 +230,6 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen> {
                             contentPadding: EdgeInsets.zero,
                             leading: Avatar(member.title, size: 36),
                             title: Text(member.title),
-                            subtitle: member.verified
-                                ? null
-                                : const Text('Name not yet confirmed'),
                           ),
                       const SizedBox(height: ZSpace.lg),
                       OutlinedButton.icon(

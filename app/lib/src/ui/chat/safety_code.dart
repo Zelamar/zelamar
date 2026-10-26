@@ -25,8 +25,7 @@ Future<void> showSafetyCode(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Compare these numbers with $title in person or on a call. '
-                'If they match, no one is between you.',
+                'If $title sees the same numbers, no one is between you.',
                 style: text.bodyMedium,
               ),
               const SizedBox(height: ZSpace.xl),

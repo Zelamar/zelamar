@@ -79,10 +79,8 @@ class _ImageAttachmentState extends State<ImageAttachment> {
             ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(ZRadius.field),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: min(MediaQuery.sizeOf(context).width * 0.66, 360),
-          ),
+        child: SizedBox(
+          width: min(MediaQuery.sizeOf(context).width * 0.66, 360),
           child: AspectRatio(
             aspectRatio: ratio,
             child: Stack(

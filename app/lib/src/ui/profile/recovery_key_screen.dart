@@ -110,9 +110,7 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
                       ),
                       const SizedBox(height: ZSpace.sm),
                       Text(
-                        'If you lose this device, your recovery key brings '
-                        'your account back on a new one: your name, your '
-                        'contacts and your chats.',
+                        'Brings your account back if you lose this device.',
                         style: text.bodyMedium,
                       ),
                       const SizedBox(height: ZSpace.xl),
@@ -144,8 +142,6 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
   }
 
   List<Widget> _none(BuildContext context) => [
-    const _Warning(),
-    const SizedBox(height: ZSpace.xl),
     FilledButton(
       key: const Key('recovery.create'),
       onPressed: _busy ? null : _create,
@@ -167,19 +163,26 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
         ),
         child: Column(
           children: [
-            Wrap(
+            // One line on any screen: the key reads as one thing.
+            FittedBox(
               key: const Key('recovery.key'),
-              alignment: WrapAlignment.center,
-              spacing: ZSpace.md,
-              runSpacing: ZSpace.sm,
-              children: [
-                for (final group in key.split('-'))
-                  Text(
-                    _shown ? group : '•' * group.length,
-                    style: zelamarMono(size: 20)
-                        .copyWith(color: colors.textPrimary),
-                  ),
-              ],
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final (index, group) in key.split('-').indexed)
+                    Padding(
+                      padding: EdgeInsets.only(
+                        left: index == 0 ? 0 : ZSpace.md,
+                      ),
+                      child: Text(
+                        _shown ? group : '•' * group.length,
+                        style: zelamarMono(size: 20)
+                            .copyWith(color: colors.textPrimary),
+                      ),
+                    ),
+                ],
+              ),
             ),
             const SizedBox(height: ZSpace.lg),
             Row(
@@ -222,9 +225,7 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
           const SizedBox(width: ZSpace.sm),
           Expanded(
             child: Text(
-              saved
-                  ? 'Your account is sealed with this key. Only it opens it.'
-                  : 'Not sealed yet: Zelamar does it as soon as it is online.',
+              saved ? 'Saved. Only this key opens it.' : 'Saving when online…',
               key: const Key('recovery.status'),
               style: text.bodySmall,
             ),
@@ -232,7 +233,12 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
         ],
       ),
       const SizedBox(height: ZSpace.xl),
-      const _Warning(),
+      Text(
+        'Anyone with this key can take your account. Write it down and keep '
+        'it offline.',
+        key: const Key('recovery.warning'),
+        style: text.bodyMedium?.copyWith(color: colors.textPrimary),
+      ),
       const SizedBox(height: ZSpace.lg),
       TextButton(
         key: const Key('recovery.replace'),
@@ -240,46 +246,5 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
         child: Text(_busy ? 'Creating…' : 'Replace key'),
       ),
     ];
-  }
-}
-
-/// What a recovery key is worth, said plainly.
-class _Warning extends StatelessWidget {
-  const new();
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final text = context.text;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (final line in const [
-          'Write it down and keep it somewhere safe, offline.',
-          'Anyone who has it can take your account.',
-          'Zelamar never sees it and can’t restore it for you.',
-        ])
-          Padding(
-            padding: const EdgeInsets.only(bottom: ZSpace.sm),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(top: 7, right: ZSpace.md),
-                  child: Container(
-                    width: 5,
-                    height: 5,
-                    decoration: BoxDecoration(
-                      color: colors.accent,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ),
-                Expanded(child: Text(line, style: text.bodyMedium)),
-              ],
-            ),
-          ),
-      ],
-    );
   }
 }

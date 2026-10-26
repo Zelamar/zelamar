@@ -387,13 +387,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         final title = preview?.title ?? 'Chat';
         final request = preview?.request ?? false;
         final group = preview?.group ?? false;
-        final subtitle = preview != null && !preview.verified
-            ? 'Name not yet confirmed by Zelamar'
-            : switch (widget.messenger.link) {
-                Link.online => 'End-to-end encrypted',
-                Link.connecting => 'Connecting…',
-                Link.offline => 'Offline: messages will wait',
-              };
+        // Said only when it matters: messages wait until it is back.
+        final subtitle = widget.messenger.link == Link.online
+            ? null
+            : 'Connecting…';
         return Scaffold(
           appBar: AppBar(
             backgroundColor: colors.surfaceRaised,
@@ -441,12 +438,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                         style: text.titleMedium,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      Text(
-                        subtitle,
-                        style: text.labelSmall?.copyWith(
-                          color: colors.textTertiary,
+                      if (subtitle != null)
+                        Text(
+                          subtitle,
+                          style: text.labelSmall?.copyWith(
+                            color: colors.textTertiary,
+                          ),
                         ),
-                      ),
                     ],
                   ),
                 ),
@@ -491,6 +489,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                           sameDay(a.sentAtMs, b.sentAtMs);
                       final event = message.event;
                       return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           if (startsDay) DayLabel(dayLabel(message.sentAtMs)),
                           if (event != null)
@@ -519,37 +518,40 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   ),
                 ),
               ),
+              // A request is answered first; the composer comes with
+              // accepting.
               if (request)
                 RequestBar(
                   title: title,
                   onAccept: _accept,
                   onDecline: () => _delete(title, request: true),
+                )
+              else
+                Composer(
+                  controller: _input,
+                  onSend: _send,
+                  onCancel: _cancelMode,
+                  onAttach: _attaching ? null : _attach,
+                  attaching: _attaching,
+                  onVoice: _sendFile,
+                  banner: switch ((_editing, _replying)) {
+                    (final editing?, _) => ComposerBanner(
+                      icon: Icons.edit_outlined,
+                      label: 'Editing',
+                      text: editing.text,
+                      onClose: _cancelMode,
+                    ),
+                    (_, final replying?) => ComposerBanner(
+                      icon: Icons.reply_rounded,
+                      label: replying.outgoing
+                          ? 'Replying to yourself'
+                          : 'Replying to $title',
+                      text: replying.text,
+                      onClose: _cancelMode,
+                    ),
+                    _ => null,
+                  },
                 ),
-              Composer(
-                controller: _input,
-                onSend: _send,
-                onCancel: _cancelMode,
-                onAttach: _attaching ? null : _attach,
-                attaching: _attaching,
-                onVoice: _sendFile,
-                banner: switch ((_editing, _replying)) {
-                  (final editing?, _) => ComposerBanner(
-                    icon: Icons.edit_outlined,
-                    label: 'Editing',
-                    text: editing.text,
-                    onClose: _cancelMode,
-                  ),
-                  (_, final replying?) => ComposerBanner(
-                    icon: Icons.reply_rounded,
-                    label: replying.outgoing
-                        ? 'Replying to yourself'
-                        : 'Replying to $title',
-                    text: replying.text,
-                    onClose: _cancelMode,
-                  ),
-                  _ => null,
-                },
-              ),
             ],
           ),
         );
@@ -592,11 +594,6 @@ class RequestBar extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('$title wants to chat with you.', style: text.titleSmall),
-          const SizedBox(height: ZSpace.xs),
-          Text(
-            'They won’t know you’ve seen this until you reply or accept.',
-            style: text.bodySmall,
-          ),
           const SizedBox(height: ZSpace.md),
           Row(
             children: [
@@ -637,11 +634,13 @@ class DayLabel extends StatelessWidget {
     final colors = context.colors;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: ZSpace.lg),
-      child: Text(
-        label,
-        style: context.text.labelSmall?.copyWith(
-          color: colors.textTertiary,
-          letterSpacing: 0.4,
+      child: Center(
+        child: Text(
+          label,
+          style: context.text.labelSmall?.copyWith(
+            color: colors.textTertiary,
+            letterSpacing: 0.4,
+          ),
         ),
       ),
     );
@@ -665,7 +664,7 @@ class EventLine extends StatelessWidget {
           label,
           key: const Key('chat.event'),
           textAlign: TextAlign.center,
-          style: context.text.labelMedium?.copyWith(
+          style: context.text.bodySmall?.copyWith(
             color: context.colors.textTertiary,
           ),
         ),
@@ -744,90 +743,92 @@ class MessageBubble extends StatelessWidget {
               bottomRight: outgoing ? tail : round,
             ),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (author != null)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  widthFactor: 1,
-                  child: Padding(
+          child: IntrinsicWidth(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (author != null)
+                  Padding(
                     padding: const EdgeInsets.only(bottom: 2),
                     child: Text(
                       author!,
                       key: const Key('chat.author'),
-                      style: text.labelMedium?.copyWith(color: colors.accent),
+                      style: text.bodySmall?.copyWith(
+                        color: colors.accent,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
-                ),
-              if (quote != null && !message.deleted)
-                QuoteBox(quote, author: quote.outgoing ? 'You' : peer),
-              if (message.file case final file? when !message.deleted)
-                Padding(
-                  padding: EdgeInsets.only(
-                    bottom: message.text.isEmpty ? ZSpace.xxs : ZSpace.xs,
-                  ),
-                  child: switch (file) {
-                    _ when loadFile == null => FileAttachment(
-                      file: file,
-                      load: () async => Uint8List(0),
-                      outgoing: outgoing,
+                if (quote != null && !message.deleted)
+                  QuoteBox(quote, author: quote.outgoing ? 'You' : peer),
+                if (message.file case final file? when !message.deleted)
+                  Padding(
+                    padding: EdgeInsets.only(
+                      bottom: message.text.isEmpty ? ZSpace.xxs : ZSpace.xs,
                     ),
-                    _ when file.mime.startsWith('image/') => ImageAttachment(
-                      file: file,
-                      load: loadFile!,
-                    ),
-                    _
-                        when file.mime.startsWith('audio/') &&
-                            file.durationMs != null =>
-                      VoiceAttachment(
+                    child: switch (file) {
+                      _ when loadFile == null => FileAttachment(
+                        file: file,
+                        load: () async => Uint8List(0),
+                        outgoing: outgoing,
+                      ),
+                      _ when file.mime.startsWith('image/') => ImageAttachment(
+                        file: file,
+                        load: loadFile!,
+                      ),
+                      _
+                          when file.mime.startsWith('audio/') &&
+                              file.durationMs != null =>
+                        VoiceAttachment(
+                          file: file,
+                          load: loadFile!,
+                          outgoing: outgoing,
+                        ),
+                      _ => FileAttachment(
                         file: file,
                         load: loadFile!,
                         outgoing: outgoing,
                       ),
-                    _ => FileAttachment(
-                      file: file,
-                      load: loadFile!,
-                      outgoing: outgoing,
-                    ),
-                  },
-                ),
-              Align(
-                alignment: Alignment.centerLeft,
-                widthFactor: 1,
-                child: Text(
-                  body,
-                  style: text.bodyLarge?.copyWith(
-                    color: quiet
-                        ? meta
-                        : outgoing
-                        ? colors.onBubbleOutgoing
-                        : colors.textPrimary,
-                    fontStyle: quiet ? FontStyle.italic : null,
+                    },
                   ),
-                ),
-              ),
-              const SizedBox(height: ZSpace.xxs),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (message.edited)
-                    Text(
-                      'edited · ',
-                      style: text.labelSmall?.copyWith(color: meta),
-                    ),
+                // A file or voice message without words has no empty line.
+                if (body.isNotEmpty || message.file == null)
                   Text(
-                    clockTime(message.sentAtMs),
-                    style: text.labelSmall?.copyWith(color: meta),
+                    body,
+                    style: text.bodyLarge?.copyWith(
+                      color: quiet
+                          ? meta
+                          : outgoing
+                          ? colors.onBubbleOutgoing
+                          : colors.textPrimary,
+                      fontStyle: quiet ? FontStyle.italic : null,
+                    ),
                   ),
-                  if (outgoing) ...[
-                    const SizedBox(width: ZSpace.xs),
-                    StatusIcon(message.status, color: meta),
-                  ],
-                ],
-              ),
-            ],
+                const SizedBox(height: ZSpace.xxs),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (message.edited)
+                        Text(
+                          'edited · ',
+                          style: text.labelSmall?.copyWith(color: meta),
+                        ),
+                      Text(
+                        clockTime(message.sentAtMs),
+                        style: text.labelSmall?.copyWith(color: meta),
+                      ),
+                      if (outgoing) ...[
+                        const SizedBox(width: ZSpace.xs),
+                        StatusIcon(message.status, color: meta),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

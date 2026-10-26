@@ -100,8 +100,7 @@ class _JoinScreenState extends State<JoinScreen> {
                   ),
                   const SizedBox(height: ZSpace.sm),
                   Text(
-                    'On the device where you use Zelamar, open You, then '
-                    'Link a device. Type the code it shows.',
+                    'On your other device: You → Devices → Link a device.',
                     style: text.bodyMedium,
                   ),
                   const SizedBox(height: ZSpace.xxl),
@@ -168,8 +167,7 @@ class _JoinScreenState extends State<JoinScreen> {
         ),
         const SizedBox(height: ZSpace.lg),
         Text(
-          'This device gets its own keys. Messages from before today stay '
-          'on your other device.',
+          'Earlier messages stay on your other device.',
           style: text.bodySmall?.copyWith(color: colors.textTertiary),
           textAlign: TextAlign.center,
         ),

@@ -153,7 +153,8 @@ class _DevicesScreenState extends State<DevicesScreen> {
         surfaceTintColor: Colors.transparent,
       ),
       body: SafeArea(
-        child: Center(
+        child: Align(
+          alignment: Alignment.topCenter,
           child: SingleChildScrollView(
             padding: const EdgeInsets.symmetric(horizontal: ZSpace.gutter),
             child: ConstrainedBox(
@@ -165,12 +166,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                     'Devices',
                     style: text.displayMedium?.copyWith(fontSize: 36),
                   ),
-                  const SizedBox(height: ZSpace.sm),
-                  Text(
-                    'Each device has its own keys and sees new messages in '
-                    'all your chats.',
-                    style: text.bodyMedium,
-                  ),
+
                   if (widget.recovered) ...[
                     const SizedBox(height: ZSpace.xl),
                     Container(

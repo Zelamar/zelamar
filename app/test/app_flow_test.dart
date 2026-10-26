@@ -68,7 +68,7 @@ void main() {
       expect(messenger.username, 'ada_92');
       expect(find.text('Chats'), findsOneWidget);
       expect(find.text('@ada_92'), findsOneWidget);
-      expect(find.text('Your conversations live here.'), findsOneWidget);
+      expect(find.text('No conversations yet'), findsOneWidget);
     });
 
     testWidgets('a new device joins with the code its other device shows', (
@@ -198,7 +198,9 @@ void main() {
     FakeMessenger ready() =>
         FakeMessenger(phaseValue: MessengerPhase.ready, usernameValue: 'ada');
 
-    testWidgets('list names, previews and unconfirmed names', (tester) async {
+    testWidgets('list names and previews, with no word on checking names', (
+      tester,
+    ) async {
       final messenger = ready()
         ..addChat(
           'c1',
@@ -218,7 +220,9 @@ void main() {
       expect(find.text('You: See you at eight'), findsOneWidget);
       expect(find.text('@carol'), findsOneWidget);
       expect(find.text('Hi Ada'), findsOneWidget);
-      expect(find.text('unconfirmed'), findsOneWidget);
+      // A name being checked looks like any other: one the directory
+      // refutes is never shown (the core drops it).
+      expect(find.textContaining('confirm'), findsNothing);
       expect(find.byKey(const Key('chats.unread')), findsOneWidget);
       expect(find.text('3'), findsOneWidget);
 
@@ -581,7 +585,9 @@ void main() {
       await tester.tap(find.byKey(const Key('chats.profile')));
       await tester.pumpAndSettle();
       expect(find.text('@ada'), findsWidgets);
-      expect(find.byKey(const Key('profile.fingerprint')), findsOneWidget);
+      // The account key's fingerprint means nothing to people; each chat
+      // has its safety code instead.
+      expect(find.byKey(const Key('profile.fingerprint')), findsNothing);
       expect(find.textContaining('Zelamar 0.'), findsOneWidget);
     });
 
@@ -692,7 +698,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Recovery key'), findsOneWidget);
       expect(
-        find.text('Anyone who has it can take your account.'),
+        find.text('Brings your account back if you lose this device.'),
         findsOneWidget,
       );
 
@@ -704,13 +710,17 @@ void main() {
       }
       expect(
         tester.widget<Text>(find.byKey(const Key('recovery.status'))).data,
-        contains('sealed with this key'),
+        contains('Saved'),
       );
       await tester.tap(find.byKey(const Key('recovery.copy')));
       await tester.pumpAndSettle();
       expect(copied, 'abcde-fghij-klmno-pqrst-uvw2x');
       expect(ordinary, isFalse);
       expect(find.text('Copied'), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(const Key('recovery.warning'))).data,
+        contains('Anyone with this key can take your account'),
+      );
       await tester.tap(find.byKey(const Key('recovery.show')));
       await tester.pumpAndSettle();
       expect(find.text('abcde'), findsNothing);
@@ -722,7 +732,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         tester.widget<Text>(find.byKey(const Key('recovery.status'))).data,
-        contains('Not sealed yet'),
+        contains('Saving when online'),
       );
 
       await tester.tap(find.byKey(const Key('recovery.replace')));
@@ -738,10 +748,8 @@ void main() {
       expect(find.byKey(const Key('chats.recovery')), findsNothing);
       await tester.tap(find.byKey(const Key('chats.profile')));
       await tester.pumpAndSettle();
-      expect(
-        find.text('Brings your account back if you lose this device'),
-        findsOneWidget,
-      );
+      expect(find.byKey(const Key('profile.recovery')), findsOneWidget);
+      expect(find.text('Not set up'), findsNothing, reason: 'there is one');
     });
 
     testWidgets('a lost device is removed after a confirmation', (
@@ -784,10 +792,6 @@ void main() {
       expect(find.byKey(const Key('chats.recovery')), findsNothing);
       await tester.tap(find.byKey(const Key('chats.profile')));
       await tester.pumpAndSettle();
-      expect(
-        tester.widget<Text>(find.byKey(const Key('profile.keyNote'))).data,
-        contains('this one is linked'),
-      );
       expect(find.byKey(const Key('profile.recovery')), findsNothing);
       await tester.tap(find.byKey(const Key('profile.devices')));
       await tester.pumpAndSettle();

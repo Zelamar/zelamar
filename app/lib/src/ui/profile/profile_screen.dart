@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:zelamar/src/design/theme.dart';
 import 'package:zelamar/src/design/tokens.dart';
-import 'package:zelamar/src/design/typography.dart';
 import 'package:zelamar/src/lab/crypto_lab_screen.dart';
 import 'package:zelamar/src/lab/lab_engine.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
@@ -45,56 +44,11 @@ class ProfileScreen extends StatelessWidget {
                     style: text.headlineSmall,
                   ),
                   const SizedBox(height: ZSpace.xxl),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(ZSpace.lg),
-                    decoration: BoxDecoration(
-                      color: colors.surface,
-                      borderRadius: BorderRadius.circular(ZRadius.field),
-                      border: Border.all(color: colors.hairline),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'YOUR KEY',
-                          style: text.labelMedium?.copyWith(
-                            color: colors.textTertiary,
-                          ),
-                        ),
-                        const SizedBox(height: ZSpace.sm),
-                        SelectableText(
-                          messenger.fingerprint ?? '',
-                          key: const Key('profile.fingerprint'),
-                          style: zelamarMono(size: 14)
-                              .copyWith(color: colors.textPrimary),
-                        ),
-                        const SizedBox(height: ZSpace.sm),
-                        Text(
-                          messenger.canLinkDevices
-                              ? 'Kept on this device; only your recovery key '
-                                    'can bring it to another. Your safety '
-                                    'code with each person comes from it.'
-                              : 'It stays on your account’s first device; '
-                                    'this one is linked to it. Your safety '
-                                    'code with each person comes from it.',
-                          key: const Key('profile.keyNote'),
-                          style: text.bodySmall,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: ZSpace.lg),
                   ListTile(
                     key: const Key('profile.devices'),
                     contentPadding: EdgeInsets.zero,
                     leading: Icon(Icons.devices_outlined, color: colors.accent),
                     title: const Text('Devices'),
-                    subtitle: Text(
-                      messenger.canLinkDevices
-                          ? 'Use Zelamar on a phone and a computer'
-                          : 'Linked to your account',
-                    ),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(
@@ -108,13 +62,12 @@ class ProfileScreen extends StatelessWidget {
                       contentPadding: EdgeInsets.zero,
                       leading: Icon(Icons.key_outlined, color: colors.accent),
                       title: const Text('Recovery key'),
-                      subtitle: Text(
-                        messenger.recoveryKey == null
-                            ? 'Not set up: losing this device loses your '
-                                  'account'
-                            : 'Brings your account back if you lose this '
-                                  'device',
-                      ),
+                      subtitle: messenger.recoveryKey == null
+                          ? Text(
+                              'Not set up',
+                              style: TextStyle(color: colors.danger),
+                            )
+                          : null,
                       trailing: const Icon(Icons.chevron_right),
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute<void>(
@@ -197,10 +150,6 @@ class _SignInSwitchState extends State<SignInSwitch> {
       contentPadding: EdgeInsets.zero,
       secondary: Icon(Icons.login_rounded, color: context.colors.accent),
       title: const Text('Open at sign-in'),
-      subtitle: const Text(
-        'Start in the tray when you sign in to Windows, so messages keep '
-        'arriving.',
-      ),
       value: on,
       onChanged: (value) => unawaited(_set(value)),
     );

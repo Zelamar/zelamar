@@ -89,6 +89,17 @@ ThemeData zelamarTheme(Brightness brightness) {
       indicatorColor: c.accent,
       dividerColor: c.divider,
     ),
+    popupMenuTheme: PopupMenuThemeData(
+      color: c.surfaceRaised,
+      surfaceTintColor: Colors.transparent,
+      elevation: 6,
+      shadowColor: Colors.black.withValues(alpha: 0.2),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(ZRadius.field),
+        side: BorderSide(color: c.hairline),
+      ),
+      textStyle: text.bodyLarge,
+    ),
     snackBarTheme: SnackBarThemeData(
       backgroundColor: c.textPrimary,
       contentTextStyle: text.bodyMedium?.copyWith(color: c.background),

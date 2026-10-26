@@ -153,12 +153,6 @@ class _NewChatSheetState extends State<NewChatSheet> {
           ),
           const SizedBox(height: ZSpace.xl),
           Text(_group ? 'New group' : 'New chat', style: text.headlineSmall),
-          const SizedBox(height: ZSpace.sm),
-          Text(
-            'Enter their exact name. Zelamar has no public search, so no one '
-            'can browse who’s here.',
-            style: text.bodyMedium,
-          ),
           const SizedBox(height: ZSpace.xl),
           if (_group) ...[
             TextField(

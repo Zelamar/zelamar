@@ -69,7 +69,9 @@ class ChatsScreen extends StatelessWidget {
                                     LinkDot(messenger.link),
                                     const SizedBox(width: ZSpace.sm),
                                     Text(
-                                      '@$name',
+                                      messenger.link == Link.online
+                                          ? '@$name'
+                                          : '@$name · Connecting…',
                                       key: const Key('chats.username'),
                                       style: text.bodySmall?.copyWith(
                                         color: colors.textTertiary,
@@ -300,7 +302,7 @@ class ChatTile extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      Flexible(
+                      Expanded(
                         child: Text(
                           chat.title,
                           style: text.titleMedium,
@@ -308,16 +310,6 @@ class ChatTile extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      if (!chat.verified) ...[
-                        const SizedBox(width: ZSpace.sm),
-                        Text(
-                          'unconfirmed',
-                          style: text.labelSmall?.copyWith(
-                            color: colors.textTertiary,
-                          ),
-                        ),
-                      ],
-                      const Spacer(),
                       if (last != null)
                         Text(
                           listTime(last.sentAtMs),
@@ -416,7 +408,6 @@ class _EmptyChats extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.colors;
     final text = context.text;
     return Center(
       child: Padding(
@@ -426,13 +417,7 @@ class _EmptyChats extends StatelessWidget {
           children: [
             const SunsetZEmblem(size: 72),
             const SizedBox(height: ZSpace.xl),
-            Text('Your conversations live here.', style: text.titleMedium),
-            const SizedBox(height: ZSpace.sm),
-            Text(
-              'Only you and the people you write to can read them.',
-              style: text.bodyMedium?.copyWith(color: colors.textSecondary),
-              textAlign: TextAlign.center,
-            ),
+            Text('No conversations yet', style: text.titleMedium),
             const SizedBox(height: ZSpace.xl),
             OutlinedButton(
               key: const Key('chats.start'),

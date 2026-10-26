@@ -137,8 +137,7 @@ class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            'On your new device, open Zelamar, choose “I already use '
-            'Zelamar” and type this code:',
+            'On your new device: I already use Zelamar → this code.',
             style: text.bodyMedium,
           ),
           const SizedBox(height: ZSpace.lg),
@@ -153,13 +152,6 @@ class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
           ),
           const SizedBox(height: ZSpace.xl),
           const _Busy('Waiting for your new device…'),
-          const SizedBox(height: ZSpace.lg),
-          Text(
-            'The code works once, for 10 minutes. Only someone you show it '
-            'to can use it.',
-            style: text.bodySmall,
-            textAlign: TextAlign.center,
-          ),
         ],
       ),
       _Step.asking || _Step.approving => Column(

@@ -86,12 +86,6 @@ class _AccountScreenState extends State<AccountScreen> {
                     'Choose your name',
                     style: text.displayMedium?.copyWith(fontSize: 36),
                   ),
-                  const SizedBox(height: ZSpace.sm),
-                  Text(
-                    'People find you by this name. It’s yours alone, and '
-                    'it’s all Zelamar needs.',
-                    style: text.bodyMedium,
-                  ),
                   const SizedBox(height: ZSpace.xxl),
                   TextField(
                     key: const Key('account.username'),
@@ -116,22 +110,22 @@ class _AccountScreenState extends State<AccountScreen> {
                     style: text.bodyLarge,
                     onChanged: (_) => setState(() => _error = null),
                   ),
-                  const SizedBox(height: ZSpace.sm),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: ZSpace.lg),
-                    child: Text(
-                      typed && !valid
-                          ? describeFailure('invalid_username')
-                          : 'Letters, digits and underscores.',
-                      key: const Key('account.rule'),
-                      style: text.bodySmall?.copyWith(
-                        color: typed && !valid
-                            ? colors.danger
-                            : colors.textTertiary,
+                  // Said only when the name breaks a rule.
+                  if (typed && !valid)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        ZSpace.lg,
+                        ZSpace.sm,
+                        ZSpace.lg,
+                        0,
+                      ),
+                      child: Text(
+                        describeFailure('invalid_username'),
+                        key: const Key('account.rule'),
+                        style: text.bodySmall?.copyWith(color: colors.danger),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: ZSpace.lg),
+                  const SizedBox(height: ZSpace.md),
                   TextField(
                     key: const Key('account.invite'),
                     controller: _invite,
@@ -183,12 +177,6 @@ class _AccountScreenState extends State<AccountScreen> {
                             ],
                           )
                         : const Text('Continue'),
-                  ),
-                  const SizedBox(height: ZSpace.lg),
-                  Text(
-                    'Your keys are created on this device and never leave it.',
-                    style: text.bodySmall?.copyWith(color: colors.textTertiary),
-                    textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: ZSpace.xl),
                 ],

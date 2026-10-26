@@ -117,13 +117,6 @@ class _UnlinkedState extends State<_Unlinked> {
                   style: text.titleMedium,
                   textAlign: TextAlign.center,
                 ),
-                const SizedBox(height: ZSpace.sm),
-                Text(
-                  'It gets no new messages. Erase it to remove your chats '
-                  'from it too.',
-                  style: text.bodyMedium,
-                  textAlign: TextAlign.center,
-                ),
                 const SizedBox(height: ZSpace.xl),
                 FilledButton(
                   key: const Key('unlinked.erase'),
