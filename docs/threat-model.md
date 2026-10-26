@@ -70,6 +70,11 @@ message from a file chunk except by size.
   request: until the user accepts, the stranger learns nothing, not even
   that a message arrived (`content.md`). Lookups and claims are
   rate-limited; usernames cost an invite and a proof of work.
+- **Someone claiming another's name** gets nowhere. A name a chat claims
+  is checked with the directory as soon as it arrives. If the directory
+  says the name belongs to another account, or to no one, the claim is
+  dropped. That account is never shown by that name again, not even with
+  a warning.
 - **A contact** sees what is sent in the chat, of course. Their device
   verifies our device certificates, and safety codes let two people check
   that no one sits between them. One limit: a contact's new device, linked
