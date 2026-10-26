@@ -65,9 +65,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
     final name = _name(device);
     final sure = await _confirm(
       title: 'Remove “$name”?',
-      body:
-          'It leaves all your chats and gets no new messages. Do this if it '
-          'is lost or no longer yours.',
+      body: 'It will stop getting your messages.',
       action: 'Remove',
     );
     if (sure) {
@@ -80,11 +78,9 @@ class _DevicesScreenState extends State<DevicesScreen> {
 
   Future<void> _unlink() async {
     final sure = await _confirm(
-      title: 'Unlink this device?',
-      body:
-          'Your chats and messages are erased from it. Your other device '
-          'keeps everything.',
-      action: 'Unlink',
+      title: 'Remove this device?',
+      body: 'Your chats will be erased from it. Your other device keeps them.',
+      action: 'Remove',
     );
     if (sure) {
       await _run(() async {
@@ -139,7 +135,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
   }
 
   static String _name(DeviceView device) =>
-      device.label ?? (device.thisDevice ? 'This device' : 'Linked device');
+      device.label ?? (device.thisDevice ? 'This device' : 'Other device');
 
   @override
   Widget build(BuildContext context) {
@@ -183,9 +179,8 @@ class _DevicesScreenState extends State<DevicesScreen> {
                           Text('Welcome back', style: text.titleMedium),
                           const SizedBox(height: ZSpace.xs),
                           Text(
-                            'Remove the devices you no longer have. Until '
-                            'then they still get your messages, and your '
-                            'chats can’t come back here.',
+                            'Remove the device you lost, so it stops getting '
+                            'your messages.',
                             style: text.bodyMedium,
                           ),
                         ],
@@ -235,7 +230,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                     FilledButton(
                       key: const Key('devices.link'),
                       onPressed: _busy ? null : _link,
-                      child: const Text('Link a device'),
+                      child: const Text('Add a device'),
                     )
                   else
                     OutlinedButton(
@@ -244,7 +239,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                       style: OutlinedButton.styleFrom(
                         foregroundColor: colors.danger,
                       ),
-                      child: const Text('Unlink this device'),
+                      child: const Text('Remove this device'),
                     ),
                   const SizedBox(height: ZSpace.xl),
                 ],

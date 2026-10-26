@@ -10,17 +10,18 @@ String describeFailure(String code) => switch (code) {
   'username_taken' => 'That name is taken. Try another one.',
   'reserved' => 'That name is reserved. Try another one.',
   'invalid_invite' => 'This invite code isn’t valid, or it was already used.',
-  'invalid_username' || 'malformed' =>
-    'Use 3–32 letters, digits or single underscores, starting with a letter.',
+  'invalid_username' ||
+  'malformed' => 'Use 3–32 letters, numbers or _, starting with a letter.',
   'unknown_account' => 'No one on Zelamar goes by that name.',
   'rate_limited' => 'Too many attempts. Wait a minute, then try again.',
-  'offline' => 'Can’t reach Zelamar. Check your connection.',
+  'offline' => 'No internet connection.',
   'insufficient_work' ||
   'stale_request' => 'Your device’s clock looks off. Check the date and time.',
   'unauthenticated' =>
-    'Zelamar couldn’t verify that account’s keys, so it stopped here.',
-  'key_missing' || 'wrong_key' =>
-    'This device’s secure key is missing, so its data can’t be opened.',
+    'Something isn’t right with this account, so Zelamar stopped to keep '
+        'you safe.',
+  'key_missing' ||
+  'wrong_key' => 'Zelamar can’t open your chats on this device.',
   'bad_link_code' =>
     'That code doesn’t look right. It has 20 letters and digits.',
   'link_taken' =>
@@ -28,7 +29,8 @@ String describeFailure(String code) => switch (code) {
         'device.',
   'unknown_link' =>
     'This code has expired. Make a new one on your other device.',
-  'too_many_devices' => 'This account already has 5 devices.',
+  'too_many_devices' =>
+    'You already use Zelamar on 5 devices. Remove one first.',
   'bad_recovery_key' =>
     'That key doesn’t look right. It has 25 letters and digits.',
   'wrong_recovery_key' =>

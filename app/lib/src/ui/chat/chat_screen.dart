@@ -407,13 +407,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                     PopupMenuItem<void>(
                       key: const Key('chat.details'),
                       onTap: () => unawaited(_details()),
-                      child: const Text('Group details'),
+                      child: const Text('Group info'),
                     )
                   else
                     PopupMenuItem<void>(
                       key: const Key('chat.safety'),
                       onTap: () => unawaited(_safetyCode(title)),
-                      child: const Text('Safety code'),
+                      child: Text('Verify $title'),
                     ),
                   if (request || !group)
                     PopupMenuItem<void>(

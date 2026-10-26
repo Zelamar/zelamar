@@ -225,7 +225,7 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
           const SizedBox(width: ZSpace.sm),
           Expanded(
             child: Text(
-              saved ? 'Saved. Only this key opens it.' : 'Saving when online…',
+              saved ? 'Saved' : 'Will save when you’re online',
               key: const Key('recovery.status'),
               style: text.bodySmall,
             ),
@@ -234,8 +234,8 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
       ),
       const SizedBox(height: ZSpace.xl),
       Text(
-        'Anyone with this key can take your account. Write it down and keep '
-        'it offline.',
+        'Write it down and keep it safe. Anyone who has it can get into your '
+        'account.',
         key: const Key('recovery.warning'),
         style: text.bodyMedium?.copyWith(color: colors.textPrimary),
       ),

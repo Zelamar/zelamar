@@ -3,15 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zelamar/src/app.dart';
-import 'package:zelamar/src/lab/lab_engine.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/rust/api/session.dart';
 import 'package:zelamar/src/ui/words.dart';
 
 import 'support/fake_messenger.dart';
-
-Future<LabEngine> _noLab() =>
-    Future.error(UnsupportedError('no lab in these tests'));
 
 Future<FakeMessenger> pumpApp(
   WidgetTester tester, {
@@ -22,7 +18,7 @@ Future<FakeMessenger> pumpApp(
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
   final fake = messenger ?? FakeMessenger();
-  await tester.pumpWidget(ZelamarApp(messenger: fake, startLab: _noLab));
+  await tester.pumpWidget(ZelamarApp(messenger: fake));
   await tester.pumpAndSettle();
   return fake;
 }
@@ -77,7 +73,7 @@ void main() {
       final messenger = await pumpApp(tester);
       await tester.tap(find.byKey(const Key('welcome.join')));
       await tester.pumpAndSettle();
-      expect(find.text('Link this device'), findsOneWidget);
+      expect(find.text('Add this device'), findsOneWidget);
 
       final next = find.byKey(const Key('join.continue'));
       await tester.enterText(find.byKey(const Key('join.code')), 'abcde fghij');
@@ -644,7 +640,7 @@ void main() {
       expect(messenger.linkApproved, isFalse);
     });
 
-    testWidgets('Open at sign-in shows where it exists, and turns on', (
+    testWidgets('Start with Windows shows where it exists, and turns on', (
       tester,
     ) async {
       final messenger = FakeMessenger(
@@ -654,7 +650,7 @@ void main() {
       await pumpApp(tester, messenger: messenger);
       await tester.tap(find.byKey(const Key('chats.profile')));
       await tester.pumpAndSettle();
-      expect(find.text('Open at sign-in'), findsOneWidget);
+      expect(find.text('Start with Windows'), findsOneWidget);
       await tester.tap(find.byKey(const Key('profile.signIn')));
       await tester.pumpAndSettle();
       expect(messenger.startsAtSignInValue, isTrue);
@@ -664,7 +660,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('chats.profile')));
       await tester.pumpAndSettle();
-      expect(find.text('Open at sign-in'), findsNothing);
+      expect(find.text('Start with Windows'), findsNothing);
     });
 
     testWidgets('until there is a recovery key the chats remind; then it '
@@ -719,7 +715,7 @@ void main() {
       expect(find.text('Copied'), findsOneWidget);
       expect(
         tester.widget<Text>(find.byKey(const Key('recovery.warning'))).data,
-        contains('Anyone with this key can take your account'),
+        contains('Anyone who has it can get into your account'),
       );
       await tester.tap(find.byKey(const Key('recovery.show')));
       await tester.pumpAndSettle();
@@ -732,7 +728,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         tester.widget<Text>(find.byKey(const Key('recovery.status'))).data,
-        contains('Saving when online'),
+        contains('Will save when you’re online'),
       );
 
       await tester.tap(find.byKey(const Key('recovery.replace')));
@@ -835,7 +831,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('chat.safety')));
       await tester.pumpAndSettle();
-      expect(find.text('Safety code with @bob'), findsOneWidget);
+      expect(find.text('Is it really @bob?'), findsOneWidget);
       expect(find.text('12345'), findsOneWidget);
       expect(find.text('12356'), findsOneWidget);
     });

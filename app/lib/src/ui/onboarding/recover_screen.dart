@@ -159,8 +159,8 @@ class _RecoverScreenState extends State<RecoverScreen> {
                   ),
                   const SizedBox(height: ZSpace.lg),
                   Text(
-                    'Messages from before stay on the device you lost. Your '
-                    'chats come back here as your contacts open Zelamar.',
+                    'Old messages stay on the lost device. Your chats come '
+                    'back here.',
                     style: text.bodySmall?.copyWith(color: colors.textTertiary),
                     textAlign: TextAlign.center,
                   ),

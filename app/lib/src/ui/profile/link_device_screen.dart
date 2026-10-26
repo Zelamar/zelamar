@@ -108,7 +108,7 @@ class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    'Link a device',
+                    'Add a device',
                     style: text.displayMedium?.copyWith(fontSize: 36),
                   ),
                   const SizedBox(height: ZSpace.xxl),
@@ -137,7 +137,8 @@ class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            'On your new device: I already use Zelamar → this code.',
+            'On your new device, tap “I already use Zelamar” and type this '
+            'code.',
             style: text.bodyMedium,
           ),
           const SizedBox(height: ZSpace.lg),
@@ -193,7 +194,7 @@ class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
           FilledButton(
             key: const Key('link.approve'),
             onPressed: _step == _Step.asking ? _approve : null,
-            child: Text(_step == _Step.asking ? 'Link' : 'Linking…'),
+            child: Text(_step == _Step.asking ? 'Add' : 'Adding…'),
           ),
           const SizedBox(height: ZSpace.sm),
           TextButton(

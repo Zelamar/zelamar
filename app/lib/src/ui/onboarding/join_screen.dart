@@ -95,12 +95,12 @@ class _JoinScreenState extends State<JoinScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    'Link this device',
+                    'Add this device',
                     style: text.displayMedium?.copyWith(fontSize: 36),
                   ),
                   const SizedBox(height: ZSpace.sm),
                   Text(
-                    'On your other device: You → Devices → Link a device.',
+                    'On your other device, open You → Devices → Add a device.',
                     style: text.bodyMedium,
                   ),
                   const SizedBox(height: ZSpace.xxl),

@@ -17,7 +17,7 @@ Future<void> showSafetyCode(
       final text = context.text;
       return AlertDialog(
         key: const Key('safety.dialog'),
-        title: Text('Safety code with $title'),
+        title: Text('Is it really $title?'),
         content: SizedBox(
           width: 360,
           child: Column(
@@ -25,7 +25,8 @@ Future<void> showSafetyCode(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'If $title sees the same numbers, no one is between you.',
+                'Compare these numbers with $title, in person or on a call. '
+                'If they match, it’s really them.',
                 style: text.bodyMedium,
               ),
               const SizedBox(height: ZSpace.xl),

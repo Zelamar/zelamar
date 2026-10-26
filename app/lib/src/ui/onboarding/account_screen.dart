@@ -170,7 +170,7 @@ class _AccountScreenState extends State<AccountScreen> {
                               const SizedBox(width: ZSpace.md),
                               const Flexible(
                                 child: Text(
-                                  'Creating your keys…',
+                                  'Setting up…',
                                   overflow: TextOverflow.ellipsis,
                                 ),
                               ),
