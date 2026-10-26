@@ -57,9 +57,13 @@ Groups (ADR-0015):
   index takes all of that account's devices out of the chat, in one
   sequenced commit. Adding that account again cancels it.
 - A `leave` from one's own account makes every own device leave too.
-- Someone leaving a chat they never wrote in (a request) sends nothing. The username in a
-profile is only a claim. Receivers show it as confirmed only after the
-directory (`GET /v0/accounts/{username}/key`) names the same account.
+- Someone leaving a chat they never wrote in (a request) sends nothing.
+
+The username in a profile is only a claim. Receivers check it with the
+directory (`GET /v0/accounts/{username}/key`) as soon as it arrives:
+- if the directory names the same account, the name is confirmed;
+- if it names another account, or no one holds the name, the claim is
+  dropped, and that account's later claims of the same name are ignored.
 
 ## Rules
 

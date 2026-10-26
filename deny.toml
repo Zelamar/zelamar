@@ -8,6 +8,17 @@ all-features = true
 # Any known vulnerability or unmaintained crate fails the build.
 unmaintained = "workspace"
 yanked = "deny"
+# Each ignored advisory says why Zelamar is not affected, and when to look
+# again.
+ignore = [
+  # crypto-bigint 0.5.5: timing variability in constant-time operations.
+  # It reaches us only through p256 (P-256) in hpke-rs-rust-crypto 0.7, which
+  # openmls_rust_crypto 0.6 still requires. Zelamar's one ciphersuite is
+  # ML-KEM-768 + X25519 with Ed25519, and other ciphersuites are refused, so
+  # no P-256 secret key ever exists. Revisit when openmls_rust_crypto moves
+  # to hpke-rs-rust-crypto 0.8 (p256 0.14, crypto-bigint 0.7).
+  { id = "RUSTSEC-2026-0387", reason = "P-256 is never used with a secret key; no fix on the 0.5 line" },
+]
 
 [licenses]
 # Permissive licenses only. Copyleft (GPL, LGPL, AGPL) is intentionally absent:

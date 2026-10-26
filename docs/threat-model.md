@@ -126,6 +126,8 @@ What could otherwise leak from a device:
 - **Dependencies.** CI fails on a known vulnerability (`cargo deny`,
   RustSec), a disallowed license or an unknown source. The server's npm
   dependencies are audited too. Dependabot proposes updates weekly.
+  An advisory is ignored only with a written reason in `deny.toml`: today
+  one, for P-256 code Zelamar never uses with a secret key.
 - **Build steps.** Every GitHub Action is pinned to a commit, not a tag
   its owner could move. Signing secrets reach only the release job, and
   the Firebase key only the push check.
