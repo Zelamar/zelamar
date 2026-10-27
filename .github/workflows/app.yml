@@ -106,8 +106,7 @@ jobs:
         run: |
           npm ci
           key=$(openssl rand -hex 32)
-          printf 'INVITE_KEY=%s
-' "$key" > .dev.vars
+          echo "INVITE_KEY=$key" > .dev.vars
           invites=$(INVITE_KEY=$key node scripts/invites.mjs 1 2 | awk '{print $2}' | paste -sd, -)
           echo "ZELAMAR_TEST_INVITES=$invites" >> "$GITHUB_ENV"
           nohup npx wrangler dev --port 8787 > "$RUNNER_TEMP/wrangler.log" 2>&1 &
