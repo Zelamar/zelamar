@@ -46,6 +46,8 @@ A mailbox is created when a device registers (`directory.md`). It stores
   gate it; until then it is rate-limited by network address.
 - An envelope id already queued in a mailbox is not queued twice
   (idempotent retries).
+- The header `Zelamar-Wake: call` marks the envelope urgent: a call's
+  offer (`calls.md`). It changes only how a device that is away is woken.
 
 Errors: `400 malformed`, `413 too_large`, `429 rate_limited`.
 
@@ -87,6 +89,11 @@ Rules:
   is still unread when the wake-up goes out.
 - A wake-up carries the same fixed words every time ("Zelamar", "New
   message"), never anything about the message.
+- An urgent envelope owes a **call wake-up** instead: at most one every 5
+  seconds per mailbox, sent at once. It is a high-priority FCM data
+  message, `{"wake": "call"}`, that lives 45 seconds and shows nothing by
+  itself. The app wakes, fetches its mail and rings only for a real call
+  from someone in an accepted chat, so a forged wake-up rings nothing.
 - A token that Firebase reports as unregistered is forgotten.
 
 ## Client rules

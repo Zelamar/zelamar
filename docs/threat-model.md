@@ -59,7 +59,8 @@ It **can see**, and this is metadata we accept for v1:
   changes: roughly when the account gains a contact or a chat.
 - **Group sizes**, from how many mailboxes a commit or message goes to.
 - **That a device is about to call or pick up**, when it asks for call
-  servers, and how long a call lasts if it goes through the relay.
+  servers or marks an offer urgent, and how long a call lasts if it goes
+  through the relay.
 
 It **can deny service**: drop, delay or refuse anything. Clients retry, and
 messages wait in the outbox; nothing is lost on the device.

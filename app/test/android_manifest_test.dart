@@ -35,6 +35,29 @@ void main() {
     );
   });
 
+  test('a call rings a closed phone and keeps its microphone', () {
+    for (final permission in [
+      'USE_FULL_SCREEN_INTENT',
+      'FOREGROUND_SERVICE',
+      'FOREGROUND_SERVICE_MICROPHONE',
+      'FOREGROUND_SERVICE_CAMERA',
+    ]) {
+      expect(manifest, contains('android.permission.$permission'));
+    }
+    expect(manifest, contains('android:name=".ZelamarMessagingService"'));
+    expect(manifest, contains('com.google.firebase.MESSAGING_EVENT'));
+    expect(
+      manifest,
+      contains('android:foregroundServiceType="microphone|camera"'),
+    );
+    expect(manifest, contains('android:name=".CallActionReceiver"'));
+    expect(
+      RegExp('android:exported="true"').allMatches(manifest).length,
+      1,
+      reason: 'only the launcher is reachable from other apps',
+    );
+  });
+
   test('release builds never back messages up to the cloud', () {
     expect(manifest, contains('android:allowBackup="false"'));
     expect(manifest, contains('@xml/data_extraction_rules'));

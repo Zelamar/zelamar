@@ -111,6 +111,10 @@ pub struct Outgoing {
     /// sequencer (`protocol/delivery.md`) instead of straight to mailboxes.
     #[serde(default)]
     pub commit: Option<CommitTicket>,
+    /// Wakes a device that is away at once, as a ringing call must
+    /// (ADR-0019). The service learns only that this envelope is urgent.
+    #[serde(default)]
+    pub urgent: bool,
 }
 
 /// What the sequencer needs to know about a commit.
@@ -1716,6 +1720,7 @@ impl Device {
             recipients: everyone,
             payload: encode(&commit, "encoding a commit")?,
             commit: None,
+            urgent: false,
         };
         self.queue_commit(chat, epoch, commit, None)
     }
@@ -1824,12 +1829,14 @@ impl Device {
             recipients: newcomers,
             payload: encode(&welcome, "encoding a welcome")?,
             commit: None,
+            urgent: false,
         };
         let commit = Outgoing {
             id: EnvelopeId::random()?,
             recipients: existing,
             payload: encode(&commit, "encoding a commit")?,
             commit: None,
+            urgent: false,
         };
         let commit = self.queue_commit(chat, epoch, commit, Some(welcome.clone()))?;
         Ok(Invitation { commit, welcome })
@@ -1947,6 +1954,7 @@ impl Device {
             recipients: others,
             payload: encode(&out, "encoding a message")?,
             commit: None,
+            urgent: matches!(message.body, Body::Call { .. }),
         };
         // Alone in a chat, there is no one to deliver to: already "sent".
         let status = if outgoing.recipients.is_empty() {

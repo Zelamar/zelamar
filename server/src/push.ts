@@ -7,6 +7,7 @@
 import { DurableObject } from 'cloudflare:workers';
 
 import { toBase64Url, utf8 } from './bytes';
+import type { Wake } from './mailbox';
 
 /** The parts of a Firebase service account key that sending needs. */
 export interface ServiceAccount {
@@ -86,8 +87,23 @@ export async function assertion(account: ServiceAccount, now: number): Promise<s
   return `${header}.${claims}.${toBase64Url(new Uint8Array(signature))}`;
 }
 
-/** The FCM message for `token`: the same words for every wake-up. */
-export function wakeUp(token: string): Record<string, unknown> {
+/**
+ * The FCM message for `token`. A message wake-up is the same words every
+ * time, shown by Android itself. A call wake-up carries no words at all:
+ * it wakes the app, which fetches the envelope, opens it and rings only if
+ * it is a real call from someone the user talks to (ADR-0019).
+ */
+export function wakeUp(token: string, wake: Wake = 'message'): Record<string, unknown> {
+  if (wake === 'call') {
+    return {
+      message: {
+        token,
+        data: { wake: 'call' },
+        // A call is over in under a minute; a late wake-up is no use.
+        android: { priority: 'HIGH', ttl: '45s' },
+      },
+    };
+  }
   return {
     message: {
       token,
@@ -106,10 +122,10 @@ export class Push extends DurableObject<Env> {
   private access: { token: string; until: number } | null = null;
 
   /** Sends one wake-up to the device holding `token`. */
-  async send(token: string): Promise<PushOutcome> {
+  async send(token: string, wake: Wake = 'message'): Promise<PushOutcome> {
     const account = serviceAccount(this.env.FCM_SERVICE_ACCOUNT);
     if (account === null) {
-      this.count();
+      this.count(wake);
       return 'unconfigured';
     }
     try {
@@ -121,11 +137,11 @@ export class Push extends DurableObject<Env> {
             authorization: `Bearer ${await this.accessToken(account)}`,
             'content-type': 'application/json',
           },
-          body: JSON.stringify(wakeUp(token)),
+          body: JSON.stringify(wakeUp(token, wake)),
         },
       );
       if (response.ok) {
-        console.log(JSON.stringify({ event: 'push_sent' }));
+        console.log(JSON.stringify({ event: 'push_sent', wake }));
         return 'sent';
       }
       const text = await response.text();
@@ -144,20 +160,22 @@ export class Push extends DurableObject<Env> {
   }
 
   /** How many wake-ups were skipped for want of a service account. */
-  skipped(): number {
+  skipped(wake: Wake = 'message'): number {
     this.schema();
-    return this.ctx.storage.sql.exec<{ n: number }>('SELECT n FROM skipped WHERE id = 1').one().n;
+    return this.ctx.storage.sql
+      .exec<{ n: number }>('SELECT n FROM skipped WHERE id = ?', wake === 'call' ? 2 : 1)
+      .one().n;
   }
 
-  private count(): void {
+  private count(wake: Wake): void {
     this.schema();
-    this.ctx.storage.sql.exec('UPDATE skipped SET n = n + 1 WHERE id = 1');
+    this.ctx.storage.sql.exec('UPDATE skipped SET n = n + 1 WHERE id = ?', wake === 'call' ? 2 : 1);
   }
 
   private schema(): void {
     this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS skipped (id INTEGER PRIMARY KEY CHECK (id = 1), n INTEGER NOT NULL);
-      INSERT INTO skipped (id, n) VALUES (1, 0) ON CONFLICT (id) DO NOTHING;
+      CREATE TABLE IF NOT EXISTS skipped (id INTEGER PRIMARY KEY CHECK (id IN (1, 2)), n INTEGER NOT NULL);
+      INSERT INTO skipped (id, n) VALUES (1, 0), (2, 0) ON CONFLICT (id) DO NOTHING;
     `);
   }
 

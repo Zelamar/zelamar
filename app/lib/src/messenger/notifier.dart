@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
@@ -31,6 +32,27 @@ abstract interface class Notifier {
 
   /// Turns starting at sign-in on or off; returns the new state.
   Future<bool?> setStartsAtSignIn({required bool on});
+
+  /// A call rings while Zelamar is out of sight: ring like a phone, over
+  /// the lock screen where allowed (Android), or come to the front
+  /// (Windows).
+  Future<void> ring({required String title, required bool video});
+
+  /// The call no longer rings.
+  Future<void> stopRinging();
+
+  /// A call goes on, or ended: on Android, the microphone (and camera)
+  /// keep working while the screen is off.
+  Future<void> callOngoing({
+    required bool on,
+    String title = '',
+    bool video = false,
+  });
+
+  /// What the platform asks of calls: `accept` or `decline` (from a ringing
+  /// call's notification), or `wake` (a call wake-up for a running app:
+  /// fetch the mail now).
+  Stream<String> get callActions;
 }
 
 /// The native notifier, over the `zelamar/notify` channel. A notification
@@ -40,6 +62,47 @@ class PlatformNotifier implements Notifier {
 
   static const _channel = MethodChannel('zelamar/notify');
   static const _push = MethodChannel('zelamar/push');
+  static const _calls = MethodChannel('zelamar/calls');
+  static final _actions = StreamController<String>.broadcast();
+  static bool _listening = false;
+
+  @override
+  Stream<String> get callActions {
+    if (!_listening) {
+      _listening = true;
+      _calls.setMethodCallHandler((call) async => _actions.add(call.method));
+    }
+    return _actions.stream;
+  }
+
+  @override
+  Future<void> ring({required String title, required bool video}) =>
+      _quietly('ring', {'title': title, 'video': video});
+
+  @override
+  Future<void> stopRinging() =>
+      Platform.isAndroid ? _quietly('stopRinging') : Future<void>.value();
+
+  @override
+  Future<void> callOngoing({
+    required bool on,
+    String title = '',
+    bool video = false,
+  }) => Platform.isAndroid
+      ? _quietly('callOngoing', {'on': on, 'title': title, 'video': video})
+      : Future<void>.value();
+
+  /// Calls [method] on the native side; a failure only means the platform
+  /// does less this time.
+  Future<void> _quietly(String method, [Object? arguments]) async {
+    try {
+      await _channel.invokeMethod<void>(method, arguments);
+    } on PlatformException {
+      // Nothing more to do.
+    } on MissingPluginException {
+      // Not available in this build.
+    }
+  }
 
   @override
   Future<bool?> startsAtSignIn() async {
@@ -141,4 +204,20 @@ class SilentNotifier implements Notifier {
 
   @override
   Future<bool?> setStartsAtSignIn({required bool on}) async => null;
+
+  @override
+  Future<void> ring({required String title, required bool video}) async {}
+
+  @override
+  Future<void> stopRinging() async {}
+
+  @override
+  Future<void> callOngoing({
+    required bool on,
+    String title = '',
+    bool video = false,
+  }) async {}
+
+  @override
+  Stream<String> get callActions => const Stream.empty();
 }

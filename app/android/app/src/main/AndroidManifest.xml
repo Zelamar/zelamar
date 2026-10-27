@@ -14,6 +14,13 @@
          the phone moves between Wi-Fi and mobile data. -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- A call rings over the lock screen, and keeps its microphone and
+         camera while the screen is off (ADR-0019). -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <!-- No cloud backups: messages must not leave the device, and a
          restored sealed key could not be opened on another phone anyway. -->
     <application
@@ -45,6 +52,24 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Call wake-ups: the app fetches its mail and rings for a real
+             call (ADR-0019). -->
+        <service
+            android:name=".ZelamarMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        <!-- Keeps the microphone and camera while a call goes on. -->
+        <service
+            android:name=".CallService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|camera" />
+        <!-- "Decline" on a ringing call's notification. -->
+        <receiver
+            android:name=".CallActionReceiver"
+            android:exported="false" />
         <!-- Push wake-ups shown while the app is closed (ADR-0017). -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"

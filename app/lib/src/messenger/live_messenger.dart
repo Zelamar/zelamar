@@ -64,7 +64,18 @@ class LiveMessenger extends Messenger {
             ringer: ringer ?? ToneRinger(),
           )
           ..onRing = _rang
-          ..addListener(notifyListeners);
+          ..addListener(notifyListeners)
+          ..addListener(_callChanged);
+    _callActions = this.notifier.callActions.listen((action) {
+      switch (action) {
+        case 'accept':
+          unawaited(acceptCall());
+        case 'decline':
+          unawaited(declineCall());
+        case 'wake':
+          _wake();
+      }
+    });
   }
 
   /// Where the encrypted store lives.
@@ -130,6 +141,12 @@ class LiveMessenger extends Messenger {
 
   /// This device's calls (ADR-0019).
   late final CallController _calls;
+
+  /// What the platform asks of calls: accept, decline, wake.
+  late final StreamSubscription<String> _callActions;
+
+  /// The call's phase the platform was last told about.
+  CallPhase? _toldPhase;
 
   /// Files opened lately, by `chat/message`, oldest first.
   final _files = <String, Uint8List>{};
@@ -794,19 +811,58 @@ class LiveMessenger extends Messenger {
   @override
   Future<void> switchCamera() => _calls.switchCamera();
 
-  /// A call rings here: say so, if Zelamar is out of sight.
+  /// A call rings here: if Zelamar is out of sight, the platform rings
+  /// like a phone (Android: the ringtone, over the lock screen) or brings
+  /// the window to the front (Windows).
   Future<void> _rang(CallState call) async {
-    if (!await notifier.inFront()) {
-      await notifier.show(
-        title: call.peer,
-        body: call.video ? 'Incoming video call' : 'Incoming call',
-      );
+    if (await notifier.inFront()) {
+      return;
     }
+    if (Platform.isAndroid) {
+      // The phone's own ringtone rings instead.
+      _calls.ringer.stop();
+    }
+    await notifier.ring(title: call.peer, video: call.video);
+  }
+
+  /// Tells the platform when a call stops ringing, and when one starts or
+  /// stops going on.
+  void _callChanged() {
+    final call = _calls.state;
+    final phase = call?.phase;
+    final was = _toldPhase;
+    if (phase == was) {
+      return;
+    }
+    _toldPhase = phase;
+    bool talking(CallPhase? phase) =>
+        phase == CallPhase.connecting || phase == CallPhase.active;
+    if (was == CallPhase.incoming) {
+      unawaited(notifier.stopRinging());
+    }
+    if (call != null && talking(phase) && !talking(was)) {
+      unawaited(
+        notifier.callOngoing(on: true, title: call.peer, video: call.video),
+      );
+    } else if (talking(was) && !talking(phase) || phase == null) {
+      unawaited(notifier.callOngoing(on: false));
+    }
+  }
+
+  /// A call wake-up arrived while Zelamar runs: fetch the mail now, even if
+  /// the connection is waiting to try again.
+  void _wake() {
+    if (_phase != MessengerPhase.ready || _link == Link.online) {
+      return;
+    }
+    unawaited(_socket?.close());
+    unawaited(_runMailbox());
   }
 
   @override
   void dispose() {
     _closed = true;
+    unawaited(_callActions.cancel());
     _calls.dispose();
     _retry?.cancel();
     _healTimer?.cancel();

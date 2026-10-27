@@ -174,3 +174,30 @@ fn a_call_nobody_picks_up_is_missed() {
     bob.device.mark_read(&chat).expect("read");
     assert_eq!(bob.unread(&chat), 0);
 }
+
+#[test]
+fn only_the_offer_wakes_a_phone_that_is_away() {
+    let (mut alice, mut bob) = (Person::new(), Person::new());
+    let chat = connect(&mut alice, &mut bob);
+    let offer = AppMessage::new(
+        MessageId([1; 16]),
+        1,
+        Body::Call {
+            video: false,
+            sdp: OFFER.into(),
+        },
+    );
+    assert!(alice.device.send(&chat, &offer).expect("send").urgent);
+    let end = AppMessage::new(
+        MessageId([2; 16]),
+        2,
+        Body::CallEnd {
+            call: MessageId([1; 16]),
+            reason: CallEndReason::Hangup,
+            duration_ms: None,
+        },
+    );
+    assert!(!alice.device.send(&chat, &end).expect("send").urgent);
+    let text = AppMessage::text(MessageId([3; 16]), 3, "hi");
+    assert!(!alice.device.send(&chat, &text).expect("send").urgent);
+}

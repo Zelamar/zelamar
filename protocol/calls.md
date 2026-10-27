@@ -39,6 +39,21 @@ relays it without reading it, exactly like text.
 - Clients accept at most 8 servers of at most 8 `stun:`, `turn:` or
   `turns:` URLs each.
 
+## Waking a phone that is away
+
+The device that calls sends its `call` with `Zelamar-Wake: call`
+(`delivery.md`). A device of the called person that has no connection
+open gets a call wake-up within seconds:
+- **Android:** the wake-up starts Zelamar without a window, or wakes the
+  running one. It fetches its mail and opens the offer. If rule 2 below
+  says to ring, the phone rings with the system ringtone, over the lock
+  screen where Android allows it, with Accept and Decline.
+- **Windows:** Zelamar runs in the tray and keeps its connection. A call
+  brings the window to the front.
+
+While a call goes on, Android keeps a foreground service ("Call with
+@bob"), so the microphone and camera keep working with the screen off.
+
 ## Messages
 
 Three content kinds (`content.md`):
@@ -108,7 +123,9 @@ moment media connected.
 ## What others learn
 
 - **The service** sees envelopes, as for any message. The `ice` request
-  tells it that a device is about to call or answer, and when.
+  and the `Zelamar-Wake` header tell it that a device is about to call or
+  answer, and when. Google sees that a phone got a wake-up, as for any
+  message.
 - **Cloudflare's STUN and TURN servers** see the devices' network
   addresses and how much encrypted media flows, never its content.
 - **The other person** learns this device's network addresses from its

@@ -66,9 +66,25 @@ Constraints:
 **Scope of this first version.**
 - One-to-one voice and video, in chats the user has accepted.
 - Group calls need a media server and wait.
-- On Android, a call reaches a phone whose app is closed only through the
-  ordinary push. Ringing a closed app with a full-screen call needs a
-  foreground service and comes next.
+- A phone whose app is closed rings too. The offer is marked urgent; the
+  service sends a call wake-up with no words; the app starts without a
+  window, fetches the offer and rings only for a real call (see "Ringing a
+  closed phone" below).
+
+**Ringing a closed phone (Android).**
+- The service cannot tell who sends what, so it cannot decide whether a
+  phone should ring. If a wake-up rang by itself, anyone who knows a
+  username could ring that person's phone over and over.
+- So a call wake-up only wakes Zelamar. The process has one Flutter engine
+  and with it one session over the store. The wake-up starts the engine
+  without a window, or wakes the running one. The window attaches to the
+  same engine when it opens. Two sessions over one store never exist.
+- The app then fetches its mail like any other start. Only an offer that
+  the rules allow to ring makes the phone ring: the system ringtone, a
+  full-screen call over the lock screen, Accept and Decline.
+- The window shows over the lock screen only while a call rings or goes on.
+- A foreground service of type microphone (and camera) runs while a call
+  goes on.
 
 ## Consequences
 
@@ -80,3 +96,5 @@ Constraints:
 - Old versions show an incoming call as "update Zelamar to see this
   message". The beta updates quickly.
 - `flutter_webrtc` adds about 20 MB of libwebrtc to each build.
+- The engine now outlives the window: a closed window still hears calls
+  and messages while Android keeps the process.

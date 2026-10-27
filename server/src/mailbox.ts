@@ -23,6 +23,12 @@ export const UPLOAD_QUOTA = 512 * 1024 * 1024;
 /** At most one push wake-up per mailbox in this long (ADR-0017). */
 export const PUSH_INTERVAL_MS = 30_000;
 
+/**
+ * At most one call wake-up per mailbox in this long (ADR-0019): a phone
+ * that is away has a few seconds to fetch the offer and decide to ring.
+ */
+export const CALL_WAKE_INTERVAL_MS = 5_000;
+
 /** Calls' server lists one mailbox may ask for per UTC day (ADR-0019). */
 export const ICE_QUOTA = 200;
 
@@ -33,6 +39,13 @@ export type ClaimOutcome = 'claimed' | 'same' | 'taken';
 export type DepositOutcome = 'queued' | 'duplicate' | 'unknown' | 'full';
 export type UploadAllowance = 'allowed' | 'unauthorized' | 'over_quota';
 export type IceAllowance = UploadAllowance;
+
+/**
+ * What a deposit asks of a device that is away: a quiet "you have mail",
+ * or, for an envelope its sender marked urgent, a wake-up that lets the
+ * phone fetch it at once and ring if it is a call (ADR-0019).
+ */
+export type Wake = 'message' | 'call';
 
 /** Per-connection state that survives hibernation. */
 interface Cursor {
@@ -140,7 +153,11 @@ export class Mailbox extends DurableObject<Env> {
   }
 
   /** Queues one envelope and pushes it to live connections. */
-  async deposit(id: ArrayBuffer, envelope: ArrayBuffer): Promise<DepositOutcome> {
+  async deposit(
+    id: ArrayBuffer,
+    envelope: ArrayBuffer,
+    wake: Wake = 'message',
+  ): Promise<DepositOutcome> {
     if (this.owner() === null) {
       return 'unknown';
     }
@@ -166,7 +183,8 @@ export class Mailbox extends DurableObject<Env> {
     for (const socket of sockets) {
       this.pump(socket);
     }
-    if (sockets.length === 0 && this.wakeUpDue()) {
+    const due = wake === 'call' ? this.callWakeDue() : this.wakeUpDue();
+    if (sockets.length === 0 && due) {
       // The wake-up goes out from the alarm, so the sender does not wait
       // for Google.
       await this.ctx.storage.setAlarm(Date.now());
@@ -310,10 +328,53 @@ export class Mailbox extends DurableObject<Env> {
     return true;
   }
 
+  /**
+   * Marks a call wake-up as owed, if the device has a token and was not
+   * woken for a call in the last few seconds.
+   */
+  private callWakeDue(): boolean {
+    this.pushSchema();
+    const sql = this.ctx.storage.sql;
+    if (sql.exec('SELECT 1 FROM push WHERE id = 1').toArray().length === 0) {
+      return false;
+    }
+    sql.exec(
+      'CREATE TABLE IF NOT EXISTS call_wake (id INTEGER PRIMARY KEY CHECK (id = 1), last INTEGER NOT NULL, pending INTEGER NOT NULL)',
+    );
+    const last =
+      sql.exec<{ last: number }>('SELECT last FROM call_wake WHERE id = 1').toArray()[0]?.last ?? 0;
+    if (Date.now() - last < CALL_WAKE_INTERVAL_MS) {
+      return false;
+    }
+    sql.exec(
+      `INSERT INTO call_wake (id, last, pending) VALUES (1, ?, 1)
+       ON CONFLICT (id) DO UPDATE SET last = excluded.last, pending = 1`,
+      Date.now(),
+    );
+    return true;
+  }
+
   /** Sends an owed wake-up, unless the device has meanwhile read its mail. */
   private async sendWakeUp(): Promise<void> {
     this.pushSchema();
     const sql = this.ctx.storage.sql;
+    const call =
+      sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'call_wake'").toArray()
+        .length > 0 &&
+      sql.exec('SELECT 1 FROM call_wake WHERE id = 1 AND pending = 1').toArray().length > 0;
+    if (call) {
+      sql.exec('UPDATE call_wake SET pending = 0 WHERE id = 1');
+      const token = sql
+        .exec<{ token: string }>('SELECT token FROM push WHERE id = 1')
+        .toArray()[0]?.token;
+      if (token !== undefined && this.count() > 0 && this.ctx.getWebSockets().length === 0) {
+        const outcome = await this.env.PUSH.getByName('fcm').send(token, 'call');
+        if (outcome === 'gone') {
+          sql.exec('DELETE FROM push WHERE token = ?', token);
+          return;
+        }
+      }
+    }
     const row = sql
       .exec<{ token: string; pending: number }>('SELECT token, pending FROM push WHERE id = 1')
       .toArray()[0];

@@ -545,10 +545,15 @@ pub fn delivery(outgoing: &Outgoing) -> Result<Request> {
             body,
         });
     }
+    let mut headers = vec![("content-type", "application/octet-stream".to_owned())];
+    if outgoing.urgent {
+        // Rings a device that is away (ADR-0019).
+        headers.push(("zelamar-wake", "call".to_owned()));
+    }
     Ok(Request {
         method: "POST",
         path: "/v0/deliver".to_owned(),
-        headers: vec![("content-type", "application/octet-stream".to_owned())],
+        headers,
         body: delivery_frame(outgoing, false)?,
     })
 }
@@ -1019,8 +1024,27 @@ mod tests {
             recipients: vec![MailboxId([2; 32]); recipients],
             payload: vec![0; payload],
             commit: None,
+            urgent: false,
         };
         assert!(delivery(&outgoing(0, 1)).is_err());
+        let plain = delivery(&outgoing(1, 1)).expect("delivery");
+        assert!(
+            plain
+                .headers
+                .iter()
+                .all(|(name, _)| *name != "zelamar-wake")
+        );
+        let ringing = delivery(&Outgoing {
+            urgent: true,
+            ..outgoing(1, 1)
+        })
+        .expect("delivery");
+        assert!(
+            ringing
+                .headers
+                .contains(&("zelamar-wake", "call".to_owned())),
+            "a call wakes the phone it rings"
+        );
         assert!(delivery(&outgoing(256, 1)).is_err());
         assert!(delivery(&outgoing(255, MAX_PAYLOAD)).is_ok());
         assert!(matches!(
@@ -1307,6 +1331,7 @@ mod tests {
             recipients: vec![MailboxId([0x22; 32]), MailboxId([0x33; 32])],
             payload: b"opaque MLS message".to_vec(),
             commit: None,
+            urgent: false,
         }
     }
 
@@ -1323,8 +1348,10 @@ mod tests {
                     recipients: vec![MailboxId([0xBB; 32])],
                     payload: b"opaque MLS welcome".to_vec(),
                     commit: None,
+                    urgent: false,
                 })),
             }),
+            urgent: false,
         }
     }
 

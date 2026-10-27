@@ -37,7 +37,7 @@ void main() {
   final codes = invites.split(',');
   final run = Random().nextInt(1 << 30).toRadixString(36);
 
-  Future<LiveMessenger> person(String name) async {
+  Future<LiveMessenger> person(String name, {Notifier? notifier}) async {
     final directory = await Directory.systemTemp.createTemp('zl-call-$name-');
     addTearDown(() async {
       for (var attempt = 0; ; attempt++) {
@@ -54,7 +54,7 @@ void main() {
       directory: directory.path,
       vault: KeyVault(directory.path, profile: 'call-$name-$run'),
       transport: ServiceTransport(Uri.parse(service)),
-      notifier: const SilentNotifier(),
+      notifier: notifier ?? const SilentNotifier(),
     );
     addTearDown(messenger.dispose);
     await messenger.start();
@@ -82,7 +82,9 @@ void main() {
     'two people call each other: it rings, they talk, one hangs up',
     () async {
       final alice = await person('alice');
-      final bob = await person('bob');
+      // Bob's Zelamar is out of sight: the platform rings for him.
+      final bobsPhone = _BackgroundNotifier();
+      final bob = await person('bob', notifier: bobsPhone);
       final bobName = 'qc_${run}_b';
       await alice.createAccount(username: 'qc_${run}_a', invite: codes[0]);
       await bob.createAccount(username: bobName, invite: codes[1]);
@@ -112,6 +114,8 @@ void main() {
         'it rings on Bob’s side',
       );
       expect(bob.call?.outgoing, isFalse);
+      await until(() => bobsPhone.said.isNotEmpty, 'Bob’s phone rings');
+      expect(bobsPhone.said.first, 'ring @qc_${run}_a');
       await until(
         () => alice.call?.phase == CallPhase.ringing,
         'Alice hears it ring',
@@ -125,6 +129,11 @@ void main() {
         'the two devices connect',
       );
 
+      expect(bobsPhone.said, [
+        'ring @qc_${run}_a',
+        'stop ringing',
+        'call on: @qc_${run}_a',
+      ]);
       await Future<void>.delayed(const Duration(seconds: 2));
       await alice.hangUp();
       expect(alice.call?.note, CallEndNote.ended);
@@ -133,6 +142,7 @@ void main() {
         'Bob’s call ends too',
       );
       await until(() => alice.call == null && bob.call == null, 'both close');
+      expect(bobsPhone.said.last, 'call off');
 
       for (final messenger in [alice, bob]) {
         await until(
@@ -188,4 +198,29 @@ void main() {
     skip: invites.isEmpty ? 'needs a service and two invites' : null,
     timeout: const Timeout(Duration(minutes: 3)),
   );
+}
+
+/// A phone whose Zelamar is out of sight: it records what the app asks of
+/// the platform instead of ringing.
+class _BackgroundNotifier extends SilentNotifier {
+  new();
+
+  final said = <String>[];
+
+  @override
+  Future<bool> inFront() async => false;
+
+  @override
+  Future<void> ring({required String title, required bool video}) async =>
+      said.add('ring $title');
+
+  @override
+  Future<void> stopRinging() async => said.add('stop ringing');
+
+  @override
+  Future<void> callOngoing({
+    required bool on,
+    String title = '',
+    bool video = false,
+  }) async => said.add(on ? 'call on: $title' : 'call off');
 }

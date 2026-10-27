@@ -15,8 +15,8 @@ function setPush(device: Pick<Device, 'mailbox' | 'secret'>, body?: unknown): Pr
 }
 
 /** How many wake-ups the push object skipped (no Firebase in tests). */
-function skipped(): Promise<number> {
-  return env.PUSH.getByName('fcm').skipped();
+function skipped(wake: 'message' | 'call' = 'message'): Promise<number> {
+  return env.PUSH.getByName('fcm').skipped(wake);
 }
 
 /**
@@ -81,6 +81,54 @@ describe('push wake-ups', () => {
     await deliver(random(16), [phone.mailbox], utf8('forgotten'));
     await tick(phone);
     expect(await skipped()).toBe(before);
+  });
+
+  it('wake a phone at once for a call, apart from messages', async () => {
+    const { device: phone } = await registered();
+    await setPush(phone, { platform: 'fcm', token: 'device-token' });
+    const calls = await skipped('call');
+    const messages = await skipped();
+    const ring = { 'zelamar-wake': 'call' };
+
+    await deliver(random(16), [phone.mailbox], utf8('offer'), ring);
+    await tick(phone);
+    expect(await skipped('call')).toBe(calls + 1);
+    // A call wake-up is not a message one.
+    expect(await skipped()).toBe(messages);
+
+    // A second offer right away is the same ring.
+    await deliver(random(16), [phone.mailbox], utf8('again'), ring);
+    await tick(phone);
+    expect(await skipped('call')).toBe(calls + 1);
+
+    // Seconds later, a new call wakes it again, even right after a message.
+    await runInDurableObject(env.MAILBOX.getByName(b64(phone.mailbox)), (_, state) => {
+      state.storage.sql.exec('UPDATE call_wake SET last = 0');
+      state.storage.sql.exec('UPDATE push SET last = ?', Date.now());
+    });
+    await deliver(random(16), [phone.mailbox], utf8('ring'), ring);
+    await tick(phone);
+    expect(await skipped('call')).toBe(calls + 2);
+
+    // Any other value is an ordinary message.
+    const { device: other } = await registered();
+    await setPush(other, { platform: 'fcm', token: 'other-token' });
+    await deliver(random(16), [other.mailbox], utf8('hi'), { 'zelamar-wake': 'yes' });
+    await tick(other);
+    expect(await skipped('call')).toBe(calls + 2);
+    expect(await skipped()).toBe(messages + 1);
+  });
+
+  it('do not ring a phone that is connected', async () => {
+    const { device: phone } = await registered();
+    await setPush(phone, { platform: 'fcm', token: 'device-token' });
+    const calls = await skipped('call');
+    const live = await inbox(phone);
+    await deliver(random(16), [phone.mailbox], utf8('offer'), { 'zelamar-wake': 'call' });
+    await live.next();
+    await tick(phone);
+    expect(await skipped('call')).toBe(calls);
+    live.close();
   });
 
   it('take a token only from the mailbox owner, and only a plain one', async () => {
@@ -156,6 +204,16 @@ describe('the Firebase sender', () => {
     expect(message).toContain('"title":"Zelamar"');
     expect(message).toContain('"body":"New message"');
     expect(message).not.toContain('data');
+  });
+
+  it('wakes for a call without a word, high priority, briefly', () => {
+    expect(wakeUp('token-a', 'call')).toEqual({
+      message: {
+        token: 'token-a',
+        data: { wake: 'call' },
+        android: { priority: 'HIGH', ttl: '45s' },
+      },
+    });
   });
 
   it('treats a missing or broken service account as unconfigured', () => {

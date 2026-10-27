@@ -208,11 +208,12 @@ export function deliver(
   id: Uint8Array,
   recipients: Uint8Array[],
   payload: Uint8Array,
+  headers: Record<string, string> = {},
 ): Promise<Response> {
   return exports.default.fetch(`${BASE}/v0/deliver`, {
     method: 'POST',
     body: encodeDelivery({ id, recipients, payload }),
-    headers: { 'cf-connecting-ip': address() },
+    headers: { 'cf-connecting-ip': address(), ...headers },
   });
 }
 

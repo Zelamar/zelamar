@@ -109,6 +109,24 @@ Notifier::Notifier(flutter::BinaryMessenger* messenger, HWND window,
       Show(Widen(Argument(*arguments, "title")),
            Widen(Argument(*arguments, "body")));
       result->Success();
+    } else if (call.method_name() == "ring") {
+      // A call rings while the window is hidden: say who, and come to the
+      // front so the call can be answered (ADR-0019).
+      const auto* arguments =
+          std::get_if<flutter::EncodableMap>(call.arguments());
+      bool video = false;
+      if (arguments) {
+        const auto found = arguments->find(flutter::EncodableValue("video"));
+        if (found != arguments->end()) {
+          if (const auto* flag = std::get_if<bool>(&found->second)) {
+            video = *flag;
+          }
+        }
+      }
+      Show(arguments ? Widen(Argument(*arguments, "title")) : L"Zelamar",
+           video ? L"Incoming video call" : L"Incoming call");
+      BringToFront();
+      result->Success();
     } else if (call.method_name() == "inFront") {
       result->Success(flutter::EncodableValue(InFront()));
     } else if (call.method_name() == "startsAtSignIn") {

@@ -24,6 +24,7 @@ import { MAX_CHUNK, MAX_CHUNKS } from './blob';
 import { iceServers, turnKey } from './ice';
 import { inviteKey, inviteSerial } from './invite';
 import { type LinkPart, linkMessage, MAX_LINK_ANSWER } from './link';
+import type { Wake } from './mailbox';
 import type { SignedRequest } from './signed';
 import { normalizeUsername } from './username';
 
@@ -176,11 +177,14 @@ async function deliver(request: Request, env: Env): Promise<Reply> {
     return failure(413, 'too_large');
   }
 
-  return { status: 202, body: { delivered: await fanOut(env, frame) } };
+  // The sender marks a call's offer urgent: a phone that is away fetches it
+  // at once (ADR-0019).
+  const wake: Wake = request.headers.get('zelamar-wake') === 'call' ? 'call' : 'message';
+  return { status: 202, body: { delivered: await fanOut(env, frame, wake) } };
 }
 
 /** Puts one envelope per recipient into their mailboxes; returns how many took it. */
-async function fanOut(env: Env, delivery: Delivery): Promise<number> {
+async function fanOut(env: Env, delivery: Delivery, wake: Wake = 'message'): Promise<number> {
   let delivered = 0;
   for (let at = 0; at < delivery.recipients.length; at += FAN_OUT_BATCH) {
     const batch = delivery.recipients.slice(at, at + FAN_OUT_BATCH);
@@ -189,6 +193,7 @@ async function fanOut(env: Env, delivery: Delivery): Promise<number> {
         env.MAILBOX.getByName(toBase64Url(recipient)).deposit(
           buffer(delivery.id),
           buffer(encodeEnvelope(delivery.id, recipient, delivery.payload)),
+          wake,
         ),
       ),
     );
