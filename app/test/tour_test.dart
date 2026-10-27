@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zelamar/src/app.dart';
+import 'package:zelamar/src/calls/call_state.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/rust/api/session.dart';
 
@@ -191,6 +192,23 @@ FakeMessenger _lived({bool recoveryKey = true}) {
       '@eve',
       messages: [
         view(
+          3,
+          '',
+          outgoing: true,
+          call: const CallView(
+            video: false,
+            outcome: CallOutcome.talked,
+            durationMs: 754000,
+          ),
+          sentAtMs: _ago(const Duration(days: 2, hours: 1)),
+        ),
+        view(
+          2,
+          '',
+          call: const CallView(video: true, outcome: CallOutcome.missed),
+          sentAtMs: _ago(const Duration(days: 2, hours: 3)),
+        ),
+        view(
           1,
           'Thanks for the recommendation!',
           outgoing: true,
@@ -358,6 +376,71 @@ void main() {
       await _capture(tester, '24-chats-small');
       await _tap(tester, find.text('@bob'));
       await _capture(tester, '25-chat-small');
+    });
+
+    testWidgets('calls', (tester) async {
+      final messenger = await _pump(tester, _lived());
+      await _tap(tester, find.text('@eve'));
+      await _capture(tester, '26-call-lines');
+      const incoming = CallState(
+        chat: 'c-eve',
+        peer: '@eve',
+        video: false,
+        outgoing: false,
+        phase: CallPhase.incoming,
+        id: 'call',
+      );
+      messenger.showCall(incoming);
+      await tester.pump();
+      await _capture(tester, '27-call-incoming');
+      messenger.showCall(
+        const CallState(
+          chat: 'c-eve',
+          peer: '@eve',
+          video: false,
+          outgoing: true,
+          phase: CallPhase.ringing,
+          id: 'call',
+        ),
+      );
+      await tester.pump();
+      await _capture(tester, '28-call-ringing');
+      messenger.showCall(
+        incoming.copyWith(
+          phase: CallPhase.active,
+          connectedAt: DateTime.now().subtract(
+            const Duration(minutes: 3, seconds: 24),
+          ),
+          muted: true,
+        ),
+      );
+      await tester.pump();
+      await _capture(tester, '29-call-active');
+      messenger.showCall(null);
+      await tester.pump(const Duration(milliseconds: 400));
+    });
+
+    testWidgets('a call at night, on a small phone', (tester) async {
+      final messenger = await _pump(
+        tester,
+        _lived(),
+        size: const Size(360, 640),
+        brightness: Brightness.dark,
+      );
+      messenger.showCall(
+        const CallState(
+          chat: 'c-bob',
+          peer: '@bob',
+          video: true,
+          outgoing: false,
+          phase: CallPhase.incoming,
+          id: 'call',
+        ),
+      );
+      await tester.pump();
+      await _capture(tester, '30-call-dark-small');
+      messenger.showCall(null);
+      await tester.pump(const Duration(milliseconds: 400));
     });
   });
 }

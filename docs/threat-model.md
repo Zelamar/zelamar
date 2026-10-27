@@ -38,7 +38,10 @@ It **cannot**:
 - open a recovery kit, or hand one to anyone else. It keeps only a hash of
   the fetch token and would have to guess 125 bits (ADR-0018);
 - fork a chat on purpose. A sequencer that lies can only stall changes:
-  every client verifies commits under MLS.
+  every client verifies commits under MLS;
+- listen to a call, or slip itself into one. The offer and the answer carry
+  the DTLS fingerprints inside the MLS chat, so the media key is agreed
+  between the two devices only (ADR-0019).
 
 It **can see**, and this is metadata we accept for v1:
 - **Which mailboxes a delivery goes to, and when.** A mailbox belongs to
@@ -55,6 +58,8 @@ It **can see**, and this is metadata we accept for v1:
 - **Whether an account has a recovery kit**, how large it is and when it
   changes: roughly when the account gains a contact or a chat.
 - **Group sizes**, from how many mailboxes a commit or message goes to.
+- **That a device is about to call or pick up**, when it asks for call
+  servers, and how long a call lasts if it goes through the relay.
 
 It **can deny service**: drop, delay or refuse anything. Clients retry, and
 messages wait in the outbox; nothing is lost on the device.
@@ -62,7 +67,9 @@ messages wait in the outbox; nothing is lost on the device.
 ### The network
 
 It sees TLS to Cloudflare: timing and sizes only. It cannot tell a
-message from a file chunk except by size.
+message from a file chunk except by size. During a call it sees SRTP
+between the two devices (or to Cloudflare's relay): that two addresses
+talk, for how long and at what rate, never the sound.
 
 ### Other users
 
@@ -80,6 +87,10 @@ message from a file chunk except by size.
   that no one sits between them. One limit: a contact's new device, linked
   or recovered, joins a chat silently, as it does in other messengers. A
   "new device" notice is a later feature.
+- **Someone you call, or who calls you,** learns your device's network
+  addresses from its connection candidates, as in any direct call. That is
+  why calls ring only in chats the user has accepted, never in requests.
+  An "always relay" setting can hide them once the relay is on.
 - **A group member** can add people. Nobody can remove others through the
   app, but a modified client could. Everyone would see it and could add
   the person back (ADR-0015).
@@ -129,7 +140,9 @@ What could otherwise leak from a device:
   An advisory is ignored only with a written reason in `deny.toml`: today
   one, for P-256 code Zelamar never uses with a secret key.
 - **Build steps.** Every GitHub Action is pinned to a commit, not a tag
-  its owner could move. Signing secrets reach only the release job, and
+  its owner could move. The Windows call engine (libwebrtc), which
+  flutter_webrtc would download unchecked, is pinned by its SHA-256
+  (`app/tool/libwebrtc.sh`). Signing secrets reach only the release job, and
   the Firebase key only the push check.
 - **The repository** is public, with an anonymous project identity. No
   secret has ever been committed: keys live sealed with DPAPI on the
@@ -145,6 +158,7 @@ What could otherwise leak from a device:
 | Linking | HKDF-SHA256 from a 100-bit code → XChaCha20-Poly1305 |
 | Recovery | HKDF-SHA256 from a 125-bit key → XChaCha20-Poly1305; SHA-256 of a fetch token at the service |
 | Files | ChaCha20-Poly1305 per 1 MiB chunk, fresh key per file |
+| Calls | DTLS-SRTP (WebRTC) between the two devices, fingerprints exchanged inside MLS |
 | Service requests | Ed25519 signatures with domain-separated contexts |
 
 ## Out of scope for v1

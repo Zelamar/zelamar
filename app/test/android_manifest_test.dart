@@ -16,6 +16,25 @@ void main() {
     expect(manifest, contains('android.permission.RECORD_AUDIO'));
   });
 
+  test('calls may use the microphone, camera, speaker and network state', () {
+    for (final permission in [
+      'RECORD_AUDIO',
+      'CAMERA',
+      'MODIFY_AUDIO_SETTINGS',
+      'ACCESS_NETWORK_STATE',
+    ]) {
+      expect(manifest, contains('android.permission.$permission'));
+    }
+    expect(
+      manifest,
+      contains(
+        '<uses-feature android:name="android.hardware.camera" '
+        'android:required="false" />',
+      ),
+      reason: 'phones without a camera can still install Zelamar',
+    );
+  });
+
   test('release builds never back messages up to the cloud', () {
     expect(manifest, contains('android:allowBackup="false"'));
     expect(manifest, contains('@xml/data_extraction_rules'));

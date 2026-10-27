@@ -3,6 +3,7 @@ import 'package:zelamar/src/design/emblem.dart';
 import 'package:zelamar/src/design/theme.dart';
 import 'package:zelamar/src/design/tokens.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
+import 'package:zelamar/src/ui/call/call_screen.dart';
 import 'package:zelamar/src/ui/chats/chats_screen.dart';
 import 'package:zelamar/src/ui/onboarding/welcome_screen.dart';
 import 'package:zelamar/src/ui/words.dart';
@@ -23,6 +24,13 @@ class ZelamarApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: zelamarTheme(Brightness.light),
       darkTheme: zelamarTheme(Brightness.dark),
+      // A call covers every screen, whichever is open (ADR-0019).
+      builder: (context, child) => Stack(
+        children: [
+          ?child,
+          Positioned.fill(child: CallOverlay(messenger: messenger)),
+        ],
+      ),
       home: ListenableBuilder(
         listenable: messenger,
         builder: (context, _) => AnimatedSwitcher(

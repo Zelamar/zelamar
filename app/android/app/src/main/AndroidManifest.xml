@@ -4,8 +4,16 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Android 13+: asked once, after the account is created. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Voice messages: asked for when the user first records one. -->
+    <!-- Voice messages and calls: asked for when the user first records
+         one or calls (ADR-0019). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Video calls: asked for when the user first turns the camera on. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- Calls: the earpiece or loudspeaker, and following the network as
+         the phone moves between Wi-Fi and mobile data. -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- No cloud backups: messages must not leave the device, and a
          restored sealed key could not be opened on another phone anyway. -->
     <application

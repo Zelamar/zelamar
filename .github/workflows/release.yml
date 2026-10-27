@@ -115,6 +115,10 @@ jobs:
         working-directory: app/rust
         run: rustup toolchain install
 
+      - name: Verified libwebrtc (flutter_webrtc would fetch it unchecked)
+        shell: bash
+        run: flutter pub get && bash tool/libwebrtc.sh
+
       - name: Build
         env:
           SERVICE: ${{ inputs.service }}

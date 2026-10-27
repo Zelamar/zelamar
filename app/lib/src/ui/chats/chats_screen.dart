@@ -385,6 +385,11 @@ String preview(MessageView? last, {bool group = false}) {
   if (event != null) {
     return describeEvent(last.author, event);
   }
+  final call = last.call;
+  if (call != null) {
+    final icon = call.video ? '📹' : '📞';
+    return '$icon ${callLine(call, outgoing: last.outgoing)}';
+  }
   final file = last.file;
   final body = last.deleted
       ? 'Message deleted'

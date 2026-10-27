@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:zelamar/src/calls/call_state.dart';
 import 'package:zelamar/src/messenger/outgoing_file.dart';
 import 'package:zelamar/src/rust/api/session.dart';
 
@@ -213,4 +214,25 @@ abstract class Messenger extends ChangeNotifier {
 
   /// Removes [chat] from this device, history and all. Nobody is told.
   Future<void> deleteChat(String chat);
+
+  /// The call ringing or going on, or one that just ended (ADR-0019).
+  CallState? get call;
+
+  /// Calls the other person in [chat].
+  Future<void> startCall(String chat, {bool video = false});
+
+  /// Picks up the call ringing here.
+  Future<void> acceptCall();
+
+  /// Turns down the call ringing here.
+  Future<void> declineCall();
+
+  /// Ends the call, or stops calling.
+  Future<void> hangUp();
+
+  /// Turns the microphone off or on during a call.
+  Future<void> setMuted({required bool muted});
+
+  /// Sends a call's sound to the loudspeaker or back to the earpiece.
+  Future<void> setSpeaker({required bool on});
 }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zelamar/src/app.dart';
+import 'package:zelamar/src/calls/call_state.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/rust/api/session.dart';
 import 'package:zelamar/src/ui/words.dart';
@@ -970,6 +971,185 @@ void main() {
         tester.widget<TextField>(input).controller?.text,
         isEmpty,
         reason: 'the field is cleared after sending',
+      );
+    });
+  });
+
+  group('calls', () {
+    /// Lets the call screen fade in or out; its halo breathes forever, so
+    /// [WidgetTester.pumpAndSettle] would never return.
+    Future<void> settleCall(WidgetTester tester) async {
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+    }
+
+    String status(WidgetTester tester) =>
+        tester.widget<Text>(find.byKey(const Key('call.status'))).data!;
+
+    testWidgets('a call starts from the chat and covers every screen', (
+      tester,
+    ) async {
+      final messenger =
+          FakeMessenger(phaseValue: MessengerPhase.ready, usernameValue: 'ada')
+            ..addChat('c1', '@bob', messages: [view(1, 'Free now?')])
+            ..addChat('g1', 'Pier crew', group: true)
+            ..addChat('r1', '@mallory', request: true);
+      await pumpApp(tester, messenger: messenger);
+      await tester.tap(find.byKey(const Key('chats.tile.c1')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('chat.call')));
+      await settleCall(tester);
+      expect(messenger.callActions, ['start c1']);
+      expect(status(tester), 'Calling…');
+      expect(
+        tester.widget<Text>(find.byKey(const Key('call.peer'))).data,
+        '@bob',
+      );
+      expect(
+        find.byKey(const Key('call.speaker')),
+        findsNothing,
+        reason: 'a computer has no earpiece',
+      );
+
+      messenger.showCall(
+        messenger.call!.copyWith(
+          phase: CallPhase.active,
+          connectedAt: DateTime.now().subtract(const Duration(seconds: 42)),
+        ),
+      );
+      await tester.pump();
+      expect(status(tester), '0:42');
+
+      await tester.tap(find.byKey(const Key('call.mute')));
+      await tester.pump();
+      expect(messenger.callActions.last, 'mute');
+      expect(find.text('Unmute'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('call.end')));
+      await settleCall(tester);
+      expect(messenger.callActions.last, 'hang up');
+      expect(find.byKey(const Key('call.status')), findsNothing);
+      expect(find.text('Free now?'), findsOneWidget, reason: 'back in chat');
+
+      // No calls in groups or requests.
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('chats.tile.g1')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('chat.call')), findsNothing);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('chats.tile.r1')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('chat.call')), findsNothing);
+    });
+
+    testWidgets('an incoming call is picked up or turned down', (tester) async {
+      final messenger = await pumpApp(
+        tester,
+        messenger: FakeMessenger(
+          phaseValue: MessengerPhase.ready,
+          usernameValue: 'ada',
+        ),
+      );
+      const ringing = CallState(
+        chat: 'c1',
+        peer: '@carol',
+        video: false,
+        outgoing: false,
+        phase: CallPhase.incoming,
+        id: 'call',
+      );
+      messenger.showCall(ringing);
+      await settleCall(tester);
+      expect(status(tester), 'Incoming call');
+      await tester.tap(find.byKey(const Key('call.accept')));
+      await tester.pump();
+      expect(messenger.callActions, ['accept']);
+      expect(status(tester), 'Connecting…');
+
+      messenger.showCall(
+        ringing.copyWith(phase: CallPhase.ended, note: CallEndNote.ended),
+      );
+      await tester.pump();
+      expect(status(tester), 'Call ended');
+
+      messenger.showCall(ringing);
+      await settleCall(tester);
+      await tester.tap(find.byKey(const Key('call.decline')));
+      await settleCall(tester);
+      expect(messenger.callActions.last, 'decline');
+      expect(find.byKey(const Key('call.status')), findsNothing);
+    });
+
+    testWidgets('call lines say how a call went, and call back', (
+      tester,
+    ) async {
+      final messenger =
+          FakeMessenger(
+            phaseValue: MessengerPhase.ready,
+            usernameValue: 'ada',
+          )..addChat(
+            'c1',
+            '@bob',
+            messages: [
+              view(
+                2,
+                '',
+                outgoing: true,
+                call: const CallView(
+                  video: false,
+                  outcome: CallOutcome.talked,
+                  durationMs: 204000,
+                ),
+              ),
+              view(
+                1,
+                '',
+                call: const CallView(video: true, outcome: CallOutcome.missed),
+              ),
+            ],
+          );
+      await pumpApp(tester, messenger: messenger);
+      expect(find.text('📞 Call · 3 min'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('chats.tile.c1')));
+      await tester.pumpAndSettle();
+      expect(find.text('Call · 3 min'), findsOneWidget);
+      expect(find.text('Missed video call'), findsOneWidget);
+
+      await tester.tap(find.text('Missed video call'));
+      await settleCall(tester);
+      expect(messenger.callActions, ['start c1 video']);
+    });
+
+    test('call lines in words', () {
+      String line(CallOutcome outcome, {bool outgoing = false}) => callLine(
+        CallView(video: false, outcome: outcome, durationMs: 65000),
+        outgoing: outgoing,
+      );
+      expect(line(CallOutcome.talked), 'Call · 1 min');
+      expect(describeCallLength(const Duration(seconds: 45)), '45 sec');
+      expect(describeCallLength(const Duration(minutes: 60)), '1 h');
+      expect(
+        describeCallLength(const Duration(hours: 1, minutes: 5)),
+        '1 h 5 min',
+      );
+      expect(line(CallOutcome.missed), 'Missed call');
+      expect(line(CallOutcome.missed, outgoing: true), 'No answer');
+      expect(line(CallOutcome.cancelled), 'Missed call');
+      expect(line(CallOutcome.cancelled, outgoing: true), 'Cancelled call');
+      expect(line(CallOutcome.declined, outgoing: true), 'Declined');
+      expect(line(CallOutcome.declined), 'You declined');
+      expect(line(CallOutcome.busy, outgoing: true), 'Busy');
+      expect(line(CallOutcome.failed), 'Call didn’t connect');
+      expect(
+        missedCall(
+          const CallView(video: false, outcome: CallOutcome.cancelled),
+          outgoing: false,
+        ),
+        isTrue,
       );
     });
   });

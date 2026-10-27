@@ -398,6 +398,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             titleSpacing: 0,
             shape: Border(bottom: BorderSide(color: colors.hairline)),
             actions: [
+              if (!group && !request)
+                IconButton(
+                  key: const Key('chat.call'),
+                  tooltip: 'Call',
+                  icon: Icon(Icons.call_outlined, color: colors.textSecondary),
+                  onPressed: widget.messenger.call == null
+                      ? () => unawaited(
+                          _act(() => widget.messenger.startCall(widget.chat)),
+                        )
+                      : null,
+                ),
               PopupMenuButton<void>(
                 key: const Key('chat.menu'),
                 tooltip: 'More',
@@ -484,16 +495,35 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                           b != null &&
                           a.event == null &&
                           b.event == null &&
+                          a.call == null &&
+                          b.call == null &&
                           a.outgoing == b.outgoing &&
                           a.author == b.author &&
                           sameDay(a.sentAtMs, b.sentAtMs);
                       final event = message.event;
+                      final call = message.call;
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           if (startsDay) DayLabel(dayLabel(message.sentAtMs)),
                           if (event != null)
                             EventLine(describeEvent(message.author, event))
+                          else if (call != null)
+                            CallLine(
+                              call,
+                              outgoing: message.outgoing,
+                              sentAtMs: message.sentAtMs,
+                              onCall: group || request
+                                  ? null
+                                  : () => unawaited(
+                                      _act(
+                                        () => widget.messenger.startCall(
+                                          widget.chat,
+                                          video: call.video,
+                                        ),
+                                      ),
+                                    ),
+                            )
                           else
                             MessageBubble(
                               message,
@@ -647,8 +677,6 @@ class DayLabel extends StatelessWidget {
   }
 }
 
-/// One message: sand on the right for the user's own, white on the left
-/// for others, the small corner pointing at the sender.
 /// Something that happened to the chat, between the messages.
 class EventLine extends StatelessWidget {
   const new(this.label, {super.key});
@@ -673,6 +701,79 @@ class EventLine extends StatelessWidget {
   }
 }
 
+/// A call, between the messages: how it went and when. Tapping it calls
+/// back.
+class CallLine extends StatelessWidget {
+  const new(
+    this.call, {
+    required this.outgoing,
+    required this.sentAtMs,
+    this.onCall,
+    super.key,
+  });
+
+  final CallView call;
+  final bool outgoing;
+  final int sentAtMs;
+
+  /// Calls the other person again; `null` where that is not possible.
+  final VoidCallback? onCall;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final missed = missedCall(call, outgoing: outgoing);
+    final color = missed ? colors.danger : colors.textSecondary;
+    final icon = call.video
+        ? Icons.videocam_outlined
+        : outgoing
+        ? Icons.call_made
+        : missed
+        ? Icons.call_missed
+        : Icons.call_received;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: ZSpace.sm),
+      child: Center(
+        child: Material(
+          color: colors.surfaceRaised,
+          shape: StadiumBorder(side: BorderSide(color: colors.hairline)),
+          child: InkWell(
+            key: const Key('chat.call.line'),
+            customBorder: const StadiumBorder(),
+            onTap: onCall,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: ZSpace.lg,
+                vertical: ZSpace.sm,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 16, color: color),
+                  const SizedBox(width: ZSpace.sm),
+                  Text(
+                    callLine(call, outgoing: outgoing),
+                    style: context.text.bodySmall?.copyWith(color: color),
+                  ),
+                  const SizedBox(width: ZSpace.sm),
+                  Text(
+                    clockTime(sentAtMs),
+                    style: context.text.bodySmall?.copyWith(
+                      color: colors.textTertiary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One message: sand on the right for the user's own, white on the left
+/// for others, the small corner pointing at the sender.
 class MessageBubble extends StatelessWidget {
   const new(
     this.message, {

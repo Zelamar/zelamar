@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:zelamar/src/calls/call_state.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/messenger/outgoing_file.dart';
 import 'package:zelamar/src/rust/api/session.dart';
@@ -491,6 +492,62 @@ class FakeMessenger extends Messenger {
     }
   }
 
+  /// The call shown, if any; tests set it.
+  CallState? callValue;
+
+  /// What the screens asked of calls: `start chat`, `accept`, `decline`,
+  /// `hang up`, `mute`, `unmute`, `speaker on`, `speaker off`.
+  final callActions = <String>[];
+
+  @override
+  CallState? get call => callValue;
+
+  /// Shows [call], as if it had just started ringing or changed.
+  void showCall(CallState? call) {
+    callValue = call;
+    notifyListeners();
+  }
+
+  void _callAction(String action, [CallState? next]) {
+    callActions.add(action);
+    callValue = next;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> startCall(String chat, {bool video = false}) async {
+    _callAction(
+      'start $chat${video ? ' video' : ''}',
+      CallState(
+        chat: chat,
+        peer: _chats[chat]?.title ?? '@bob',
+        video: video,
+        outgoing: true,
+        phase: CallPhase.calling,
+      ),
+    );
+  }
+
+  @override
+  Future<void> acceptCall() async =>
+      _callAction('accept', callValue?.copyWith(phase: CallPhase.connecting));
+
+  @override
+  Future<void> declineCall() async => _callAction('decline');
+
+  @override
+  Future<void> hangUp() async => _callAction('hang up');
+
+  @override
+  Future<void> setMuted({required bool muted}) async =>
+      _callAction(muted ? 'mute' : 'unmute', callValue?.copyWith(muted: muted));
+
+  @override
+  Future<void> setSpeaker({required bool on}) async => _callAction(
+    on ? 'speaker on' : 'speaker off',
+    callValue?.copyWith(speaker: on),
+  );
+
   @override
   void dispose() {
     unawaited(_changes.close());
@@ -512,6 +569,7 @@ MessageView view(
   String author = '@bob',
   ChatEvent? event,
   FileView? file,
+  CallView? call,
 }) => MessageView(
   id: 'm$seq',
   seq: seq,
@@ -524,10 +582,11 @@ MessageView view(
   status: status,
   replyTo: replyTo,
   reactions: reactions,
-  editable: outgoing && !deleted && event == null,
+  editable: outgoing && !deleted && event == null && call == null,
   author: outgoing ? 'You' : author,
   event: event,
   file: file,
+  call: call,
 );
 
 /// [message] with some fields replaced.
@@ -554,4 +613,5 @@ MessageView copyView(
   author: message.author,
   event: message.event,
   file: message.file,
+  call: message.call,
 );

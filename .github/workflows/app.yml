@@ -85,8 +85,50 @@ jobs:
         working-directory: app/rust
         run: rustup toolchain install
 
+      - name: Verified libwebrtc (flutter_webrtc would fetch it unchecked)
+        shell: bash
+        run: flutter pub get && bash tool/libwebrtc.sh
+
       - name: Integration test (real Rust core)
         run: flutter test integration_test/app_test.dart -d windows
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Local delivery service
+        working-directory: server
+        shell: bash
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          npm ci
+          key=$(openssl rand -hex 32)
+          printf 'INVITE_KEY=%s
+' "$key" > .dev.vars
+          invites=$(INVITE_KEY=$key node scripts/invites.mjs 1 2 | awk '{print $2}' | paste -sd, -)
+          echo "ZELAMAR_TEST_INVITES=$invites" >> "$GITHUB_ENV"
+          nohup npx wrangler dev --port 8787 > "$RUNNER_TEMP/wrangler.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8787/health && exit 0
+            sleep 2
+          done
+          cat "$RUNNER_TEMP/wrangler.log"
+          exit 1
+
+      - name: A real call between two people (ADR-0019)
+        shell: bash
+        run: >-
+          flutter test integration_test/call_test.dart -d windows
+          --dart-define=ZELAMAR_SERVICE=http://127.0.0.1:8787
+          --dart-define=ZELAMAR_TEST_INVITES=$ZELAMAR_TEST_INVITES
+
+      - name: Service log
+        if: failure()
+        shell: bash
+        run: tail -n 60 "$RUNNER_TEMP/wrangler.log" || true
 
       - name: Release build
         run: flutter build windows --release

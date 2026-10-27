@@ -70,6 +70,48 @@ String fileLine(FileView file) {
   return '📎 ${file.name}';
 }
 
+/// How long a call lasted, in words: `45 sec`, `12 min`, `1 h 5 min`.
+/// Never `12:34`, which reads like a time of day next to one.
+String describeCallLength(Duration length) {
+  if (length.inSeconds < 60) {
+    return '${length.inSeconds} sec';
+  }
+  final minutes = length.inMinutes;
+  if (minutes < 60) {
+    return '$minutes min';
+  }
+  final rest = minutes % 60;
+  return rest == 0 ? '${minutes ~/ 60} h' : '${minutes ~/ 60} h $rest min';
+}
+
+/// A call in one line, as the chat shows it: `Missed call`,
+/// `Video call · 12 min`.
+String callLine(CallView call, {required bool outgoing}) {
+  final kind = call.video ? 'video call' : 'call';
+  final named = call.video ? 'Video call' : 'Call';
+  final length = call.durationMs;
+  return switch (call.outcome) {
+    CallOutcome.ongoing => outgoing ? 'Calling…' : 'Incoming $kind',
+    CallOutcome.talked =>
+      length == null
+          ? named
+          : '$named · ${describeCallLength(Duration(milliseconds: length))}',
+    CallOutcome.missed => outgoing ? 'No answer' : 'Missed $kind',
+    CallOutcome.cancelled => outgoing ? 'Cancelled $kind' : 'Missed $kind',
+    CallOutcome.declined => outgoing ? 'Declined' : 'You declined',
+    CallOutcome.busy => outgoing ? 'Busy' : 'Missed $kind',
+    CallOutcome.failed => '$named didn’t connect',
+  };
+}
+
+/// Whether [call] is one the user missed: shown in the danger color.
+bool missedCall(CallView call, {required bool outgoing}) =>
+    !outgoing &&
+    switch (call.outcome) {
+      CallOutcome.missed || CallOutcome.cancelled || CallOutcome.busy => true,
+      _ => false,
+    };
+
 /// A line for something that happened to a chat.
 String describeEvent(String author, ChatEvent event) => switch (event.kind) {
   ChatEventKind.named => '$author named the group “${event.name ?? ''}”',

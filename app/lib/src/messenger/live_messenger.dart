@@ -3,6 +3,11 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:zelamar/src/calls/call_controller.dart';
+import 'package:zelamar/src/calls/call_state.dart';
+import 'package:zelamar/src/calls/media_link.dart';
+import 'package:zelamar/src/calls/tone_ringer.dart';
+import 'package:zelamar/src/calls/webrtc_link.dart';
 import 'package:zelamar/src/messenger/key_vault.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/messenger/notifier.dart';
@@ -46,9 +51,20 @@ class LiveMessenger extends Messenger {
     required this.vault,
     required this.transport,
     Notifier? notifier,
+    MediaLinkFactory? links,
+    Ringer? ringer,
     this.linkPoll = const Duration(seconds: 2),
     this.memberHealing = const Duration(minutes: 5),
-  }) : notifier = notifier ?? Notifier.forPlatform();
+  }) : notifier = notifier ?? Notifier.forPlatform() {
+    _calls =
+        CallController(
+            signaling: _ChatSignaling(this),
+            links: links ?? WebRtcLink.new,
+            ringer: ringer ?? ToneRinger(),
+          )
+          ..onRing = _rang
+          ..addListener(notifyListeners);
+  }
 
   /// Where the encrypted store lives.
   final String directory;
@@ -110,6 +126,9 @@ class LiveMessenger extends Messenger {
 
   bool _savingKit = false;
   bool _kitSaved = true;
+
+  /// This device's calls (ADR-0019).
+  late final CallController _calls;
 
   /// Files opened lately, by `chat/message`, oldest first.
   final _files = <String, Uint8List>{};
@@ -703,6 +722,12 @@ class LiveMessenger extends Messenger {
   Future<List<String>?> safetyCode(String chat) =>
       _guard(() => _ready.safetyCode(chat: chat));
 
+  /// Shows what was just queued in [chat], and sends it.
+  Future<void> _sent(String chat) async {
+    await _refreshChats(chat);
+    unawaited(_flush());
+  }
+
   /// Runs a change to [chat] in the core, then shows it and sends it.
   Future<void> _changeChat(
     String chat,
@@ -729,8 +754,47 @@ class LiveMessenger extends Messenger {
   });
 
   @override
+  CallState? get call => _calls.state;
+
+  @override
+  Future<void> startCall(String chat, {bool video = false}) => _guard(() {
+    final preview = _chats.where((preview) => preview.id == chat).firstOrNull;
+    if (preview == null || preview.group) {
+      throw const MessengerFailure('not_one_to_one');
+    }
+    _ready;
+    return _calls.start(chat, peer: preview.title, video: video);
+  });
+
+  @override
+  Future<void> acceptCall() => _calls.accept();
+
+  @override
+  Future<void> declineCall() => _calls.decline();
+
+  @override
+  Future<void> hangUp() => _calls.hangUp();
+
+  @override
+  Future<void> setMuted({required bool muted}) => _calls.setMuted(muted: muted);
+
+  @override
+  Future<void> setSpeaker({required bool on}) => _calls.setSpeaker(on: on);
+
+  /// A call rings here: say so, if Zelamar is out of sight.
+  Future<void> _rang(CallState call) async {
+    if (!await notifier.inFront()) {
+      await notifier.show(
+        title: call.peer,
+        body: call.video ? 'Incoming video call' : 'Incoming call',
+      );
+    }
+  }
+
+  @override
   void dispose() {
     _closed = true;
+    _calls.dispose();
     _retry?.cancel();
     _healTimer?.cancel();
     unawaited(_socket?.close());
@@ -818,6 +882,9 @@ class LiveMessenger extends Messenger {
     if (event.chat != null) {
       await _refreshChats(event.chat);
       unawaited(_confirmNames());
+      // Opening it may have queued a receipt: "delivered", and for a call,
+      // "it rings here".
+      unawaited(_flush());
     }
     if (event.left) {
       // Perhaps the account removed this device; healing finds out.
@@ -825,6 +892,10 @@ class LiveMessenger extends Messenger {
     } else if (event.chat != null) {
       // Someone may have left; their devices go.
       unawaited(_seeOff());
+    }
+    final call = event.call;
+    if (call != null) {
+      _calls.handle(call);
     }
     final notice = event.notice;
     if (notice != null && !await notifier.inFront()) {
@@ -1051,4 +1122,58 @@ class LiveMessenger extends Messenger {
     _failure = failure;
     _setPhase(MessengerPhase.failed);
   }
+}
+
+/// A call's messages go through its chat, like any message: into the
+/// outbox, then out at once.
+class _ChatSignaling implements CallSignaling {
+  const new(this._messenger);
+
+  final LiveMessenger _messenger;
+
+  @override
+  Future<String> offer(
+    String chat, {
+    required bool video,
+    required String sdp,
+  }) => _messenger._guard(() async {
+    final id = await _messenger._ready.startCall(
+      chat: chat,
+      video: video,
+      sdp: sdp,
+    );
+    await _messenger._sent(chat);
+    return id;
+  });
+
+  @override
+  Future<void> answer(String chat, String call, String sdp) =>
+      _messenger._guard(() async {
+        await _messenger._ready.answerCall(chat: chat, call: call, sdp: sdp);
+        await _messenger._sent(chat);
+      });
+
+  @override
+  Future<void> end(
+    String chat,
+    String call,
+    CallEnding ending, {
+    int? durationMs,
+  }) => _messenger._guard(() async {
+    await _messenger._ready.endCall(
+      chat: chat,
+      call: call,
+      ending: ending,
+      durationMs: durationMs,
+    );
+    await _messenger._sent(chat);
+  });
+
+  @override
+  Future<List<IceServerView>> servers() => _messenger._guard(() async {
+    final (status, body) = await _messenger.transport.send(
+      _messenger._ready.iceCall(),
+    );
+    return await iceServers(status: status, body: body);
+  });
 }
