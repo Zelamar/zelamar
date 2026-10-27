@@ -146,6 +146,39 @@ jobs:
           path: app/build/windows/x64/runner/Release/
           retention-days: 14
 
+  ios:
+    name: iOS · simulator integration test
+    needs: analyze-test
+    # Expensive (macOS minutes): skipped while a PR is a draft.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install pinned Rust toolchain (incl. iOS targets)
+        working-directory: app/rust
+        run: rustup toolchain install
+
+      - name: Boot an iPhone simulator
+        run: |
+          udid=$(xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          print(next(d["udid"] for runtime, list_ in sorted(devices.items(), reverse=True)
+                     if "iOS" in runtime for d in list_ if d["name"].startswith("iPhone")))')
+          xcrun simctl boot "$udid"
+          echo "SIMULATOR=$udid" >> "$GITHUB_ENV"
+
+      - name: Integration test (real Rust core, Keychain)
+        run: flutter test integration_test/app_test.dart -d "$SIMULATOR"
+
   android:
     name: Android · emulator integration test
     needs: analyze-test

@@ -5,17 +5,17 @@ import 'dart:io';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/services.dart';
 
-/// Seals a secret with a key only this operating system user (Windows) or
-/// this device's secure hardware (Android) holds. Sealed bytes are safe to
-/// keep in a plain file.
+/// Seals a secret with a key only this operating system user (Windows),
+/// this device's secure hardware (Android) or this device's Keychain (iOS)
+/// holds. Sealed bytes are safe to keep in a plain file.
 abstract interface class Sealer {
   /// The sealer of the platform the app runs on.
   static Sealer forPlatform(String profile) {
     if (Platform.isWindows) {
       return const WindowsSealer();
     }
-    if (Platform.isAndroid) {
-      return AndroidSealer('zelamar.master.$profile');
+    if (Platform.isAndroid || Platform.isIOS) {
+      return KeystoreSealer('zelamar.master.$profile');
     }
     throw UnsupportedError(
       'No secure key storage on ${Platform.operatingSystem} yet',
@@ -38,9 +38,10 @@ class SealFailure implements Exception {
   String toString() => 'SealFailure: $reason';
 }
 
-/// Android Keystore: a hardware-backed AES-256-GCM key that never leaves
-/// the device (`MainActivity.kt`).
-class AndroidSealer implements Sealer {
+/// A key that never leaves the device seals with AES-256-GCM: the
+/// hardware-backed Android Keystore (`ZelamarPlatform.kt`), or the iOS
+/// Keychain, this device only (`AppDelegate.swift`).
+class KeystoreSealer implements Sealer {
   const new(this.alias);
 
   /// Name of the key in the Keystore.

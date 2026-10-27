@@ -13,6 +13,7 @@ analyzer:
     - build/**
     - android/**
     - windows/**
+    - ios/**
 
 linter:
   rules:

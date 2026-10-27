@@ -5,10 +5,12 @@ import 'package:flutter/services.dart';
 
 /// Shows notifications about new messages through the platform: a toast
 /// and a flashing taskbar button on Windows (`windows/runner/notifier.cpp`),
-/// a system notification on Android (`MainActivity.kt`).
+/// a system notification on Android (`ZelamarPlatform.kt`) and iOS
+/// (`AppDelegate.swift`).
 abstract interface class Notifier {
   /// The notifier of the platform the app runs on, or a silent one.
-  static Notifier forPlatform() => Platform.isWindows || Platform.isAndroid
+  static Notifier forPlatform() =>
+      Platform.isWindows || Platform.isAndroid || Platform.isIOS
       ? const PlatformNotifier()
       : const SilentNotifier();
 
@@ -170,7 +172,7 @@ class PlatformNotifier implements Notifier {
 
   @override
   Future<void> requestPermission() async {
-    if (!Platform.isAndroid) {
+    if (!Platform.isAndroid && !Platform.isIOS) {
       return;
     }
     try {

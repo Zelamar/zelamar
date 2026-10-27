@@ -10,10 +10,12 @@ Requires Pillow. Writes:
 - Android legacy launcher icons (mipmap-*/ic_launcher.png)
 - Android adaptive icon foreground + monochrome layers (API 26+)
 - Windows app_icon.ico
+- iOS AppIcon set: opaque squares, since iOS rounds the corners itself
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -21,6 +23,7 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parent.parent
 ANDROID_RES = ROOT / "app" / "android" / "app" / "src" / "main" / "res"
 WINDOWS_ICO = ROOT / "app" / "windows" / "runner" / "resources" / "app_icon.ico"
+IOS_ICONS = ROOT / "app" / "ios" / "Runner" / "Assets.xcassets" / "AppIcon.appiconset"
 
 TILE = (0xF8, 0xF3, 0xEA, 255)  # emblemTile, light theme
 MARK = (0x8A, 0x5A, 0x30, 255)  # emblemMark, light theme
@@ -73,6 +76,16 @@ def render_tile(size: int) -> Image.Image:
     return img.resize((size, size), Image.LANCZOS)
 
 
+def render_square(size: int) -> Image.Image:
+    """Full emblem on an opaque square: iOS masks the corners, and the App
+    Store refuses icons with transparency."""
+    big = size * SUPERSAMPLE
+    img = Image.new("RGB", (big, big), TILE[:3])
+    draw = ImageDraw.Draw(img)
+    draw_mark(draw, size, big / GRID, 0)
+    return img.resize((size, size), Image.LANCZOS)
+
+
 def render_adaptive_foreground(px: int) -> Image.Image:
     """Mark only, on a 108dp canvas: the 200-unit grid maps onto the central
     84dp, which keeps the farthest point of the mark ~30dp from the centre,
@@ -100,7 +113,13 @@ def main() -> None:
     icons = [render_tile(s) for s in sizes]
     icons[-1].save(WINDOWS_ICO, format="ICO", sizes=[(s, s) for s in sizes],
                    append_images=icons[:-1])
-    print(f"Android icons -> {ANDROID_RES}\nWindows icon  -> {WINDOWS_ICO}")
+    contents = json.loads((IOS_ICONS / "Contents.json").read_text(encoding="utf-8"))
+    for image in contents["images"]:
+        points = float(image["size"].split("x")[0])
+        scale = int(image["scale"].rstrip("x"))
+        render_square(round(points * scale)).save(IOS_ICONS / image["filename"], optimize=True)
+
+    print(f"Android icons -> {ANDROID_RES}\nWindows icon  -> {WINDOWS_ICO}\niOS icons     -> {IOS_ICONS}")
 
 
 if __name__ == "__main__":
