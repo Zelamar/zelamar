@@ -49,6 +49,7 @@ class CallState {
     this.connectedAt,
     this.muted = false,
     this.speaker = false,
+    this.cameraOff = false,
     this.note,
   });
 
@@ -78,6 +79,9 @@ class CallState {
   /// Whether sound goes to the loudspeaker (phones).
   final bool speaker;
 
+  /// Whether this device's camera is off in a video call.
+  final bool cameraOff;
+
   /// How it ended, once [phase] is [CallPhase.ended].
   final CallEndNote? note;
 
@@ -87,6 +91,7 @@ class CallState {
     DateTime? connectedAt,
     bool? muted,
     bool? speaker,
+    bool? cameraOff,
     CallEndNote? note,
   }) => CallState(
     chat: chat,
@@ -98,6 +103,7 @@ class CallState {
     connectedAt: connectedAt ?? this.connectedAt,
     muted: muted ?? this.muted,
     speaker: speaker ?? this.speaker,
+    cameraOff: cameraOff ?? this.cameraOff,
     note: note ?? this.note,
   );
 }

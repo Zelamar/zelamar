@@ -409,6 +409,25 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                         )
                       : null,
                 ),
+              if (!group && !request)
+                IconButton(
+                  key: const Key('chat.video'),
+                  tooltip: 'Video call',
+                  icon: Icon(
+                    Icons.videocam_outlined,
+                    color: colors.textSecondary,
+                  ),
+                  onPressed: widget.messenger.call == null
+                      ? () => unawaited(
+                          _act(
+                            () => widget.messenger.startCall(
+                              widget.chat,
+                              video: true,
+                            ),
+                          ),
+                        )
+                      : null,
+                ),
               PopupMenuButton<void>(
                 key: const Key('chat.menu'),
                 tooltip: 'More',

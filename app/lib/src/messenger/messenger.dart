@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:zelamar/src/calls/call_state.dart';
 import 'package:zelamar/src/messenger/outgoing_file.dart';
 import 'package:zelamar/src/rust/api/session.dart';
@@ -235,4 +236,16 @@ abstract class Messenger extends ChangeNotifier {
 
   /// Sends a call's sound to the loudspeaker or back to the earpiece.
   Future<void> setSpeaker({required bool on});
+
+  /// The other person's picture during a video call, once it arrives.
+  ValueListenable<Widget?> get remoteVideo;
+
+  /// This device's camera during a video call, while it is on.
+  ValueListenable<Widget?> get localVideo;
+
+  /// Turns the camera off or on during a video call.
+  Future<void> setCamera({required bool on});
+
+  /// Switches between the front and back camera (phones).
+  Future<void> switchCamera();
 }

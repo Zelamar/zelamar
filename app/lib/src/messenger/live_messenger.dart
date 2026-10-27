@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:zelamar/src/calls/call_controller.dart';
 import 'package:zelamar/src/calls/call_state.dart';
 import 'package:zelamar/src/calls/media_link.dart';
@@ -780,6 +781,18 @@ class LiveMessenger extends Messenger {
 
   @override
   Future<void> setSpeaker({required bool on}) => _calls.setSpeaker(on: on);
+
+  @override
+  ValueListenable<Widget?> get remoteVideo => _calls.remoteVideo;
+
+  @override
+  ValueListenable<Widget?> get localVideo => _calls.localVideo;
+
+  @override
+  Future<void> setCamera({required bool on}) => _calls.setCamera(on: on);
+
+  @override
+  Future<void> switchCamera() => _calls.switchCamera();
 
   /// A call rings here: say so, if Zelamar is out of sight.
   Future<void> _rang(CallState call) async {

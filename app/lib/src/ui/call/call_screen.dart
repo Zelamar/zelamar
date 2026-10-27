@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:zelamar/src/calls/call_state.dart';
 import 'package:zelamar/src/design/theme.dart';
@@ -72,6 +73,23 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (!widget.call.video) {
+      return _stage(context, null);
+    }
+    return ValueListenableBuilder<Widget?>(
+      valueListenable: widget.messenger.remoteVideo,
+      builder: (context, picture, _) => picture == null
+          ? _stage(context, null)
+          // Over a picture, the espresso palette: light words on dark.
+          : Theme(
+              data: zelamarTheme(Brightness.dark),
+              child: Builder(builder: (context) => _stage(context, picture)),
+            ),
+    );
+  }
+
+  /// The call, over the other person's [picture] in a video call.
+  Widget _stage(BuildContext context, Widget? picture) {
     final colors = context.colors;
     final text = context.text;
     final call = widget.call;
@@ -79,50 +97,157 @@ class _CallScreenState extends State<CallScreen> {
         call.phase == CallPhase.calling ||
         call.phase == CallPhase.ringing ||
         call.phase == CallPhase.incoming;
+    final onPicture = picture != null;
     return Material(
       color: colors.background,
-      child: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 480),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: ZSpace.gutter),
-              child: Column(
-                children: [
-                  const Spacer(flex: 2),
-                  _Halo(active: ringing, child: Avatar(call.peer, size: 112)),
-                  const SizedBox(height: ZSpace.xl),
-                  Text(
-                    call.peer,
-                    key: const Key('call.peer'),
-                    style: text.displaySmall,
-                    textAlign: TextAlign.center,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (picture != null) ...[picture, const _Shade()],
+          SafeArea(
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 480),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: ZSpace.gutter,
                   ),
-                  const SizedBox(height: ZSpace.sm),
-                  Text(
-                    _status(call),
-                    key: const Key('call.status'),
-                    style: text.bodyLarge?.copyWith(
-                      color: call.phase == CallPhase.ended
-                          ? colors.textTertiary
-                          : colors.textSecondary,
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                    ),
+                  child: Column(
+                    crossAxisAlignment: onPicture
+                        ? CrossAxisAlignment.start
+                        : CrossAxisAlignment.center,
+                    children: [
+                      if (onPicture)
+                        const SizedBox(height: ZSpace.xl)
+                      else ...[
+                        const Spacer(flex: 2),
+                        _Halo(
+                          active: ringing,
+                          child: Avatar(call.peer, size: 112),
+                        ),
+                        const SizedBox(height: ZSpace.xl),
+                      ],
+                      Padding(
+                        // Clear of this device's own picture, top right.
+                        padding: EdgeInsets.only(
+                          right: onPicture ? _previewWidth + ZSpace.lg : 0,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: onPicture
+                              ? CrossAxisAlignment.start
+                              : CrossAxisAlignment.center,
+                          children: [
+                            Text(
+                              call.peer,
+                              key: const Key('call.peer'),
+                              style: onPicture
+                                  ? text.headlineSmall
+                                  : text.displaySmall,
+                              textAlign: TextAlign.center,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: ZSpace.sm),
+                            Text(
+                              _status(call),
+                              key: const Key('call.status'),
+                              style: text.bodyLarge?.copyWith(
+                                color: call.phase == CallPhase.ended
+                                    ? colors.textTertiary
+                                    : colors.textSecondary,
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures(),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Spacer(flex: 3),
+                      Center(
+                        child: AnimatedOpacity(
+                          opacity: call.phase == CallPhase.ended ? 0 : 1,
+                          duration: ZMotion.base,
+                          child: call.phase == CallPhase.incoming
+                              ? _Answering(widget.messenger, video: call.video)
+                              : _Talking(widget.messenger, call),
+                        ),
+                      ),
+                      const SizedBox(height: ZSpace.xxxl),
+                    ],
                   ),
-                  const Spacer(flex: 3),
-                  AnimatedOpacity(
-                    opacity: call.phase == CallPhase.ended ? 0 : 1,
-                    duration: ZMotion.base,
-                    child: call.phase == CallPhase.incoming
-                        ? _Answering(widget.messenger, video: call.video)
-                        : _Talking(widget.messenger, call),
-                  ),
-                  const SizedBox(height: ZSpace.xxxl),
-                ],
+                ),
               ),
             ),
+          ),
+          if (call.video && call.phase != CallPhase.incoming)
+            Positioned(
+              top: 0,
+              right: 0,
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(ZSpace.lg),
+                  child: _Preview(widget.messenger.localVideo),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+const double _previewWidth = 104;
+
+/// This device's own picture, small, while its camera is on.
+class _Preview extends StatelessWidget {
+  const new(this.picture);
+
+  final ValueListenable<Widget?> picture;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<Widget?>(
+      valueListenable: picture,
+      builder: (context, picture, _) => picture == null
+          ? const SizedBox.shrink()
+          : Container(
+              key: const Key('call.preview'),
+              width: _previewWidth,
+              height: _previewWidth * 4 / 3,
+              clipBehavior: Clip.antiAlias,
+              decoration: BoxDecoration(
+                color: context.colors.surfaceSunken,
+                borderRadius: BorderRadius.circular(ZRadius.field),
+                border: Border.all(color: context.colors.hairline),
+              ),
+              child: picture,
+            ),
+    );
+  }
+}
+
+/// Darkens the top and bottom of the picture a little, so the name and the
+/// buttons read on any picture.
+class _Shade extends StatelessWidget {
+  const new();
+
+  @override
+  Widget build(BuildContext context) {
+    final shade = context.colors.background;
+    return IgnorePointer(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              shade.withValues(alpha: 0.6),
+              shade.withValues(alpha: 0),
+              shade.withValues(alpha: 0),
+              shade.withValues(alpha: 0.7),
+            ],
+            stops: const [0, 0.25, 0.6, 1],
           ),
         ),
       ),
@@ -204,7 +329,25 @@ class _Talking extends StatelessWidget {
           onColor: call.muted ? colors.onAccent : colors.textPrimary,
           onPressed: () => unawaited(messenger.setMuted(muted: !call.muted)),
         ),
-        if (phone)
+        if (call.video)
+          _RoundButton(
+            key: const Key('call.camera'),
+            icon: call.cameraOff ? Icons.videocam_off : Icons.videocam_outlined,
+            label: 'Camera',
+            color: call.cameraOff ? colors.accent : colors.surfaceSunken,
+            onColor: call.cameraOff ? colors.onAccent : colors.textPrimary,
+            onPressed: () => unawaited(messenger.setCamera(on: call.cameraOff)),
+          ),
+        if (call.video && phone)
+          _RoundButton(
+            key: const Key('call.flip'),
+            icon: Icons.cameraswitch_outlined,
+            label: 'Flip',
+            color: colors.surfaceSunken,
+            onColor: colors.textPrimary,
+            onPressed: () => unawaited(messenger.switchCamera()),
+          ),
+        if (phone && !call.video)
           _RoundButton(
             key: const Key('call.speaker'),
             icon: call.speaker ? Icons.volume_up : Icons.volume_down_outlined,

@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:zelamar/src/calls/call_state.dart';
 import 'package:zelamar/src/calls/media_link.dart';
 import 'package:zelamar/src/rust/api/session.dart';
@@ -109,6 +109,15 @@ class CallController extends ChangeNotifier {
 
   /// Another device of this account picked up the same call too.
   bool _rival = false;
+
+  /// Stops following the current link's pictures.
+  void Function()? _unfollow;
+
+  /// The other person's picture in a video call, once it arrives.
+  final remoteVideo = ValueNotifier<Widget?>(null);
+
+  /// This device's camera in a video call, while it is on.
+  final localVideo = ValueNotifier<Widget?>(null);
 
   /// The call ringing or going on, or one that just ended.
   CallState? get state => _state;
@@ -251,6 +260,19 @@ class CallController extends ChangeNotifier {
     await _quietly(_link?.setSpeaker(on: on));
   }
 
+  /// Turns the camera off or on in a video call.
+  Future<void> setCamera({required bool on}) async {
+    final current = _state;
+    if (current == null || !busy) {
+      return;
+    }
+    _set(current.copyWith(cameraOff: !on));
+    await _quietly(_link?.setCamera(on: on));
+  }
+
+  /// Switches between the front and back camera.
+  Future<void> switchCamera() => _quietly(_link?.switchCamera());
+
   /// Acts on a call message from the chat.
   void handle(CallSignal signal) {
     switch (signal.kind) {
@@ -378,6 +400,18 @@ class CallController extends ChangeNotifier {
     final link = links(servers);
     _link = link;
     _media = link.states.listen((state) => _mediaChanged(state, generation));
+    void follow() {
+      remoteVideo.value = link.remoteVideo.value;
+      localVideo.value = link.localVideo.value;
+    }
+
+    link.remoteVideo.addListener(follow);
+    link.localVideo.addListener(follow);
+    _unfollow = () {
+      link.remoteVideo.removeListener(follow);
+      link.localVideo.removeListener(follow);
+    };
+    follow();
     return link;
   }
 
@@ -465,6 +499,10 @@ class CallController extends ChangeNotifier {
     _lost = null;
     unawaited(_media?.cancel());
     _media = null;
+    _unfollow?.call();
+    _unfollow = null;
+    remoteVideo.value = null;
+    localVideo.value = null;
     final link = _link;
     _link = null;
     if (link != null) {
@@ -517,6 +555,8 @@ class CallController extends ChangeNotifier {
   void dispose() {
     _release();
     _generation++;
+    remoteVideo.dispose();
+    localVideo.dispose();
     super.dispose();
   }
 }

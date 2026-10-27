@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:zelamar/src/calls/media_link.dart';
 import 'package:zelamar/src/rust/api/session.dart';
@@ -19,12 +21,23 @@ class WebRtcLink implements MediaLink {
 
   RTCPeerConnection? _connection;
   MediaStream? _local;
+  RTCVideoRenderer? _localRenderer;
+  RTCVideoRenderer? _remoteRenderer;
+  final _remoteVideo = ValueNotifier<Widget?>(null);
+  final _localVideo = ValueNotifier<Widget?>(null);
+  Widget? _localView;
   final _gathered = Completer<void>();
   final _states = StreamController<MediaState>.broadcast();
   bool _closed = false;
 
   @override
   Stream<MediaState> get states => _states.stream;
+
+  @override
+  ValueListenable<Widget?> get remoteVideo => _remoteVideo;
+
+  @override
+  ValueListenable<Widget?> get localVideo => _localVideo;
 
   @override
   Future<String> offer({required bool video}) async {
@@ -71,22 +84,46 @@ class WebRtcLink implements MediaLink {
   }
 
   @override
+  Future<void> setCamera({required bool on}) async {
+    for (final track in _local?.getVideoTracks() ?? <MediaStreamTrack>[]) {
+      track.enabled = on;
+    }
+    _localVideo.value = on ? _localView : null;
+  }
+
+  @override
+  Future<void> switchCamera() async {
+    final track = _local?.getVideoTracks().firstOrNull;
+    if (track != null && (Platform.isAndroid || Platform.isIOS)) {
+      await Helper.switchCamera(track);
+    }
+  }
+
+  @override
   Future<void> close() async {
     if (_closed) {
       return;
     }
     _closed = true;
+    _remoteVideo.value = null;
+    _localVideo.value = null;
     final local = _local;
     _local = null;
     for (final track in local?.getTracks() ?? <MediaStreamTrack>[]) {
       await track.stop();
     }
     await local?.dispose();
+    for (final renderer in [_localRenderer, _remoteRenderer]) {
+      renderer?.srcObject = null;
+      await renderer?.dispose();
+    }
     final connection = _connection;
     _connection = null;
     await connection?.close();
     await connection?.dispose();
     await _states.close();
+    _remoteVideo.dispose();
+    _localVideo.dispose();
   }
 
   /// The peer connection, with this device's microphone (and camera) on
@@ -134,29 +171,76 @@ class WebRtcLink implements MediaLink {
           _states.add(media);
         }
       };
-    MediaStream? local;
-    try {
-      local = await navigator.mediaDevices.getUserMedia({
-        'audio': true,
-        'video': video ? {'facingMode': 'user'} : false,
-      });
-    } on Object {
-      // No microphone, or no permission: still hear the other person.
-      local = null;
+    if (video) {
+      final remote = RTCVideoRenderer();
+      await remote.initialize();
+      _remoteRenderer = remote;
+      connection.onTrack = (event) {
+        if (event.track.kind != 'video' || _closed) {
+          return;
+        }
+        remote.srcObject = event.streams.firstOrNull;
+        _remoteVideo.value = RTCVideoView(
+          remote,
+          objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+        );
+      };
     }
+    final local = await _capture(video: video);
     _local = local;
-    if (local == null) {
-      await connection.addTransceiver(
-        kind: RTCRtpMediaType.RTCRtpMediaTypeAudio,
-        init: RTCRtpTransceiverInit(direction: TransceiverDirection.RecvOnly),
+    for (final track in local?.getTracks() ?? <MediaStreamTrack>[]) {
+      await connection.addTrack(track, local!);
+    }
+    // Without a microphone or camera, still hear and see the other person.
+    if (local == null || local.getAudioTracks().isEmpty) {
+      await _receiveOnly(connection, RTCRtpMediaType.RTCRtpMediaTypeAudio);
+    }
+    if (video && (local == null || local.getVideoTracks().isEmpty)) {
+      await _receiveOnly(connection, RTCRtpMediaType.RTCRtpMediaTypeVideo);
+    }
+    if (video && local != null && local.getVideoTracks().isNotEmpty) {
+      final renderer = RTCVideoRenderer();
+      await renderer.initialize();
+      renderer.srcObject = local;
+      _localRenderer = renderer;
+      _localView = RTCVideoView(
+        renderer,
+        mirror: true,
+        objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
       );
-    } else {
-      for (final track in local.getTracks()) {
-        await connection.addTrack(track, local);
-      }
+      _localVideo.value = _localView;
     }
     return connection;
   }
+
+  /// The microphone, and the camera for a video call; whatever of them is
+  /// there and allowed.
+  Future<MediaStream?> _capture({required bool video}) async {
+    final attempts = [
+      if (video)
+        {
+          'audio': true,
+          'video': {'facingMode': 'user'},
+        },
+      {'audio': true, 'video': false},
+    ];
+    for (final constraints in attempts) {
+      try {
+        return await navigator.mediaDevices.getUserMedia(constraints);
+      } on Object {
+        // Try with less.
+      }
+    }
+    return null;
+  }
+
+  Future<void> _receiveOnly(
+    RTCPeerConnection connection,
+    RTCRtpMediaType kind,
+  ) => connection.addTransceiver(
+    kind: kind,
+    init: RTCRtpTransceiverInit(direction: TransceiverDirection.RecvOnly),
+  );
 
   /// This side's description once every candidate is in it, or after
   /// [gathering] with those found so far.

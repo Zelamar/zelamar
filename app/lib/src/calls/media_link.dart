@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:zelamar/src/rust/api/session.dart';
 
 /// Where the media connection between the two devices is.
@@ -37,6 +39,18 @@ abstract interface class MediaLink {
 
   /// Sends sound to the loudspeaker or back to the earpiece (phones).
   Future<void> setSpeaker({required bool on});
+
+  /// The other person's picture once it arrives; `null` without one.
+  ValueListenable<Widget?> get remoteVideo;
+
+  /// This device's camera while it is on; `null` otherwise.
+  ValueListenable<Widget?> get localVideo;
+
+  /// Turns the camera off or on.
+  Future<void> setCamera({required bool on});
+
+  /// Switches between the front and back camera (phones).
+  Future<void> switchCamera();
 
   /// Ends the connection and lets go of the microphone and camera.
   Future<void> close();

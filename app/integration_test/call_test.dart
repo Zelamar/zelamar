@@ -92,7 +92,12 @@ void main() {
       );
       final chat = await alice.startChat(bobName);
       await alice.sendText(chat, 'Can I call you?');
-      await until(() => bob.chats.isNotEmpty, 'Bob gets the chat');
+      await until(
+        () =>
+            bob.chats.isNotEmpty &&
+            bob.chats.single.last?.text == 'Can I call you?',
+        'Bob gets the message',
+      );
       // Calls ring only in chats the user has accepted.
       await bob.sendText(chat, 'Sure!');
       await bob.markRead(chat);
@@ -139,6 +144,29 @@ void main() {
         expect(call?.durationMs, greaterThan(1500));
       }
       expect(bob.chats.single.unread, 0, reason: 'a call picked up is no news');
+
+      // A video call: the camera if there is one, the call either way.
+      await alice.startCall(chat, video: true);
+      await until(
+        () => bob.call?.phase == CallPhase.incoming && bob.call!.video,
+        'a video call rings',
+      );
+      await bob.acceptCall();
+      await until(
+        () =>
+            alice.call?.phase == CallPhase.active &&
+            bob.call?.phase == CallPhase.active,
+        'the video call connects',
+      );
+      await bob.hangUp();
+      await until(
+        () => alice.call == null && bob.call == null,
+        'the video call ends',
+      );
+      await until(
+        () => alice.chats.single.last?.call?.video ?? false,
+        'the chat shows a video call',
+      );
 
       // A call turned down.
       await alice.startCall(chat);

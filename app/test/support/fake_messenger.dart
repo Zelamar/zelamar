@@ -1,6 +1,7 @@
 import 'dart:async';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:zelamar/src/calls/call_state.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/messenger/outgoing_file.dart';
@@ -548,9 +549,30 @@ class FakeMessenger extends Messenger {
     callValue?.copyWith(speaker: on),
   );
 
+  /// The pictures of the video call shown; tests set them.
+  final remoteVideoValue = ValueNotifier<Widget?>(null);
+  final localVideoValue = ValueNotifier<Widget?>(null);
+
+  @override
+  ValueListenable<Widget?> get remoteVideo => remoteVideoValue;
+
+  @override
+  ValueListenable<Widget?> get localVideo => localVideoValue;
+
+  @override
+  Future<void> setCamera({required bool on}) async => _callAction(
+    on ? 'camera on' : 'camera off',
+    callValue?.copyWith(cameraOff: !on),
+  );
+
+  @override
+  Future<void> switchCamera() async => _callAction('flip', callValue);
+
   @override
   void dispose() {
     unawaited(_changes.close());
+    remoteVideoValue.dispose();
+    localVideoValue.dispose();
     super.dispose();
   }
 }

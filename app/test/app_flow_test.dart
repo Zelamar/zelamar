@@ -1083,6 +1083,50 @@ void main() {
       expect(find.byKey(const Key('call.status')), findsNothing);
     });
 
+    testWidgets('a video call shows both pictures and turns the camera off', (
+      tester,
+    ) async {
+      final messenger = FakeMessenger(
+        phaseValue: MessengerPhase.ready,
+        usernameValue: 'ada',
+      )..addChat('c1', '@bob', messages: [view(1, 'Video?')]);
+      await pumpApp(tester, messenger: messenger);
+      await tester.tap(find.byKey(const Key('chats.tile.c1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('chat.video')));
+      await settleCall(tester);
+      expect(messenger.callActions, ['start c1 video']);
+
+      messenger
+        ..localVideoValue.value = const ColoredBox(
+          key: Key('test.mine'),
+          color: Color(0xFFEADFCD),
+        )
+        ..remoteVideoValue.value = const ColoredBox(
+          key: Key('test.theirs'),
+          color: Color(0xFF8A5A30),
+        )
+        ..showCall(
+          messenger.call!.copyWith(
+            phase: CallPhase.active,
+            connectedAt: DateTime.now(),
+          ),
+        );
+      await tester.pump();
+      expect(find.byKey(const Key('test.theirs')), findsOneWidget);
+      expect(find.byKey(const Key('call.preview')), findsOneWidget);
+      expect(find.byKey(const Key('test.mine')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('call.camera')));
+      await tester.pump();
+      expect(messenger.callActions.last, 'camera off');
+      expect(messenger.call?.cameraOff, isTrue);
+
+      await tester.tap(find.byKey(const Key('call.end')));
+      await settleCall(tester);
+      expect(messenger.callActions.last, 'hang up');
+    });
+
     testWidgets('call lines say how a call went, and call back', (
       tester,
     ) async {

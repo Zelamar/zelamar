@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:zelamar/src/calls/call_controller.dart';
 import 'package:zelamar/src/calls/call_state.dart';
@@ -38,6 +39,18 @@ class FakeLink implements MediaLink {
 
   @override
   Future<void> setSpeaker({required bool on}) async => log.add('speaker=$on');
+
+  @override
+  final ValueNotifier<Widget?> remoteVideo = ValueNotifier(null);
+
+  @override
+  final ValueNotifier<Widget?> localVideo = ValueNotifier(null);
+
+  @override
+  Future<void> setCamera({required bool on}) async => log.add('camera=$on');
+
+  @override
+  Future<void> switchCamera() async => log.add('flip');
 
   @override
   Future<void> close() async {
@@ -398,6 +411,28 @@ void main() {
     await tester.pump(const Duration(seconds: 30));
     expect(rig.state, isNull);
     expect(rig.signaling.sent, ['answer ${id(1)} answer-sdp']);
+  });
+
+  testWidgets('a video call follows the pictures and the camera', (
+    tester,
+  ) async {
+    final rig = Rig();
+    unawaited(rig.controller.start('chat', peer: '@bob', video: true));
+    await tester.pump();
+    expect(rig.link.log, ['offer video=true']);
+    const theirs = SizedBox(key: Key('theirs'));
+    rig.link.remoteVideo.value = theirs;
+    expect(rig.controller.remoteVideo.value, theirs);
+
+    await rig.controller.setCamera(on: false);
+    expect(rig.state?.cameraOff, isTrue);
+    expect(rig.link.log, contains('camera=false'));
+    await rig.controller.switchCamera();
+    expect(rig.link.log.last, 'flip');
+
+    await rig.controller.hangUp();
+    expect(rig.controller.remoteVideo.value, isNull, reason: 'let go');
+    await tester.pump(const Duration(seconds: 2));
   });
 
   testWidgets('hanging up while the call is on its way withdraws it', (

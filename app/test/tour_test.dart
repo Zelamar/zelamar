@@ -442,5 +442,36 @@ void main() {
       messenger.showCall(null);
       await tester.pump(const Duration(milliseconds: 400));
     });
+
+    testWidgets('a video call', (tester) async {
+      final messenger = await _pump(tester, _lived());
+      // Stand-ins for the two pictures: a warm evening and a sand wall.
+      messenger
+        ..remoteVideoValue.value = const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Color(0xFFD9B98F), Color(0xFF8A5A30), Color(0xFF3A3029)],
+            ),
+          ),
+        )
+        ..localVideoValue.value = const ColoredBox(color: Color(0xFFEADFCD))
+        ..showCall(
+          CallState(
+            chat: 'c-bob',
+            peer: '@bob',
+            video: true,
+            outgoing: true,
+            phase: CallPhase.active,
+            id: 'call',
+            connectedAt: DateTime.now().subtract(const Duration(minutes: 7)),
+          ),
+        );
+      await tester.pump();
+      await _capture(tester, '31-video-call');
+      messenger.showCall(null);
+      await tester.pump(const Duration(milliseconds: 400));
+    });
   });
 }
