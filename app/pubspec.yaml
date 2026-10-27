@@ -4,7 +4,7 @@ publish_to: 'none'
 
 # <semver>+<build number>. The build number becomes Android versionCode and
 # the Windows file version suffix.
-version: 0.1.9+10
+version: 0.2.0+11
 
 environment:
   sdk: ^3.13.0
