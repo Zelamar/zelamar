@@ -25,10 +25,10 @@ class MainActivity : FlutterActivity() {
         ZelamarPlatform(applicationContext).install(flutterEngine, this)
     }
 
-    override fun cleanupFlutterEngine(flutterEngine: FlutterEngine) {
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         // Without a window: nothing is in front, and no one to ask.
         ZelamarPlatform(applicationContext).install(flutterEngine, null)
-        super.cleanupFlutterEngine(flutterEngine)
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
