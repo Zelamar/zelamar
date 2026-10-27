@@ -27,12 +27,15 @@ The plaintext of every MLS application message is one CBOR map:
 | `name` | `name`: string, 1–64 characters, no surrounding spaces, no control characters | Names the chat (a group); shown as a line |
 | `leave` | none | The author leaves the chat; shown as a line |
 | `file` | as in `attachments.md` | A photo, document or voice message |
+| `call` | as in `calls.md` | Starts a call; shown as a call line |
+| `call-answer` | as in `calls.md` | A device picks up a call |
+| `call-end` | as in `calls.md` | A call ends or is turned down |
 
 Receivers MUST check, against their own history, that an `edit` or
 `delete` targets a message by the same author (same account); otherwise
 they ignore it. A `receipt` only ever updates the receiver's own messages.
-A message id is unique within a chat: a `text`, `reply` or unknown kind
-whose `i` is already in the receiver's history MUST be rejected.
+A message id is unique within a chat: a `text`, `reply`, `file`, `call` or
+unknown kind whose `i` is already in the receiver's history MUST be rejected.
 
 A device sends its `profile` once per chat:
 - when it starts the chat;
@@ -42,8 +45,8 @@ So someone who declines a chat request reveals nothing.
 
 A device sends receipts only in chats it has introduced itself in, that is,
 chats the user started or wrote in:
-- a `delivered` receipt as each `text`, `reply` or unknown kind arrives from
-  someone else;
+- a `delivered` receipt as each `text`, `reply`, `file`, `call` or unknown
+  kind arrives from someone else;
 - a `read` receipt (the newest 256 at most) when the user sees the chat.
 
 Until the user writes, a stranger learns nothing, not even that a message

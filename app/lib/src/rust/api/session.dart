@@ -7,8 +7,8 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `blob_id`, `chat_key`, `claim_with`, `delivery_status`, `device_id`, `device_key`, `entries`, `failure`, `file_line`, `file`, `find_chat`, `joining`, `master`, `member_title`, `message_id`, `name_of`, `notice`, `now_ms`, `offer`, `own_name`, `preview`, `restoring`, `send_body`, `shorten`, `store_path`, `title`, `view`, `with`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
+// These functions are ignored because they are not marked as `pub`: `blob_id`, `call_line`, `call_record`, `call_signal`, `call_view`, `chat_key`, `claim_with`, `delivery_status`, `device_id`, `device_key`, `ending_of`, `entries`, `failure`, `file_line`, `file`, `find_chat`, `joining`, `master`, `member_title`, `message_id`, `missed_call`, `name_of`, `notice`, `now_ms`, `offer`, `own_name`, `peer_of`, `preview`, `restoring`, `send_body`, `shorten`, `store_path`, `title`, `view`, `with`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
 
 /// Takes one key package of one device of `username`, to add it to a chat
 /// with [`Session::add_member_devices`] (ADR-0018).
@@ -60,6 +60,13 @@ HttpCall keyLookupCall({required String username}) =>
 /// Lowercased `username` if it is well-formed, else `None`.
 String? normalizeUsername({required String username}) =>
     RustLib.instance.api.crateApiSessionNormalizeUsername(username: username);
+
+/// The servers in the answer to [`Session::ice_call`].
+Future<List<IceServerView>> iceServers({
+  required int status,
+  required List<int> body,
+}) =>
+    RustLib.instance.api.crateApiSessionIceServers(status: status, body: body);
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<Joiner>>
 abstract class Joiner implements RustOpaqueInterface {
@@ -145,6 +152,13 @@ abstract class Session implements RustOpaqueInterface {
   Future<void> addOwnDevices({
     required String chat,
     required List<HttpAnswer> answers,
+  });
+
+  /// Picks up `call` in `chat`; `sdp` is this device's answer.
+  Future<void> answerCall({
+    required String chat,
+    required String call,
+    required String sdp,
   });
 
   /// Approves the device that asked: its certificate, this account's
@@ -236,6 +250,15 @@ abstract class Session implements RustOpaqueInterface {
     required String text,
   });
 
+  /// Ends `call` in `chat`, or turns it down; `duration_ms` is how long
+  /// the people talked.
+  Future<void> endCall({
+    required String chat,
+    required String call,
+    required CallEnding ending,
+    int? durationMs,
+  });
+
   /// The account key's fingerprint, for "this is me" screens:
   /// `a1b2 c3d4 e5f6 0718 9a0b c1d2 e3f4 0516`.
   String fingerprint();
@@ -243,6 +266,10 @@ abstract class Session implements RustOpaqueInterface {
   /// Reads the answer to [`Session::devices_call`]: which chats lack
   /// which of this account's devices, and which still hold removed ones.
   Future<HealPlan> healPlan({required int status, required List<int> body});
+
+  /// Asks for the servers that help this device's calls connect; read
+  /// the answer with [`ice_servers`].
+  HttpCall iceCall();
 
   /// Leaves `chat` and erases it here; the others are told.
   Future<void> leaveChat({required String chat});
@@ -413,6 +440,14 @@ abstract class Session implements RustOpaqueInterface {
   /// Remembers what this device calls itself; linking passes it on.
   Future<void> setOwnLabel({required String label});
 
+  /// Calls the other person in `chat`; `sdp` is this device's offer.
+  /// Returns the call's id (ADR-0019).
+  Future<String> startCall({
+    required String chat,
+    required bool video,
+    required String sdp,
+  });
+
   /// Starts a chat from the answer to [`lookup_call`] for `username`, and
   /// `own`, the answer to a lookup of this account's own name, so its
   /// other devices are in from the start. Returns the chat id.
@@ -425,6 +460,164 @@ abstract class Session implements RustOpaqueInterface {
 
   /// The username this account holds, once claimed.
   String? username();
+}
+
+/// Why a call ends.
+enum CallEnding {
+  /// Someone hung up; before an answer, the caller gave up.
+  hangup,
+
+  /// The person called said no.
+  declined,
+
+  /// Nobody answered in time.
+  missed,
+
+  /// The person called is in another call.
+  busy,
+
+  /// The connection could not be made, or was lost.
+  failed,
+
+  /// A reason from a newer Zelamar.
+  other,
+}
+
+/// How a call went (ADR-0019).
+enum CallOutcome {
+  /// Ringing, or going on.
+  ongoing,
+
+  /// Someone picked up; `duration_ms` says for how long, once it is over.
+  talked,
+
+  /// Nobody picked up in time.
+  missed,
+
+  /// The person called said no.
+  declined,
+
+  /// The caller gave up before anyone picked up.
+  cancelled,
+
+  /// The person called was in another call.
+  busy,
+
+  /// The connection could not be made.
+  failed,
+}
+
+/// A call message for this device.
+class CallSignal {
+  final CallSignalKind kind;
+  final String chat;
+
+  /// The call's id, base64url.
+  final String call;
+
+  /// Sent by another of this account's devices.
+  final bool own;
+
+  /// The other person in the chat: `@bob`.
+  final String peer;
+
+  /// Whether the call starts with video ([`CallSignalKind::Offer`]).
+  final bool video;
+
+  /// The offer or the answer.
+  final String? sdp;
+
+  /// For an offer: whether this device should ring now. Never for a
+  /// group, a chat request, one's own call, a call already over, or an
+  /// old one.
+  final bool ring;
+
+  /// For [`CallSignalKind::End`].
+  final CallEnding? ending;
+
+  /// For [`CallSignalKind::End`]: how long the people talked.
+  final int? durationMs;
+
+  const CallSignal({
+    required this.kind,
+    required this.chat,
+    required this.call,
+    required this.own,
+    required this.peer,
+    required this.video,
+    this.sdp,
+    required this.ring,
+    this.ending,
+    this.durationMs,
+  });
+
+  @override
+  int get hashCode =>
+      kind.hashCode ^
+      chat.hashCode ^
+      call.hashCode ^
+      own.hashCode ^
+      peer.hashCode ^
+      video.hashCode ^
+      sdp.hashCode ^
+      ring.hashCode ^
+      ending.hashCode ^
+      durationMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CallSignal &&
+          runtimeType == other.runtimeType &&
+          kind == other.kind &&
+          chat == other.chat &&
+          call == other.call &&
+          own == other.own &&
+          peer == other.peer &&
+          video == other.video &&
+          sdp == other.sdp &&
+          ring == other.ring &&
+          ending == other.ending &&
+          durationMs == other.durationMs;
+}
+
+/// What a call message asks of this device (ADR-0019).
+enum CallSignalKind {
+  /// Someone calls: ring, if [`CallSignal::ring`] says so.
+  offer,
+
+  /// A device picked up: the caller connects to it; the called person's
+  /// other devices stop ringing.
+  answer,
+
+  /// The call is over.
+  end,
+
+  /// The call reached the person called: their device is ringing.
+  ringing,
+}
+
+/// A call in a chat, shown as a line.
+class CallView {
+  final bool video;
+  final CallOutcome outcome;
+
+  /// How long the people talked.
+  final int? durationMs;
+
+  const CallView({required this.video, required this.outcome, this.durationMs});
+
+  @override
+  int get hashCode => video.hashCode ^ outcome.hashCode ^ durationMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CallView &&
+          runtimeType == other.runtimeType &&
+          video == other.video &&
+          outcome == other.outcome &&
+          durationMs == other.durationMs;
 }
 
 /// Something that happened to a chat.
@@ -738,6 +931,27 @@ class HttpHeader {
           value == other.value;
 }
 
+/// One server that helps calls connect.
+class IceServerView {
+  final List<String> urls;
+  final String? username;
+  final String? credential;
+
+  const IceServerView({required this.urls, this.username, this.credential});
+
+  @override
+  int get hashCode => urls.hashCode ^ username.hashCode ^ credential.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is IceServerView &&
+          runtimeType == other.runtimeType &&
+          urls == other.urls &&
+          username == other.username &&
+          credential == other.credential;
+}
+
 /// What one envelope from the mailbox did.
 class InboxEvent {
   /// Send this frame back over the WebSocket; `None` leaves the envelope
@@ -760,6 +974,9 @@ class InboxEvent {
   /// A new message from someone else, worth a notification.
   final Notice? notice;
 
+  /// What a call message asks of this device (ADR-0019).
+  final CallSignal? call;
+
   const InboxEvent({
     this.ack,
     this.chat,
@@ -767,6 +984,7 @@ class InboxEvent {
     required this.left,
     this.refused,
     this.notice,
+    this.call,
   });
 
   @override
@@ -776,7 +994,8 @@ class InboxEvent {
       joined.hashCode ^
       left.hashCode ^
       refused.hashCode ^
-      notice.hashCode;
+      notice.hashCode ^
+      call.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -788,7 +1007,8 @@ class InboxEvent {
           joined == other.joined &&
           left == other.left &&
           refused == other.refused &&
-          notice == other.notice;
+          notice == other.notice &&
+          call == other.call;
 }
 
 /// Someone to add to a group: the name asked for and the directory's
@@ -973,6 +1193,9 @@ class MessageView {
   /// bubble; `text` is empty then.
   final ChatEvent? event;
 
+  /// A call; `text` is empty then.
+  final CallView? call;
+
   const MessageView({
     required this.id,
     required this.seq,
@@ -989,6 +1212,7 @@ class MessageView {
     required this.author,
     this.file,
     this.event,
+    this.call,
   });
 
   @override
@@ -1007,7 +1231,8 @@ class MessageView {
       editable.hashCode ^
       author.hashCode ^
       file.hashCode ^
-      event.hashCode;
+      event.hashCode ^
+      call.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1028,7 +1253,8 @@ class MessageView {
           editable == other.editable &&
           author == other.author &&
           file == other.file &&
-          event == other.event;
+          event == other.event &&
+          call == other.call;
 }
 
 /// What a notification about a new message says.

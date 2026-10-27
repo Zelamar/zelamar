@@ -21,6 +21,7 @@ migration). Drafted in Phase 2 together with the core implementation.
 | [`linking.md`](linking.md) ✅ | Linking a new device with a typed code; chats that follow the account |
 | [`attachments.md`](attachments.md) ✅ | Client-side encrypted files: sealed chunks, the `file` message, the blob store, expiry |
 | [`recovery.md`](recovery.md) ✅ | A recovery key, a sealed kit at the service, chats that heal across accounts |
+| [`calls.md`](calls.md) ✅ | Calls: WebRTC set up inside the chat, call servers, call records |
 
 ## Test vectors
 

@@ -150,6 +150,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  CallEnding dco_decode_box_autoadd_call_ending(dynamic raw);
+
+  @protected
+  CallSignal dco_decode_box_autoadd_call_signal(dynamic raw);
+
+  @protected
+  CallView dco_decode_box_autoadd_call_view(dynamic raw);
+
+  @protected
   ChatEvent dco_decode_box_autoadd_chat_event(dynamic raw);
 
   @protected
@@ -178,6 +187,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int dco_decode_box_autoadd_u_32(dynamic raw);
+
+  @protected
+  CallEnding dco_decode_call_ending(dynamic raw);
+
+  @protected
+  CallOutcome dco_decode_call_outcome(dynamic raw);
+
+  @protected
+  CallSignal dco_decode_call_signal(dynamic raw);
+
+  @protected
+  CallSignalKind dco_decode_call_signal_kind(dynamic raw);
+
+  @protected
+  CallView dco_decode_call_view(dynamic raw);
 
   @protected
   ChatEvent dco_decode_chat_event(dynamic raw);
@@ -220,6 +244,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PlatformInt64 dco_decode_i_64(dynamic raw);
+
+  @protected
+  IceServerView dco_decode_ice_server_view(dynamic raw);
 
   @protected
   InboxEvent dco_decode_inbox_event(dynamic raw);
@@ -265,6 +292,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<HttpHeader> dco_decode_list_http_header(dynamic raw);
+
+  @protected
+  List<IceServerView> dco_decode_list_ice_server_view(dynamic raw);
 
   @protected
   List<Invitee> dco_decode_list_invitee(dynamic raw);
@@ -319,6 +349,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   dco_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     dynamic raw,
   );
+
+  @protected
+  CallEnding? dco_decode_opt_box_autoadd_call_ending(dynamic raw);
+
+  @protected
+  CallSignal? dco_decode_opt_box_autoadd_call_signal(dynamic raw);
+
+  @protected
+  CallView? dco_decode_opt_box_autoadd_call_view(dynamic raw);
 
   @protected
   ChatEvent? dco_decode_opt_box_autoadd_chat_event(dynamic raw);
@@ -498,6 +537,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  CallEnding sse_decode_box_autoadd_call_ending(SseDeserializer deserializer);
+
+  @protected
+  CallSignal sse_decode_box_autoadd_call_signal(SseDeserializer deserializer);
+
+  @protected
+  CallView sse_decode_box_autoadd_call_view(SseDeserializer deserializer);
+
+  @protected
   ChatEvent sse_decode_box_autoadd_chat_event(SseDeserializer deserializer);
 
   @protected
@@ -528,6 +576,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
+  CallEnding sse_decode_call_ending(SseDeserializer deserializer);
+
+  @protected
+  CallOutcome sse_decode_call_outcome(SseDeserializer deserializer);
+
+  @protected
+  CallSignal sse_decode_call_signal(SseDeserializer deserializer);
+
+  @protected
+  CallSignalKind sse_decode_call_signal_kind(SseDeserializer deserializer);
+
+  @protected
+  CallView sse_decode_call_view(SseDeserializer deserializer);
 
   @protected
   ChatEvent sse_decode_chat_event(SseDeserializer deserializer);
@@ -570,6 +633,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
+
+  @protected
+  IceServerView sse_decode_ice_server_view(SseDeserializer deserializer);
 
   @protected
   InboxEvent sse_decode_inbox_event(SseDeserializer deserializer);
@@ -617,6 +683,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<HttpHeader> sse_decode_list_http_header(SseDeserializer deserializer);
+
+  @protected
+  List<IceServerView> sse_decode_list_ice_server_view(
+    SseDeserializer deserializer,
+  );
 
   @protected
   List<Invitee> sse_decode_list_invitee(SseDeserializer deserializer);
@@ -673,6 +744,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   sse_decode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     SseDeserializer deserializer,
   );
+
+  @protected
+  CallEnding? sse_decode_opt_box_autoadd_call_ending(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  CallSignal? sse_decode_opt_box_autoadd_call_signal(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  CallView? sse_decode_opt_box_autoadd_call_view(SseDeserializer deserializer);
 
   @protected
   ChatEvent? sse_decode_opt_box_autoadd_chat_event(
@@ -877,6 +961,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_call_ending(
+    CallEnding self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_call_signal(
+    CallSignal self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_call_view(
+    CallView self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_chat_event(
     ChatEvent self,
     SseSerializer serializer,
@@ -928,6 +1030,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
 
   @protected
+  void sse_encode_call_ending(CallEnding self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_call_outcome(CallOutcome self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_call_signal(CallSignal self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_call_signal_kind(
+    CallSignalKind self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_call_view(CallView self, SseSerializer serializer);
+
+  @protected
   void sse_encode_chat_event(ChatEvent self, SseSerializer serializer);
 
   @protected
@@ -971,6 +1091,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_ice_server_view(IceServerView self, SseSerializer serializer);
 
   @protected
   void sse_encode_inbox_event(InboxEvent self, SseSerializer serializer);
@@ -1035,6 +1158,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_http_header(
     List<HttpHeader> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_ice_server_view(
+    List<IceServerView> self,
     SseSerializer serializer,
   );
 
@@ -1108,6 +1237,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSession(
     Session? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_call_ending(
+    CallEnding? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_call_signal(
+    CallSignal? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_call_view(
+    CallView? self,
     SseSerializer serializer,
   );
 

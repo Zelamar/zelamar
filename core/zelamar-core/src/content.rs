@@ -37,6 +37,10 @@ pub const MAX_FILE_NAME: usize = 255;
 /// Largest inline thumbnail, in bytes.
 pub const MAX_THUMBNAIL: usize = 8 * 1024;
 
+/// Longest session description in a call offer or answer, in bytes. One
+/// with every candidate gathered is a few kilobytes.
+pub const MAX_SDP: usize = 16 * 1024;
+
 /// A file stored as an encrypted blob, and what it takes to fetch and open
 /// it (ADR-0016).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +100,25 @@ pub enum ReceiptStatus {
     Delivered,
     /// Shown to the receiver.
     Read,
+}
+
+/// Why a call ended (ADR-0019).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CallEndReason {
+    /// Someone hung up; before an answer, the caller gave up.
+    Hangup,
+    /// The person called said no.
+    Declined,
+    /// Nobody answered in time.
+    Missed,
+    /// The person called is in another call.
+    Busy,
+    /// The connection could not be made, or was lost.
+    Failed,
+    /// A reason from a newer Zelamar. Received only; never sent.
+    #[serde(other)]
+    Other,
 }
 
 /// The kinds of content.
@@ -160,6 +183,31 @@ pub enum Body {
     Leave,
     /// A file: a photo, a document, a voice message.
     File(Box<FileRef>),
+    /// Starts a call: the other person's devices ring (ADR-0019). The
+    /// message id is the call's id.
+    Call {
+        /// Whether it starts with video.
+        video: bool,
+        /// The caller's WebRTC offer, every candidate included; at most
+        /// [`MAX_SDP`] bytes.
+        sdp: String,
+    },
+    /// One of the called person's devices picks up.
+    CallAnswer {
+        /// The call.
+        call: MessageId,
+        /// That device's WebRTC answer, every candidate included.
+        sdp: String,
+    },
+    /// A call ends, or is turned down before it starts.
+    CallEnd {
+        /// The call.
+        call: MessageId,
+        /// Why.
+        reason: CallEndReason,
+        /// How long the people talked, by the clock of whoever ended it.
+        duration_ms: Option<u32>,
+    },
     /// A kind this Zelamar does not know yet (sent by a newer version).
     /// Received only; never sent.
     Unknown {
@@ -234,6 +282,26 @@ struct NameFields {
 struct LeaveFields {}
 
 #[derive(Serialize, Deserialize)]
+struct CallFields {
+    video: bool,
+    sdp: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CallAnswerFields {
+    call: MessageId,
+    sdp: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CallEndFields {
+    call: MessageId,
+    reason: CallEndReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize)]
 struct ReceiptFields {
     status: ReceiptStatus,
     messages: Vec<MessageId>,
@@ -265,53 +333,7 @@ impl AppMessage {
     /// [`CoreError::Malformed`] for [`Body::Unknown`], which is never sent.
     pub fn encode(&self) -> Result<Vec<u8>> {
         self.validate()?;
-        let (kind, fields) = match &self.body {
-            Body::Text { text } => ("text", fields(&TextFields { text: text.clone() })?),
-            Body::Reply { to, text } => (
-                "reply",
-                fields(&ReplyFields {
-                    to: *to,
-                    text: text.clone(),
-                })?,
-            ),
-            Body::Edit { target, text } => (
-                "edit",
-                fields(&EditFields {
-                    target: *target,
-                    text: text.clone(),
-                })?,
-            ),
-            Body::React { target, reaction } => (
-                "react",
-                fields(&ReactFields {
-                    target: *target,
-                    reaction: reaction.clone(),
-                })?,
-            ),
-            Body::Delete { target } => ("delete", fields(&DeleteFields { target: *target })?),
-            Body::Receipt { status, messages } => (
-                "receipt",
-                fields(&ReceiptFields {
-                    status: *status,
-                    messages: messages.clone(),
-                })?,
-            ),
-            Body::Profile { username } => (
-                "profile",
-                fields(&ProfileFields {
-                    username: username.clone(),
-                })?,
-            ),
-            Body::Name { name } => ("name", fields(&NameFields { name: name.clone() })?),
-            Body::Leave => ("leave", fields(&LeaveFields {})?),
-            Body::File(file) => ("file", fields(file.as_ref())?),
-            Body::Unknown { .. } => {
-                return Err(CoreError::malformed(
-                    "message content",
-                    "unknown kinds are never sent",
-                ));
-            }
-        };
+        let (kind, fields) = self.body.to_wire()?;
         let wire = Wire {
             v: self.version,
             i: self.id,
@@ -360,72 +382,189 @@ impl AppMessage {
         if wire.k.len() > MAX_KIND {
             return Err(CoreError::malformed(WHAT, "kind name too long"));
         }
-        let body = match wire.k.as_str() {
+        let message = Self {
+            version: wire.v,
+            id: wire.i,
+            sent_at_ms: wire.t,
+            body: Body::from_wire(&wire.k, &wire.c)?,
+        };
+        message.validate()?;
+        Ok(message)
+    }
+}
+
+impl Body {
+    /// The kind's name and fields, as they go on the wire.
+    fn to_wire(&self) -> Result<(&'static str, ciborium::Value)> {
+        Ok(match self {
+            Self::Text { text } => ("text", fields(&TextFields { text: text.clone() })?),
+            Self::Reply { to, text } => (
+                "reply",
+                fields(&ReplyFields {
+                    to: *to,
+                    text: text.clone(),
+                })?,
+            ),
+            Self::Edit { target, text } => (
+                "edit",
+                fields(&EditFields {
+                    target: *target,
+                    text: text.clone(),
+                })?,
+            ),
+            Self::React { target, reaction } => (
+                "react",
+                fields(&ReactFields {
+                    target: *target,
+                    reaction: reaction.clone(),
+                })?,
+            ),
+            Self::Delete { target } => ("delete", fields(&DeleteFields { target: *target })?),
+            Self::Receipt { status, messages } => (
+                "receipt",
+                fields(&ReceiptFields {
+                    status: *status,
+                    messages: messages.clone(),
+                })?,
+            ),
+            Self::Profile { username } => (
+                "profile",
+                fields(&ProfileFields {
+                    username: username.clone(),
+                })?,
+            ),
+            Self::Name { name } => ("name", fields(&NameFields { name: name.clone() })?),
+            Self::Leave => ("leave", fields(&LeaveFields {})?),
+            Self::File(file) => ("file", fields(file.as_ref())?),
+            Self::Call { video, sdp } => (
+                "call",
+                fields(&CallFields {
+                    video: *video,
+                    sdp: sdp.clone(),
+                })?,
+            ),
+            Self::CallAnswer { call, sdp } => (
+                "call-answer",
+                fields(&CallAnswerFields {
+                    call: *call,
+                    sdp: sdp.clone(),
+                })?,
+            ),
+            Self::CallEnd {
+                reason: CallEndReason::Other,
+                ..
+            } => {
+                return Err(CoreError::malformed(
+                    "call end",
+                    "unknown reasons are never sent",
+                ));
+            }
+            Self::CallEnd {
+                call,
+                reason,
+                duration_ms,
+            } => (
+                "call-end",
+                fields(&CallEndFields {
+                    call: *call,
+                    reason: *reason,
+                    duration_ms: *duration_ms,
+                })?,
+            ),
+            Self::Unknown { .. } => {
+                return Err(CoreError::malformed(
+                    "message content",
+                    "unknown kinds are never sent",
+                ));
+            }
+        })
+    }
+
+    /// The body of kind `kind` with fields `c`; a kind this Zelamar does
+    /// not know is [`Self::Unknown`].
+    fn from_wire(kind: &str, c: &ciborium::Value) -> Result<Self> {
+        Ok(match kind {
             "text" => {
-                let f: TextFields = parse(&wire.c)?;
-                Body::Text { text: f.text }
+                let f: TextFields = parse(c)?;
+                Self::Text { text: f.text }
             }
             "reply" => {
-                let f: ReplyFields = parse(&wire.c)?;
-                Body::Reply {
+                let f: ReplyFields = parse(c)?;
+                Self::Reply {
                     to: f.to,
                     text: f.text,
                 }
             }
             "edit" => {
-                let f: EditFields = parse(&wire.c)?;
-                Body::Edit {
+                let f: EditFields = parse(c)?;
+                Self::Edit {
                     target: f.target,
                     text: f.text,
                 }
             }
             "react" => {
-                let f: ReactFields = parse(&wire.c)?;
-                Body::React {
+                let f: ReactFields = parse(c)?;
+                Self::React {
                     target: f.target,
                     reaction: f.reaction,
                 }
             }
             "delete" => {
-                let f: DeleteFields = parse(&wire.c)?;
-                Body::Delete { target: f.target }
+                let f: DeleteFields = parse(c)?;
+                Self::Delete { target: f.target }
             }
             "receipt" => {
-                let f: ReceiptFields = parse(&wire.c)?;
-                Body::Receipt {
+                let f: ReceiptFields = parse(c)?;
+                Self::Receipt {
                     status: f.status,
                     messages: f.messages,
                 }
             }
             "profile" => {
-                let f: ProfileFields = parse(&wire.c)?;
-                Body::Profile {
+                let f: ProfileFields = parse(c)?;
+                Self::Profile {
                     username: f.username,
                 }
             }
             "name" => {
-                let f: NameFields = parse(&wire.c)?;
-                Body::Name { name: f.name }
+                let f: NameFields = parse(c)?;
+                Self::Name { name: f.name }
             }
             "leave" => {
-                let _: LeaveFields = parse(&wire.c)?;
-                Body::Leave
+                let _: LeaveFields = parse(c)?;
+                Self::Leave
             }
-            "file" => Body::File(Box::new(parse(&wire.c)?)),
-            other => Body::Unknown {
+            "file" => Self::File(Box::new(parse(c)?)),
+            "call" => {
+                let f: CallFields = parse(c)?;
+                Self::Call {
+                    video: f.video,
+                    sdp: f.sdp,
+                }
+            }
+            "call-answer" => {
+                let f: CallAnswerFields = parse(c)?;
+                Self::CallAnswer {
+                    call: f.call,
+                    sdp: f.sdp,
+                }
+            }
+            "call-end" => {
+                let f: CallEndFields = parse(c)?;
+                Self::CallEnd {
+                    call: f.call,
+                    reason: f.reason,
+                    duration_ms: f.duration_ms,
+                }
+            }
+            other => Self::Unknown {
                 kind: other.to_owned(),
             },
-        };
-        let message = Self {
-            version: wire.v,
-            id: wire.i,
-            sent_at_ms: wire.t,
-            body,
-        };
-        message.validate()?;
-        Ok(message)
+        })
     }
+}
 
+impl AppMessage {
     fn validate(&self) -> Result<()> {
         let too_large = |what, size, limit| Err(CoreError::TooLarge { what, size, limit });
         match &self.body {
@@ -462,6 +601,12 @@ impl AppMessage {
                 ))
             }
             Body::File(file) => validate_file(file),
+            Body::Call { sdp, .. } | Body::CallAnswer { sdp, .. } if sdp.is_empty() => {
+                Err(CoreError::malformed("call", "no session description"))
+            }
+            Body::Call { sdp, .. } | Body::CallAnswer { sdp, .. } if sdp.len() > MAX_SDP => {
+                too_large("session description", sdp.len(), MAX_SDP)
+            }
             Body::Name { name }
                 if name.is_empty()
                     || name.trim() != name
@@ -567,6 +712,32 @@ mod tests {
         });
         round_trip(Body::Leave);
         round_trip(Body::File(Box::new(photo())));
+        round_trip(Body::Call {
+            video: true,
+            sdp: "v=0\r\n".into(),
+        });
+        round_trip(Body::CallAnswer {
+            call: A,
+            sdp: "v=0\r\n".into(),
+        });
+        for reason in [
+            CallEndReason::Hangup,
+            CallEndReason::Declined,
+            CallEndReason::Missed,
+            CallEndReason::Busy,
+            CallEndReason::Failed,
+        ] {
+            round_trip(Body::CallEnd {
+                call: A,
+                reason,
+                duration_ms: Some(204_000),
+            });
+        }
+        round_trip(Body::CallEnd {
+            call: A,
+            reason: CallEndReason::Missed,
+            duration_ms: None,
+        });
         round_trip(Body::File(Box::new(FileRef {
             name: "voice.m4a".into(),
             mime: "audio/mp4".into(),
@@ -675,6 +846,58 @@ lines",
             }
         );
         assert!(decoded.encode().is_err(), "unknown kinds are never re-sent");
+    }
+
+    #[test]
+    fn calls_carry_a_bounded_session_description() {
+        let call = |sdp: String| AppMessage::new(A, 1, Body::Call { video: false, sdp });
+        assert!(call(String::new()).encode().is_err());
+        assert!(matches!(
+            call("x".repeat(MAX_SDP + 1)).encode(),
+            Err(CoreError::TooLarge { .. })
+        ));
+        assert!(call("x".repeat(MAX_SDP)).encode().is_ok());
+        let answer = AppMessage::new(
+            A,
+            1,
+            Body::CallAnswer {
+                call: B,
+                sdp: String::new(),
+            },
+        );
+        assert!(answer.encode().is_err());
+    }
+
+    #[test]
+    fn a_call_end_reason_from_a_newer_zelamar_is_read_not_resent() {
+        #[derive(Serialize)]
+        struct Future {
+            call: MessageId,
+            reason: &'static str,
+        }
+        let wire = Wire {
+            v: 0,
+            i: A,
+            t: 1,
+            k: "call-end".into(),
+            c: fields(&Future {
+                call: B,
+                reason: "on_another_planet",
+            })
+            .expect("fields"),
+        };
+        let mut bytes = Vec::new();
+        ciborium::into_writer(&wire, &mut bytes).expect("encode");
+        let decoded = AppMessage::decode(&bytes).expect("decode");
+        assert_eq!(
+            decoded.body,
+            Body::CallEnd {
+                call: B,
+                reason: CallEndReason::Other,
+                duration_ms: None,
+            }
+        );
+        assert!(decoded.encode().is_err(), "unknown reasons are never sent");
     }
 
     #[test]

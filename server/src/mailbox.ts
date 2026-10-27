@@ -23,12 +23,16 @@ export const UPLOAD_QUOTA = 512 * 1024 * 1024;
 /** At most one push wake-up per mailbox in this long (ADR-0017). */
 export const PUSH_INTERVAL_MS = 30_000;
 
+/** Calls' server lists one mailbox may ask for per UTC day (ADR-0019). */
+export const ICE_QUOTA = 200;
+
 /** Acknowledgement frame tag: `0x01` followed by 16-byte envelope ids. */
 const ACK = 0x01;
 
 export type ClaimOutcome = 'claimed' | 'same' | 'taken';
 export type DepositOutcome = 'queued' | 'duplicate' | 'unknown' | 'full';
 export type UploadAllowance = 'allowed' | 'unauthorized' | 'over_quota';
+export type IceAllowance = UploadAllowance;
 
 /** Per-connection state that survives hibernation. */
 interface Cursor {
@@ -79,6 +83,37 @@ export class Mailbox extends DurableObject<Env> {
        ON CONFLICT (id) DO UPDATE SET day = excluded.day, bytes = excluded.bytes`,
       today,
       used + bytes,
+    );
+    return 'allowed';
+  }
+
+  /**
+   * Whether the holder of `secret` owns this mailbox and may get one more
+   * list of call servers today; counts it if so (ADR-0019). Each list may
+   * carry relay credentials, which cost money once used, so they are
+   * rationed like uploads.
+   */
+  async allowIce(secret: ArrayBuffer): Promise<IceAllowance> {
+    if (!(await this.owns(secret))) {
+      return 'unauthorized';
+    }
+    const sql = this.ctx.storage.sql;
+    sql.exec(
+      'CREATE TABLE IF NOT EXISTS ice (id INTEGER PRIMARY KEY CHECK (id = 1), day INTEGER NOT NULL, count INTEGER NOT NULL)',
+    );
+    const today = Math.floor(Date.now() / 86_400_000);
+    const row = sql
+      .exec<{ day: number; count: number }>('SELECT day, count FROM ice WHERE id = 1')
+      .toArray()[0];
+    const used = row?.day === today ? row.count : 0;
+    if (used >= ICE_QUOTA) {
+      return 'over_quota';
+    }
+    sql.exec(
+      `INSERT INTO ice (id, day, count) VALUES (1, ?, ?)
+       ON CONFLICT (id) DO UPDATE SET day = excluded.day, count = excluded.count`,
+      today,
+      used + 1,
     );
     return 'allowed';
   }
@@ -241,7 +276,6 @@ export class Mailbox extends DurableObject<Env> {
     }
   }
 
-  /** The owner's secret hash; `null` while unclaimed (and nothing is stored). */
   /** Whether `secret` is this mailbox's. */
   private async owns(secret: ArrayBuffer): Promise<boolean> {
     const owner = this.owner();
@@ -296,6 +330,7 @@ export class Mailbox extends DurableObject<Env> {
     }
   }
 
+  /** The owner's secret hash; `null` while unclaimed (and nothing is stored). */
   private owner(): Uint8Array | null {
     const exists = this.ctx.storage.sql
       .exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'owner'")

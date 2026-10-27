@@ -30,6 +30,8 @@
   // INVITE_KEY (hex, 32+ bytes) is a secret: `wrangler secret put INVITE_KEY`.
   // FCM_SERVICE_ACCOUNT (a Firebase service account key, JSON) is a secret
   // too; without it push wake-ups are only counted (ADR-0017).
+  // TURN_KEY_ID and TURN_KEY_API_TOKEN (a Cloudflare TURN key) are secrets
+  // too; without them calls get STUN only and connect directly (ADR-0019).
   "vars": { "WORK_BITS": "21" },
   // Per network address, until anonymous tokens take over (ADR-0012).
   "ratelimits": [
@@ -47,6 +49,8 @@
     },
     // Fetching a recovery kit: a person types a key a few times at most.
     { "name": "RECOVER_LIMITER", "namespace_id": "1007", "simple": { "limit": 10, "period": 60 } },
+    // Call servers: one list per call, a few calls a minute at most.
+    { "name": "ICE_LIMITER", "namespace_id": "1008", "simple": { "limit": 30, "period": 60 } },
   ],
   "observability": {
     "enabled": true,

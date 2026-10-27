@@ -21,6 +21,7 @@ import {
 } from './frames';
 import { failure, json, parseObject, readBody, respond, type Reply } from './http';
 import { MAX_CHUNK, MAX_CHUNKS } from './blob';
+import { iceServers, turnKey } from './ice';
 import { inviteKey, inviteSerial } from './invite';
 import { type LinkPart, linkMessage, MAX_LINK_ANSWER } from './link';
 import type { SignedRequest } from './signed';
@@ -80,6 +81,9 @@ async function route(request: Request, env: Env): Promise<Response> {
       return json({ error: 'method_not_allowed' }, 405, { allow: 'PUT, DELETE' });
     }
     return respond(await pushToken(request, env, name));
+  }
+  if (resource === 'mailboxes' && name !== undefined && sub === 'ice' && parts.length === 4) {
+    return only(request, 'POST') ?? respond(await ice(request, env, name));
   }
   if (resource === 'mailboxes' && name !== undefined && parts.length === 3) {
     return only(request, 'GET') ?? mailbox(request, env, name);
@@ -255,6 +259,27 @@ async function pushToken(request: Request, env: Env, name: string): Promise<Repl
   }
   const outcome = await env.MAILBOX.getByName(name).setPush(buffer(secretBytes), token);
   return outcome === 'ok' ? { status: 200, body: {} } : failure(401, 'unauthorized');
+}
+
+/**
+ * The servers that help this mailbox's device connect a call (ADR-0019),
+ * for whoever proves the mailbox secret.
+ */
+async function ice(request: Request, env: Env, name: string): Promise<Reply> {
+  const secret = /^Bearer ([A-Za-z0-9_-]+)$/u.exec(request.headers.get('authorization') ?? '');
+  const secretBytes = fixedBase64Url(secret?.[1], 32);
+  if (fixedBase64Url(name, 32) === null || secretBytes === null) {
+    return failure(401, 'unauthorized');
+  }
+  if (!(await allowed(env.ICE_LIMITER, request))) {
+    return failure(429, 'rate_limited');
+  }
+  const allowance = await env.MAILBOX.getByName(name).allowIce(buffer(secretBytes));
+  if (allowance !== 'allowed') {
+    return allowance === 'over_quota' ? failure(429, 'over_quota') : failure(401, 'unauthorized');
+  }
+  const key = turnKey(env.TURN_KEY_ID, env.TURN_KEY_API_TOKEN);
+  return { status: 200, body: { ice_servers: await iceServers(key) } };
 }
 
 function mailbox(request: Request, env: Env, name: string): Promise<Response> | Response {

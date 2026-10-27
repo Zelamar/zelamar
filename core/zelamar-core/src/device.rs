@@ -927,6 +927,14 @@ impl Device {
         Ok(accounts)
     }
 
+    /// Whether the user has taken part in `chat` here: started it, wrote in
+    /// it or accepted it. Until then it is a request, and nothing from it
+    /// rings (ADR-0019).
+    #[must_use]
+    pub fn accepted(&self, chat: &ChatId) -> bool {
+        self.introduced.contains(chat)
+    }
+
     /// Every chat this device takes part in, in a stable order.
     #[must_use]
     pub fn chats(&self) -> Vec<ChatId> {
@@ -2570,9 +2578,13 @@ fn encode_labels(labels: &BTreeMap<DeviceId, String>) -> Result<Vec<u8>> {
 }
 
 /// Whether `message` is someone else's message the user has not seen:
-/// events (a name, someone leaving) are lines, not messages.
+/// events (a name, someone leaving) are lines, not messages, and a call
+/// someone picked up was not missed.
 const fn unread_message(message: &StoredMessage) -> bool {
-    !message.outgoing && !message.deleted && !message.content.is_event()
+    !message.outgoing
+        && !message.deleted
+        && !message.content.is_event()
+        && !message.content.is_answered_call()
 }
 
 /// The record `name` decoded, or the empty value if it was never written.

@@ -231,6 +231,69 @@ pub fn push_set(status: u16, body: &[u8]) -> Result<()> {
     expect_success(status, body, &[200])
 }
 
+/// A server that helps a call connect (ADR-0019): STUN, or a TURN relay
+/// with short-lived credentials.
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+pub struct IceServer {
+    /// `stun:`, `turn:` or `turns:` URLs.
+    pub urls: Vec<String>,
+    /// The relay's user name, for TURN.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// The relay's password, for TURN.
+    #[serde(default)]
+    pub credential: Option<String>,
+}
+
+impl std::fmt::Debug for IceServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IceServer")
+            .field("urls", &self.urls)
+            .field("username", &self.username.as_ref().map(|_| "<set>"))
+            .field("credential", &self.credential.as_ref().map(|_| "<set>"))
+            .finish()
+    }
+}
+
+/// Most call servers, and URLs per server, accepted from the service.
+const MAX_ICE: usize = 8;
+
+/// Reads the answer to [`Device::ice_request`].
+///
+/// # Errors
+///
+/// [`CoreError::Service`] (`unauthorized`, `over_quota`, ...) or
+/// [`CoreError::Malformed`] for a list that is empty, too long, or names
+/// anything but STUN and TURN servers.
+pub fn ice_servers(status: u16, body: &[u8]) -> Result<Vec<IceServer>> {
+    #[derive(Deserialize)]
+    struct Answer {
+        ice_servers: Vec<IceServer>,
+    }
+    expect_success(status, body, &[200])?;
+    let servers = parse::<Answer>(body)?.ice_servers;
+    let short = |text: &str| !text.is_empty() && text.len() <= 512;
+    let usable = |server: &IceServer| {
+        !server.urls.is_empty()
+            && server.urls.len() <= MAX_ICE
+            && server.urls.iter().all(|url| {
+                short(url)
+                    && ["stun:", "turn:", "turns:"]
+                        .iter()
+                        .any(|scheme| url.starts_with(scheme))
+            })
+            && server.username.as_deref().is_none_or(short)
+            && server.credential.as_deref().is_none_or(short)
+    };
+    if servers.is_empty() || servers.len() > MAX_ICE || !servers.iter().all(usable) {
+        return Err(CoreError::malformed(
+            "call servers",
+            "empty, too many, or not STUN or TURN",
+        ));
+    }
+    Ok(servers)
+}
+
 /// Reads the answer to [`Device::remove_device`].
 ///
 /// # Errors
@@ -716,6 +779,21 @@ impl Device {
         Ok(request)
     }
 
+    /// Asks for the servers that help this device's calls connect
+    /// (ADR-0019); read the answer with [`ice_servers`].
+    #[must_use]
+    pub fn ice_request(&self) -> Request {
+        Request {
+            method: "POST",
+            path: format!("{}/ice", self.mailbox_access().path),
+            headers: vec![(
+                "authorization",
+                format!("Bearer {}", b64(self.mailbox_secret())),
+            )],
+            body: Vec::new(),
+        }
+    }
+
     /// Opens one envelope from the mailbox: a message, a chat update or an
     /// invitation into a chat.
     ///
@@ -999,6 +1077,57 @@ mod tests {
         );
         assert!(push_set(200, b"{}").is_ok());
         assert!(push_set(401, br#"{"error":"unauthorized"}"#).is_err());
+    }
+
+    #[test]
+    fn call_servers_come_from_the_mailbox_and_are_checked() {
+        let dir = tempfile::tempdir().expect("dir");
+        let device = Device::create(
+            &dir.path().join("ice.db"),
+            &MasterKey::generate().expect("key"),
+            &AccountKey::generate().expect("account"),
+        )
+        .expect("device");
+        let access = device.mailbox_access();
+        let ask = device.ice_request();
+        assert_eq!(ask.method, "POST");
+        assert_eq!(ask.path, format!("{}/ice", access.path));
+        assert!(
+            ask.headers
+                .contains(&("authorization", access.authorization))
+        );
+
+        let servers = ice_servers(
+            200,
+            br#"{"ice_servers":[{"urls":["stun:stun.cloudflare.com:3478"]},
+                {"urls":["turns:turn.cloudflare.com:443?transport=tcp"],
+                 "username":"u","credential":"c"}]}"#,
+        )
+        .expect("servers");
+        assert_eq!(servers.len(), 2);
+        assert_eq!(servers[1].credential.as_deref(), Some("c"));
+        assert!(
+            !format!("{servers:?}").contains("\"c\""),
+            "credentials stay out of logs"
+        );
+
+        for bad in [
+            br#"{"ice_servers":[]}"#.as_slice(),
+            br#"{"ice_servers":[{"urls":[]}]}"#,
+            br#"{"ice_servers":[{"urls":["https://evil.example"]}]}"#,
+            br#"{"ice_servers":[{"urls":["stun:a"],"username":""}]}"#,
+            b"not json",
+        ] {
+            assert!(
+                ice_servers(200, bad).is_err(),
+                "{}",
+                String::from_utf8_lossy(bad)
+            );
+        }
+        assert!(matches!(
+            ice_servers(429, br#"{"error":"over_quota"}"#),
+            Err(CoreError::Service { code, .. }) if code == "over_quota"
+        ));
     }
 
     #[test]

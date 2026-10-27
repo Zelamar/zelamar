@@ -12,6 +12,9 @@ export default defineConfig({
           WORK_BITS: '4',
           // No Firebase in tests: wake-ups are counted, not sent.
           FCM_SERVICE_ACCOUNT: '',
+          // No TURN key in tests: calls get STUN only.
+          TURN_KEY_ID: '',
+          TURN_KEY_API_TOKEN: '',
         },
       },
     }),

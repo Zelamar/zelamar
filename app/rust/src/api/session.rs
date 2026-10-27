@@ -13,9 +13,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use zelamar_core::attachment::{self, BlobId, SealedFile};
 use zelamar_core::contacts::Contact;
-use zelamar_core::content::{AppMessage, Body, FileRef, MessageId};
-use zelamar_core::device::{ChatId, ChatSummary, Device, Received, Settled};
-use zelamar_core::history::{HistoryEntry, SendStatus, StoredContent};
+use zelamar_core::content::{AppMessage, Body, CallEndReason, FileRef, MessageId, ReceiptStatus};
+use zelamar_core::device::{Author, ChatId, ChatSummary, Device, Received, Settled};
+use zelamar_core::history::{CallRecord, HistoryEntry, SendStatus, StoredContent, StoredMessage};
 use zelamar_core::identity::{AccountKey, DeviceId, SafetyCode};
 use zelamar_core::link::{self, Applicant, Joining, Offer};
 use zelamar_core::recovery::{KitUpload, Restoring};
@@ -137,6 +137,8 @@ pub struct InboxEvent {
     pub refused: Option<String>,
     /// A new message from someone else, worth a notification.
     pub notice: Option<Notice>,
+    /// What a call message asks of this device (ADR-0019).
+    pub call: Option<CallSignal>,
 }
 
 /// What a notification about a new message says.
@@ -150,6 +152,78 @@ pub struct Notice {
 
 /// Longest notification text, in characters.
 const NOTICE_CHARS: usize = 180;
+
+/// How old an offer may be and still ring: the caller gives up after 45
+/// seconds (ADR-0019).
+const RING_WINDOW_MS: u64 = 60_000;
+
+/// A call nobody ended that is older than this is over, as far as the
+/// chat shows: its caller went away mid-call.
+const CALL_FORGOTTEN_MS: u64 = 6 * 60 * 60 * 1000;
+
+/// What a call message asks of this device (ADR-0019).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallSignalKind {
+    /// Someone calls: ring, if [`CallSignal::ring`] says so.
+    Offer,
+    /// A device picked up: the caller connects to it; the called person's
+    /// other devices stop ringing.
+    Answer,
+    /// The call is over.
+    End,
+    /// The call reached the person called: their device is ringing.
+    Ringing,
+}
+
+/// Why a call ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallEnding {
+    /// Someone hung up; before an answer, the caller gave up.
+    Hangup,
+    /// The person called said no.
+    Declined,
+    /// Nobody answered in time.
+    Missed,
+    /// The person called is in another call.
+    Busy,
+    /// The connection could not be made, or was lost.
+    Failed,
+    /// A reason from a newer Zelamar.
+    Other,
+}
+
+/// A call message for this device.
+#[derive(Debug, Clone)]
+pub struct CallSignal {
+    pub kind: CallSignalKind,
+    pub chat: String,
+    /// The call's id, base64url.
+    pub call: String,
+    /// Sent by another of this account's devices.
+    pub own: bool,
+    /// The other person in the chat: `@bob`.
+    pub peer: String,
+    /// Whether the call starts with video ([`CallSignalKind::Offer`]).
+    pub video: bool,
+    /// The offer or the answer.
+    pub sdp: Option<String>,
+    /// For an offer: whether this device should ring now. Never for a
+    /// group, a chat request, one's own call, a call already over, or an
+    /// old one.
+    pub ring: bool,
+    /// For [`CallSignalKind::End`].
+    pub ending: Option<CallEnding>,
+    /// For [`CallSignalKind::End`]: how long the people talked.
+    pub duration_ms: Option<u32>,
+}
+
+/// One server that helps calls connect.
+#[derive(Clone)]
+pub struct IceServerView {
+    pub urls: Vec<String>,
+    pub username: Option<String>,
+    pub credential: Option<String>,
+}
 
 /// Where an outgoing message is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,6 +291,8 @@ pub struct MessageView {
     /// Something that happened to the chat, shown as a line rather than a
     /// bubble; `text` is empty then.
     pub event: Option<ChatEvent>,
+    /// A call; `text` is empty then.
+    pub call: Option<CallView>,
 }
 
 /// A file in a message, as the chat screen shows it (ADR-0016).
@@ -242,6 +318,34 @@ pub struct PreparedFile {
     pub blob: String,
     /// One upload per chunk; read each answer with [`chunk_uploaded`].
     pub calls: Vec<HttpCall>,
+}
+
+/// How a call went (ADR-0019).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallOutcome {
+    /// Ringing, or going on.
+    Ongoing,
+    /// Someone picked up; `duration_ms` says for how long, once it is over.
+    Talked,
+    /// Nobody picked up in time.
+    Missed,
+    /// The person called said no.
+    Declined,
+    /// The caller gave up before anyone picked up.
+    Cancelled,
+    /// The person called was in another call.
+    Busy,
+    /// The connection could not be made.
+    Failed,
+}
+
+/// A call in a chat, shown as a line.
+#[derive(Debug, Clone)]
+pub struct CallView {
+    pub video: bool,
+    pub outcome: CallOutcome,
+    /// How long the people talked.
+    pub duration_ms: Option<u32>,
 }
 
 /// What kind of thing happened to a chat (ADR-0015).
@@ -1092,6 +1196,71 @@ impl Session {
         Ok(())
     }
 
+    /// Calls the other person in `chat`; `sdp` is this device's offer.
+    /// Returns the call's id (ADR-0019).
+    pub fn start_call(
+        &mut self,
+        chat: String,
+        video: bool,
+        sdp: String,
+    ) -> Result<String, SessionError> {
+        let chat = self.find_chat(&chat)?;
+        if self.device.others_in(&chat)? != 1 {
+            return Err(failure("not_one_to_one", "a call is between two people"));
+        }
+        let id = MessageId::random()?;
+        let offer = AppMessage::new(id, now_ms(), Body::Call { video, sdp });
+        self.device.send(&chat, &offer)?;
+        Ok(URL_SAFE_NO_PAD.encode(id.0))
+    }
+
+    /// Picks up `call` in `chat`; `sdp` is this device's answer.
+    pub fn answer_call(
+        &mut self,
+        chat: String,
+        call: String,
+        sdp: String,
+    ) -> Result<(), SessionError> {
+        let call = message_id(&call)?;
+        self.send_body(&chat, Body::CallAnswer { call, sdp })
+    }
+
+    /// Ends `call` in `chat`, or turns it down; `duration_ms` is how long
+    /// the people talked.
+    pub fn end_call(
+        &mut self,
+        chat: String,
+        call: String,
+        ending: CallEnding,
+        duration_ms: Option<u32>,
+    ) -> Result<(), SessionError> {
+        let call = message_id(&call)?;
+        let reason = match ending {
+            CallEnding::Hangup => CallEndReason::Hangup,
+            CallEnding::Declined => CallEndReason::Declined,
+            CallEnding::Missed => CallEndReason::Missed,
+            CallEnding::Busy => CallEndReason::Busy,
+            CallEnding::Failed => CallEndReason::Failed,
+            CallEnding::Other => return Err(failure("malformed", "say why the call ends")),
+        };
+        self.send_body(
+            &chat,
+            Body::CallEnd {
+                call,
+                reason,
+                duration_ms,
+            },
+        )
+    }
+
+    /// Asks for the servers that help this device's calls connect; read
+    /// the answer with [`ice_servers`].
+    #[flutter_rust_bridge::frb(sync)]
+    #[must_use]
+    pub fn ice_call(&self) -> HttpCall {
+        self.device.ice_request().into()
+    }
+
     /// Everything waiting to go out, oldest first.
     pub fn pending_sends(&self) -> Result<Vec<PendingSend>, SessionError> {
         self.device
@@ -1149,6 +1318,7 @@ impl Session {
                 ack,
                 chat: Some(chat_key(&chat)),
                 joined: true,
+                call: None,
                 left: false,
                 refused: None,
                 // One's own other device bringing this one in is no news.
@@ -1165,6 +1335,7 @@ impl Session {
                 ack,
                 chat: Some(chat_key(&chat)),
                 joined: false,
+                call: self.call_signal(&chat, author, &message),
                 left: false,
                 refused: None,
                 notice: (author.account != self.device.account())
@@ -1175,6 +1346,7 @@ impl Session {
                 ack,
                 chat: Some(chat_key(&chat)),
                 joined: false,
+                call: None,
                 left: true,
                 refused: None,
                 notice: None,
@@ -1183,6 +1355,7 @@ impl Session {
                 ack,
                 chat: Some(chat_key(&chat)),
                 joined: false,
+                call: None,
                 left: false,
                 refused: None,
                 notice: None,
@@ -1191,6 +1364,7 @@ impl Session {
                 ack,
                 chat: None,
                 joined: false,
+                call: None,
                 left: false,
                 refused: None,
                 notice: None,
@@ -1199,6 +1373,7 @@ impl Session {
                 ack,
                 chat: None,
                 joined: false,
+                call: None,
                 left: false,
                 refused: Some(SessionError::from(error).code),
                 notice: None,
@@ -1473,6 +1648,10 @@ impl Session {
                 line = file_line(file);
                 &line
             }
+            Body::CallEnd { call, reason, .. } => {
+                line = self.missed_call(chat, *call, *reason)?;
+                &line
+            }
             _ => return None,
         };
         let author = self.name_of(account);
@@ -1521,7 +1700,8 @@ impl Session {
             StoredContent::Unknown { .. }
             | StoredContent::Named { .. }
             | StoredContent::Left
-            | StoredContent::File(_) => (
+            | StoredContent::File(_)
+            | StoredContent::Call(_) => (
                 String::new(),
                 matches!(message.content, StoredContent::Unknown { .. }),
                 None,
@@ -1550,6 +1730,10 @@ impl Session {
             }),
             _ => None,
         };
+        let call = match &message.content {
+            StoredContent::Call(record) => Some(call_view(record, message.sent_at_ms, now_ms())),
+            _ => None,
+        };
         let reply_to = answers
             .map(|to| {
                 let quoted = self.device.message(chat, to)?;
@@ -1563,6 +1747,7 @@ impl Session {
                                 shorten(text, QUOTE_CHARS)
                             }
                             StoredContent::File(file) => file_line(file),
+                            StoredContent::Call(call) => call_line(call.video).to_owned(),
                             StoredContent::Unknown { .. }
                             | StoredContent::Named { .. }
                             | StoredContent::Left => "Message unavailable".to_owned(),
@@ -1610,7 +1795,8 @@ impl Session {
                 && message.author.account == own
                 && !message.deleted
                 && !unsupported
-                && event.is_none(),
+                && event.is_none()
+                && call.is_none(),
             author: if message.author.account == own {
                 "You".to_owned()
             } else {
@@ -1625,7 +1811,117 @@ impl Session {
             },
             event,
             file,
+            call,
         })
+    }
+
+    /// What `message`, from `author` in `chat`, asks of this device if it
+    /// is about a call (ADR-0019).
+    fn call_signal(
+        &self,
+        chat: &ChatId,
+        author: Author,
+        message: &AppMessage,
+    ) -> Option<CallSignal> {
+        let own = author.account == self.device.account();
+        let signal = |kind, call: MessageId| CallSignal {
+            kind,
+            chat: chat_key(chat),
+            call: URL_SAFE_NO_PAD.encode(call.0),
+            own,
+            peer: self.peer_of(chat),
+            video: false,
+            sdp: None,
+            ring: false,
+            ending: None,
+            duration_ms: None,
+        };
+        match &message.body {
+            Body::Call { video, sdp } => {
+                let record = self.call_record(chat, message.id)?;
+                let StoredContent::Call(details) = &record.content else {
+                    return None;
+                };
+                let ring = !own
+                    && self.device.accepted(chat)
+                    && self.device.others_in(chat).ok() == Some(1)
+                    && details.answered_by.is_none()
+                    && details.end.is_none()
+                    && now_ms().saturating_sub(message.sent_at_ms) <= RING_WINDOW_MS;
+                Some(CallSignal {
+                    video: *video,
+                    sdp: Some(sdp.clone()),
+                    ring,
+                    ..signal(CallSignalKind::Offer, message.id)
+                })
+            }
+            Body::CallAnswer { call, sdp } => Some(CallSignal {
+                sdp: Some(sdp.clone()),
+                ..signal(CallSignalKind::Answer, *call)
+            }),
+            Body::CallEnd {
+                call,
+                reason,
+                duration_ms,
+            } => Some(CallSignal {
+                ending: Some(ending_of(*reason)),
+                duration_ms: *duration_ms,
+                ..signal(CallSignalKind::End, *call)
+            }),
+            Body::Receipt {
+                status: ReceiptStatus::Delivered,
+                messages,
+            } if !own => messages
+                .iter()
+                .copied()
+                .find(|id| {
+                    self.call_record(chat, *id).is_some_and(|record| {
+                        record.outgoing
+                            && matches!(&record.content, StoredContent::Call(call)
+                                if call.answered_by.is_none() && call.end.is_none())
+                    })
+                })
+                .map(|id| signal(CallSignalKind::Ringing, id)),
+            _ => None,
+        }
+    }
+
+    /// The call `id` of `chat`, if history has it.
+    fn call_record(&self, chat: &ChatId, id: MessageId) -> Option<StoredMessage> {
+        self.device
+            .message(chat, id)
+            .ok()
+            .flatten()
+            .filter(|record| matches!(record.content, StoredContent::Call(_)))
+    }
+
+    /// "Missed call" when `call`, ended for `reason` by the caller, rang
+    /// here and nobody on this account picked up.
+    fn missed_call(&self, chat: &ChatId, call: MessageId, reason: CallEndReason) -> Option<String> {
+        let record = self.call_record(chat, call)?;
+        let StoredContent::Call(details) = &record.content else {
+            return None;
+        };
+        let missed = !record.outgoing
+            && details.answered_by.is_none()
+            && reason != CallEndReason::Busy
+            && self.device.accepted(chat);
+        missed.then(|| {
+            if details.video {
+                "Missed video call".to_owned()
+            } else {
+                "Missed call".to_owned()
+            }
+        })
+    }
+
+    /// The other person in `chat`, as a title.
+    fn peer_of(&self, chat: &ChatId) -> String {
+        self.device
+            .chat_list()
+            .ok()
+            .and_then(|list| list.into_iter().find(|summary| &summary.chat == chat))
+            .map_or_else(|| "Someone".to_owned(), |summary| title(&summary))
     }
 
     fn find_chat(&self, key: &str) -> Result<ChatId, SessionError> {
@@ -1761,6 +2057,66 @@ fn shorten(text: &str, limit: usize) -> String {
         out.push('…');
     }
     out
+}
+
+/// The servers in the answer to [`Session::ice_call`].
+pub fn ice_servers(status: u16, body: Vec<u8>) -> Result<Vec<IceServerView>, SessionError> {
+    Ok(service::ice_servers(status, &body)?
+        .into_iter()
+        .map(|server| IceServerView {
+            urls: server.urls,
+            username: server.username,
+            credential: server.credential,
+        })
+        .collect())
+}
+
+fn ending_of(reason: CallEndReason) -> CallEnding {
+    match reason {
+        CallEndReason::Hangup => CallEnding::Hangup,
+        CallEndReason::Declined => CallEnding::Declined,
+        CallEndReason::Missed => CallEnding::Missed,
+        CallEndReason::Busy => CallEnding::Busy,
+        CallEndReason::Failed => CallEnding::Failed,
+        _ => CallEnding::Other,
+    }
+}
+
+/// How a call looks in its chat, at `now`; `sent_at` is when it started.
+fn call_view(record: &CallRecord, sent_at: u64, now: u64) -> CallView {
+    let answered = record.answered_by.is_some();
+    let outcome = match record.end {
+        None if now.saturating_sub(sent_at) < RING_WINDOW_MS => CallOutcome::Ongoing,
+        None if answered && now.saturating_sub(sent_at) < CALL_FORGOTTEN_MS => CallOutcome::Ongoing,
+        // Nobody said how it ended: picked up means talked, else missed.
+        None => {
+            if answered {
+                CallOutcome::Talked
+            } else {
+                CallOutcome::Missed
+            }
+        }
+        Some(_) if answered => CallOutcome::Talked,
+        Some(CallEndReason::Hangup) => CallOutcome::Cancelled,
+        Some(CallEndReason::Declined) => CallOutcome::Declined,
+        Some(CallEndReason::Busy) => CallOutcome::Busy,
+        Some(CallEndReason::Failed) => CallOutcome::Failed,
+        Some(_) => CallOutcome::Missed,
+    };
+    CallView {
+        video: record.video,
+        outcome,
+        duration_ms: record.duration_ms,
+    }
+}
+
+/// A call, in a quote or a notification.
+const fn call_line(video: bool) -> &'static str {
+    if video {
+        "📹 Video call"
+    } else {
+        "📞 Call"
+    }
 }
 
 /// A message id from its base64url form.
@@ -2067,6 +2423,174 @@ mod tests {
         assert_ne!(alice.fingerprint(), bob.fingerprint());
         alice.delete_chat(chat).expect("delete");
         assert!(alice.chats().expect("chats").is_empty());
+    }
+
+    /// The call signals in `events`.
+    fn signals(events: &[InboxEvent]) -> Vec<CallSignal> {
+        events
+            .iter()
+            .filter_map(|event| event.call.clone())
+            .collect()
+    }
+
+    #[test]
+    fn a_call_rings_connects_and_ends_through_the_app_api() {
+        let dir = tempfile::tempdir().expect("dir");
+        let mut stub = Stub::default();
+        let mut alice = person(&mut stub, &dir, "alice");
+        let mut bob = person(&mut stub, &dir, "bob");
+        let (status, body) = stub.call(&lookup_call("bob".into()).expect("lookup"));
+        let chat = alice
+            .start_chat("bob".into(), status, body, None)
+            .expect("chat");
+        alice.send_text(chat.clone(), "Free?".into()).expect("send");
+        flush(&mut stub, &mut alice);
+        read(&mut stub, &mut bob);
+
+        // Nothing rings from a chat request.
+        let call = alice
+            .start_call(chat.clone(), false, "offer".into())
+            .expect("call");
+        flush(&mut stub, &mut alice);
+        let offer = signals(&read(&mut stub, &mut bob)).remove(0);
+        assert_eq!(offer.kind, CallSignalKind::Offer);
+        assert!(!offer.ring, "Bob has not accepted the chat");
+        alice
+            .end_call(chat.clone(), call, CallEnding::Missed, None)
+            .expect("end");
+        flush(&mut stub, &mut alice);
+        let events = read(&mut stub, &mut bob);
+        assert!(
+            events.iter().all(|event| event.notice.is_none()),
+            "a stranger's call is no news"
+        );
+
+        bob.accept_chat(chat.clone()).expect("accept");
+        flush(&mut stub, &mut bob);
+        read(&mut stub, &mut alice);
+
+        let call = alice
+            .start_call(chat.clone(), true, "offer".into())
+            .expect("call");
+        flush(&mut stub, &mut alice);
+        let offer = signals(&read(&mut stub, &mut bob)).remove(0);
+        assert_eq!(
+            (offer.kind, offer.ring, offer.own, offer.video),
+            (CallSignalKind::Offer, true, false, true)
+        );
+        assert_eq!(offer.call, call);
+        assert_eq!(offer.peer, "@alice");
+        assert_eq!(offer.sdp.as_deref(), Some("offer"));
+        let ringing = bob.chats().expect("chats")[0].last.clone().expect("last");
+        let line = ringing.call.expect("a call line");
+        assert_eq!((line.outcome, line.video), (CallOutcome::Ongoing, true));
+        assert!(!ringing.editable);
+
+        // Bob's device says it got the call: Alice hears it ring.
+        flush(&mut stub, &mut bob);
+        let ringing = signals(&read(&mut stub, &mut alice));
+        assert_eq!(ringing[0].kind, CallSignalKind::Ringing);
+        assert_eq!(ringing[0].call, call);
+
+        bob.answer_call(chat.clone(), call.clone(), "answer".into())
+            .expect("answer");
+        flush(&mut stub, &mut bob);
+        let answer = signals(&read(&mut stub, &mut alice)).remove(0);
+        assert_eq!(
+            (answer.kind, answer.own, answer.sdp.as_deref()),
+            (CallSignalKind::Answer, false, Some("answer"))
+        );
+
+        alice
+            .end_call(chat.clone(), call, CallEnding::Hangup, Some(42_000))
+            .expect("hang up");
+        flush(&mut stub, &mut alice);
+        let events = read(&mut stub, &mut bob);
+        let end = signals(&events).remove(0);
+        assert_eq!(
+            (end.kind, end.ending, end.duration_ms),
+            (CallSignalKind::End, Some(CallEnding::Hangup), Some(42_000))
+        );
+        assert!(events.iter().all(|event| event.notice.is_none()));
+        let talked = bob.messages(chat.clone(), None, 1).expect("history")[0]
+            .call
+            .clone()
+            .expect("call");
+        assert_eq!(
+            (talked.outcome, talked.duration_ms),
+            (CallOutcome::Talked, Some(42_000))
+        );
+        bob.mark_read(chat.clone()).expect("read");
+
+        // A call nobody picks up: missed, and Bob is told.
+        let call = alice
+            .start_call(chat.clone(), false, "offer".into())
+            .expect("call");
+        alice
+            .end_call(chat.clone(), call, CallEnding::Missed, None)
+            .expect("give up");
+        flush(&mut stub, &mut alice);
+        let events = read(&mut stub, &mut bob);
+        let notice = events
+            .iter()
+            .find_map(|event| event.notice.clone())
+            .expect("a notice");
+        assert_eq!(
+            (notice.title.as_str(), notice.body.as_str()),
+            ("@alice", "Missed call")
+        );
+        let summary = bob.chats().expect("chats")[0].clone();
+        assert_eq!(summary.unread, 1);
+        assert_eq!(
+            summary.last.and_then(|last| last.call).map(|c| c.outcome),
+            Some(CallOutcome::Missed)
+        );
+        assert!(alice.start_call("nope".into(), false, "x".into()).is_err());
+    }
+
+    #[test]
+    fn a_call_line_says_how_the_call_went() {
+        let bob = Author {
+            account: AccountKey::generate().expect("account").id(),
+            device: DeviceId::random().expect("device"),
+        };
+        let record = |answered: bool, end| CallRecord {
+            video: false,
+            answered_by: answered.then_some(bob),
+            end,
+            duration_ms: answered.then_some(5_000),
+        };
+        let at = |record: &CallRecord, age| call_view(record, 1_000_000, 1_000_000 + age).outcome;
+        assert_eq!(at(&record(false, None), 1_000), CallOutcome::Ongoing);
+        assert_eq!(
+            at(&record(false, None), RING_WINDOW_MS),
+            CallOutcome::Missed
+        );
+        assert_eq!(
+            at(&record(true, None), 60 * 60 * 1000),
+            CallOutcome::Ongoing
+        );
+        assert_eq!(
+            at(&record(true, None), CALL_FORGOTTEN_MS),
+            CallOutcome::Talked
+        );
+        assert_eq!(
+            at(&record(false, Some(CallEndReason::Hangup)), 1),
+            CallOutcome::Cancelled
+        );
+        assert_eq!(
+            at(&record(true, Some(CallEndReason::Failed)), 1),
+            CallOutcome::Talked
+        );
+        for (reason, outcome) in [
+            (CallEndReason::Declined, CallOutcome::Declined),
+            (CallEndReason::Missed, CallOutcome::Missed),
+            (CallEndReason::Busy, CallOutcome::Busy),
+            (CallEndReason::Failed, CallOutcome::Failed),
+            (CallEndReason::Other, CallOutcome::Missed),
+        ] {
+            assert_eq!(at(&record(false, Some(reason)), 1), outcome);
+        }
     }
 
     #[test]

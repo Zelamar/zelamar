@@ -24,5 +24,6 @@ decision gets a new ADR that supersedes the old one.
 | [0016](0016-attachments.md) | Attachments: encrypted chunks in Durable Objects, keys in the message | Accepted |
 | [0017](0017-push-wake-ups.md) | Push: an empty wake-up through Firebase, sent only when a device is away | Accepted |
 | [0018](0018-account-recovery.md) | Account recovery: a key only the user holds, and chats that heal across accounts | Accepted |
+| [0019](0019-calls.md) | Calls: WebRTC between two devices, set up inside the encrypted chat | Accepted |
 
 New ADRs copy [`template.md`](template.md) and take the next number.
