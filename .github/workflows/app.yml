@@ -122,9 +122,11 @@ jobs:
         shell: bash
         # flutter_tools on Windows sometimes fails to delete its own
         # listener directory after a passing test (PathNotFoundException,
-        # exit 79): one more try. A real failure fails twice.
+        # exit 79), and leaves the app running: one more try, with the app
+        # closed first. A real failure fails twice.
         run: |
           for attempt in 1 2; do
+            taskkill //F //IM zelamar.exe > /dev/null 2>&1 || true
             pair=$(cut -d, -f$((attempt * 2 - 1))-$((attempt * 2)) <<< "$ZELAMAR_TEST_INVITES")
             flutter test integration_test/call_test.dart -d windows \
               --dart-define=ZELAMAR_SERVICE=http://127.0.0.1:8787 \
