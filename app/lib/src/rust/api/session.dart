@@ -7,8 +7,8 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `blob_id`, `call_line`, `call_record`, `call_signal`, `call_view`, `chat_key`, `claim_with`, `delivery_status`, `device_id`, `device_key`, `ending_of`, `entries`, `failure`, `file_line`, `file`, `find_chat`, `joining`, `master`, `member_title`, `message_id`, `missed_call`, `name_of`, `notice`, `now_ms`, `offer`, `own_name`, `peer_of`, `preview`, `restoring`, `send_body`, `shorten`, `store_path`, `title`, `view`, `with`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
+// These functions are ignored because they are not marked as `pub`: `blob_id`, `call_line`, `call_record`, `call_signal`, `call_view`, `chat_key`, `claim_with`, `delivery_status`, `device_id`, `device_key`, `ending_of`, `entries`, `failure`, `file_line`, `file`, `find_chat`, `joining`, `lan_nonce`, `master`, `member_title`, `message_id`, `missed_call`, `name_of`, `notice`, `now_ms`, `offer`, `own_name`, `peer_of`, `preview`, `restoring`, `send_body`, `shorten`, `store_path`, `title`, `view`, `with`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
 
 /// Takes one key package of one device of `username`, to add it to a chat
 /// with [`Session::add_member_devices`] (ADR-0018).
@@ -270,6 +270,15 @@ abstract class Session implements RustOpaqueInterface {
   /// Asks for the servers that help this device's calls connect; read
   /// the answer with [`ice_servers`].
   HttpCall iceCall();
+
+  /// The envelopes that may go to neighbours on the local network while
+  /// the service is out of reach, tagged under a neighbour's `nonce`
+  /// (ADR-0020).
+  Future<List<LanParcel>> lanOffer({required List<int> nonce});
+
+  /// This device's mailbox tag under `nonce`, the one it gave a
+  /// neighbour that asks what it hosts.
+  Uint8List lanTag({required List<int> nonce});
 
   /// Leaves `chat` and erases it here; the others are told.
   Future<void> leaveChat({required String chat});
@@ -1029,6 +1038,37 @@ class Invitee {
           runtimeType == other.runtimeType &&
           username == other.username &&
           answer == other.answer;
+}
+
+/// One envelope that may go to a neighbour on the local network, tagged
+/// under that neighbour's nonce (ADR-0020).
+class LanParcel {
+  /// Which mailbox it is for, as the neighbour can recognize it.
+  final Uint8List tag;
+
+  /// The envelope's id: what the neighbour answers once it has it.
+  final Uint8List id;
+
+  /// The envelope itself.
+  final Uint8List envelope;
+
+  const LanParcel({
+    required this.tag,
+    required this.id,
+    required this.envelope,
+  });
+
+  @override
+  int get hashCode => tag.hashCode ^ id.hashCode ^ envelope.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LanParcel &&
+          runtimeType == other.runtimeType &&
+          tag == other.tag &&
+          id == other.id &&
+          envelope == other.envelope;
 }
 
 /// A device asking to join this account (ADR-0014).

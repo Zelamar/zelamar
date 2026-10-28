@@ -14,6 +14,8 @@
          the phone moves between Wi-Fi and mobile data. -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Hearing devices nearby while the internet is gone (ADR-0020). -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- A call rings over the lock screen, and keeps its microphone and
          camera while the screen is off (ADR-0019). -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />

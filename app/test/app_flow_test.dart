@@ -1168,6 +1168,24 @@ void main() {
       expect(messenger.callActions, ['start c1 video']);
     });
 
+    testWidgets('without the internet, the list says who is nearby', (
+      tester,
+    ) async {
+      final messenger = FakeMessenger(
+        phaseValue: MessengerPhase.ready,
+        usernameValue: 'ada',
+      )..linkValue = Link.offline;
+      await pumpApp(tester, messenger: messenger);
+      String said() =>
+          tester.widget<Text>(find.byKey(const Key('chats.username'))).data!;
+      expect(said(), '@ada · Connecting…');
+      messenger
+        ..nearbyValue = 2
+        ..showCall(null);
+      await tester.pump();
+      expect(said(), '@ada · Nearby only');
+    });
+
     test('call lines in words', () {
       String line(CallOutcome outcome, {bool outgoing = false}) => callLine(
         CallView(video: false, outcome: outcome, durationMs: 65000),

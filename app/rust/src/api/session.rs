@@ -17,6 +17,7 @@ use zelamar_core::content::{AppMessage, Body, CallEndReason, FileRef, MessageId,
 use zelamar_core::device::{Author, ChatId, ChatSummary, Device, Received, Settled};
 use zelamar_core::history::{CallRecord, HistoryEntry, SendStatus, StoredContent, StoredMessage};
 use zelamar_core::identity::{AccountKey, DeviceId, SafetyCode};
+use zelamar_core::lan;
 use zelamar_core::link::{self, Applicant, Joining, Offer};
 use zelamar_core::recovery::{KitUpload, Restoring};
 use zelamar_core::service::{self, Request, CLAIM_WORK_BITS};
@@ -215,6 +216,18 @@ pub struct CallSignal {
     pub ending: Option<CallEnding>,
     /// For [`CallSignalKind::End`]: how long the people talked.
     pub duration_ms: Option<u32>,
+}
+
+/// One envelope that may go to a neighbour on the local network, tagged
+/// under that neighbour's nonce (ADR-0020).
+#[derive(Debug, Clone)]
+pub struct LanParcel {
+    /// Which mailbox it is for, as the neighbour can recognize it.
+    pub tag: Vec<u8>,
+    /// The envelope's id: what the neighbour answers once it has it.
+    pub id: Vec<u8>,
+    /// The envelope itself.
+    pub envelope: Vec<u8>,
 }
 
 /// One server that helps calls connect.
@@ -1253,6 +1266,31 @@ impl Session {
         )
     }
 
+    /// The envelopes that may go to neighbours on the local network while
+    /// the service is out of reach, tagged under a neighbour's `nonce`
+    /// (ADR-0020).
+    pub fn lan_offer(&self, nonce: Vec<u8>) -> Result<Vec<LanParcel>, SessionError> {
+        let nonce = lan_nonce(nonce)?;
+        self.device
+            .parcels()?
+            .into_iter()
+            .map(|parcel| {
+                Ok(LanParcel {
+                    tag: lan::tag(&parcel.mailbox, &nonce)?.to_vec(),
+                    id: parcel.id.0.to_vec(),
+                    envelope: parcel.envelope,
+                })
+            })
+            .collect()
+    }
+
+    /// This device's mailbox tag under `nonce`, the one it gave a
+    /// neighbour that asks what it hosts.
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn lan_tag(&self, nonce: Vec<u8>) -> Result<Vec<u8>, SessionError> {
+        Ok(self.device.own_tag(&lan_nonce(nonce)?)?.to_vec())
+    }
+
     /// Asks for the servers that help this device's calls connect; read
     /// the answer with [`ice_servers`].
     #[flutter_rust_bridge::frb(sync)]
@@ -2117,6 +2155,13 @@ const fn call_line(video: bool) -> &'static str {
     } else {
         "📞 Call"
     }
+}
+
+/// A local-network nonce from its bytes.
+fn lan_nonce(nonce: Vec<u8>) -> Result<[u8; lan::NONCE_LEN], SessionError> {
+    nonce
+        .try_into()
+        .map_err(|_| failure("malformed", "a nonce is 16 bytes"))
 }
 
 /// A message id from its base64url form.

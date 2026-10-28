@@ -55,6 +55,10 @@ abstract interface class Notifier {
   /// call's notification), or `wake` (a call wake-up for a running app:
   /// fetch the mail now).
   Stream<String> get callActions;
+
+  /// Lets nearby devices' beacons in, or stops (Android's Wi-Fi drops
+  /// multicast to save power otherwise, ADR-0020).
+  Future<void> holdLocalNetwork({required bool on});
 }
 
 /// The native notifier, over the `zelamar/notify` channel. A notification
@@ -92,6 +96,11 @@ class PlatformNotifier implements Notifier {
     bool video = false,
   }) => Platform.isAndroid
       ? _quietly('callOngoing', {'on': on, 'title': title, 'video': video})
+      : Future<void>.value();
+
+  @override
+  Future<void> holdLocalNetwork({required bool on}) => Platform.isAndroid
+      ? _quietly('holdLocalNetwork', on)
       : Future<void>.value();
 
   /// Calls [method] on the native side; a failure only means the platform
@@ -222,4 +231,7 @@ class SilentNotifier implements Notifier {
 
   @override
   Stream<String> get callActions => const Stream.empty();
+
+  @override
+  Future<void> holdLocalNetwork({required bool on}) async {}
 }

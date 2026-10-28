@@ -69,6 +69,8 @@ class ChatsScreen extends StatelessWidget {
                                     Text(
                                       messenger.link == Link.online
                                           ? '@$name'
+                                          : messenger.nearby > 0
+                                          ? '@$name · Nearby only'
                                           : '@$name · Connecting…',
                                       key: const Key('chats.username'),
                                       style: text.bodySmall?.copyWith(

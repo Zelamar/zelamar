@@ -107,8 +107,8 @@ jobs:
           npm ci
           key=$(openssl rand -hex 32)
           echo "INVITE_KEY=$key" > .dev.vars
-          # Two invites per attempt of the call test.
-          invites=$(INVITE_KEY=$key node scripts/invites.mjs 1 4 | awk '{print $2}' | paste -sd, -)
+          # Two invites per attempt of each live test.
+          invites=$(INVITE_KEY=$key node scripts/invites.mjs 1 8 | awk '{print $2}' | paste -sd, -)
           echo "ZELAMAR_TEST_INVITES=$invites" >> "$GITHUB_ENV"
           nohup npx wrangler dev --port 8787 > "$RUNNER_TEMP/wrangler.log" 2>&1 &
           for _ in $(seq 1 60); do
@@ -129,6 +129,19 @@ jobs:
             taskkill //F //IM zelamar.exe > /dev/null 2>&1 || true
             pair=$(cut -d, -f$((attempt * 2 - 1))-$((attempt * 2)) <<< "$ZELAMAR_TEST_INVITES")
             flutter test integration_test/call_test.dart -d windows \
+              --dart-define=ZELAMAR_SERVICE=http://127.0.0.1:8787 \
+              --dart-define=ZELAMAR_TEST_INVITES="$pair" && exit 0
+          done
+          exit 1
+
+      - name: Messages without the internet, nearby (ADR-0020)
+        shell: bash
+        # Invites 5 to 8; the same one more try as the call test.
+        run: |
+          for attempt in 3 4; do
+            taskkill //F //IM zelamar.exe > /dev/null 2>&1 || true
+            pair=$(cut -d, -f$((attempt * 2 - 1))-$((attempt * 2)) <<< "$ZELAMAR_TEST_INVITES")
+            flutter test integration_test/drift_test.dart -d windows \
               --dart-define=ZELAMAR_SERVICE=http://127.0.0.1:8787 \
               --dart-define=ZELAMAR_TEST_INVITES="$pair" && exit 0
           done

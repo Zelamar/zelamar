@@ -15,6 +15,10 @@ class FakeMessenger extends Messenger {
   MessengerPhase phaseValue;
   String? usernameValue;
   Link linkValue = Link.online;
+  int nearbyValue = 0;
+
+  @override
+  int get nearby => nearbyValue;
   final Map<String, ChatPreview> _chats = {};
   final Map<String, List<MessageView>> conversations = {};
   final _changes = StreamController<String?>.broadcast();

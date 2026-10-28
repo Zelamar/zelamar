@@ -72,6 +72,21 @@ message from a file chunk except by size. During a call it sees SRTP
 between the two devices (or to Cloudflare's relay): that two addresses
 talk, for how long and at what rate, never the sound.
 
+### People on the same local network
+
+While the service is out of reach, a device takes part in nearby
+delivery (ADR-0020):
+- Its beacons tell the local network that a Zelamar device is there,
+  never whose.
+- Neighbours see envelopes only for the mailboxes they host, as the
+  service would. They cannot read them.
+- Someone who knows one of the device's mailbox ids can ask whether it is
+  there and recognize it. The device's chats know its id, and so does
+  anyone who looks its username up in the directory: the id is in its key
+  packages.
+- With the service reachable, the device shows nothing on the local
+  network.
+
 ### Other users
 
 - **A stranger** who knows a username can start a chat. It arrives as a

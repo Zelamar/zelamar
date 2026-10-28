@@ -14,6 +14,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
+import android.net.wifi.WifiManager
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.PersistableBundle
@@ -93,6 +94,10 @@ class ZelamarPlatform(private val context: Context) {
                 }
                 "stopRinging" -> {
                     stopRinging()
+                    result.success(null)
+                }
+                "holdLocalNetwork" -> {
+                    holdLocalNetwork(call.arguments as? Boolean ?: false)
                     result.success(null)
                 }
                 "callOngoing" -> {
@@ -295,6 +300,19 @@ class ZelamarPlatform(private val context: Context) {
     }
 
     /**
+     * Lets multicast in while nearby delivery runs (ADR-0020): Wi-Fi drops
+     * it otherwise, to save power, and devices nearby would go unheard.
+     */
+    private fun holdLocalNetwork(on: Boolean) {
+        val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            ?: return
+        val lock = multicast ?: wifi.createMulticastLock("zelamar-nearby").apply {
+            setReferenceCounted(false)
+        }.also { multicast = it }
+        if (on) lock.acquire() else if (lock.isHeld) lock.release()
+    }
+
+    /**
      * Keeps the microphone (and camera) working while the screen is off or
      * another app is in front, for as long as the call goes on.
      */
@@ -378,6 +396,9 @@ class ZelamarPlatform(private val context: Context) {
     }
 
     companion object {
+        /** One multicast lock for the process, whichever window or engine asks. */
+        private var multicast: WifiManager.MulticastLock? = null
+
         const val NOTIFY_CHANNEL = "zelamar/notify"
         const val PUSH_CHANNEL = "zelamar/push"
         const val CLIPBOARD_CHANNEL = "zelamar/clipboard"

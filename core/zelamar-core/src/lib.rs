@@ -27,6 +27,7 @@ pub mod envelope;
 pub mod error;
 pub mod history;
 pub mod identity;
+pub mod lan;
 pub mod link;
 pub mod recovery;
 pub mod service;

@@ -9,6 +9,7 @@ import 'package:zelamar/src/calls/call_state.dart';
 import 'package:zelamar/src/calls/media_link.dart';
 import 'package:zelamar/src/calls/tone_ringer.dart';
 import 'package:zelamar/src/calls/webrtc_link.dart';
+import 'package:zelamar/src/drift/lan.dart';
 import 'package:zelamar/src/messenger/key_vault.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/messenger/notifier.dart';
@@ -56,7 +57,10 @@ class LiveMessenger extends Messenger {
     Ringer? ringer,
     this.linkPoll = const Duration(seconds: 2),
     this.memberHealing = const Duration(minutes: 5),
-  }) : notifier = notifier ?? Notifier.forPlatform() {
+    this.nearbyAfter = const Duration(seconds: 10),
+    LanNode Function(LanHost host)? lan,
+  }) : notifier = notifier ?? Notifier.forPlatform(),
+       _makeLan = lan ?? LanNode.new {
     _calls =
         CallController(
             signaling: _ChatSignaling(this),
@@ -92,6 +96,19 @@ class LiveMessenger extends Messenger {
   /// How often healing runs while connected, and looks up other accounts'
   /// devices (ADR-0018).
   final Duration memberHealing;
+
+  /// How long without the service before envelopes go to devices nearby
+  /// (ADR-0020).
+  final Duration nearbyAfter;
+
+  final LanNode Function(LanHost host) _makeLan;
+
+  /// Nearby delivery, while the service is out of reach (ADR-0020).
+  LanNode? _lan;
+  Timer? _offlineFor;
+
+  @override
+  int get nearby => (_lan?.running ?? false) ? _lan!.neighbours : 0;
 
   /// How long a gap another member should fill may last before this
   /// device fills it instead (ADR-0018).
@@ -863,6 +880,8 @@ class LiveMessenger extends Messenger {
   void dispose() {
     _closed = true;
     unawaited(_callActions.cancel());
+    _offlineFor?.cancel();
+    unawaited(_lan?.stop());
     _calls.dispose();
     _retry?.cancel();
     _healTimer?.cancel();
@@ -948,6 +967,11 @@ class LiveMessenger extends Messenger {
     if (ack != null) {
       socket.add(ack);
     }
+    await _handle(event);
+  }
+
+  /// Shows what an opened envelope did, from the service or a neighbour.
+  Future<void> _handle(InboxEvent event) async {
     if (event.chat != null) {
       await _refreshChats(event.chat);
       unawaited(_confirmNames());
@@ -1006,6 +1030,10 @@ class LiveMessenger extends Messenger {
     } on Object {
       _retry?.cancel();
       _retry = Timer(const Duration(seconds: 5), () => unawaited(_flush()));
+      // Out of the service's reach: devices nearby may take it now.
+      if (_lan?.running ?? false) {
+        _lan!.push();
+      }
     } finally {
       _flushing = false;
     }
@@ -1184,12 +1212,72 @@ class LiveMessenger extends Messenger {
     if (_link != link && !_closed) {
       _link = link;
       notifyListeners();
+      _followLink();
+    }
+  }
+
+  /// Looks for devices nearby once the service has been out of reach for
+  /// [nearbyAfter], and stops as soon as it is back (ADR-0020).
+  void _followLink() {
+    final away =
+        _link != Link.online && !_closed && _phase == MessengerPhase.ready;
+    if (!away) {
+      _offlineFor?.cancel();
+      _offlineFor = null;
+      final lan = _lan;
+      if (lan != null && lan.running) {
+        unawaited(lan.stop());
+        unawaited(notifier.holdLocalNetwork(on: false));
+      }
+      return;
+    }
+    _offlineFor ??= Timer(nearbyAfter, () {
+      _offlineFor = null;
+      if (_link != Link.online && !_closed && _phase == MessengerPhase.ready) {
+        unawaited(_startNearby());
+      }
+    });
+  }
+
+  Future<void> _startNearby() async {
+    final lan = _lan ??= _makeLan(_Nearby(this))..onChanged = notifyListeners;
+    if (lan.running) {
+      return;
+    }
+    try {
+      await notifier.holdLocalNetwork(on: true);
+      await lan.start();
+      notifyListeners();
+    } on Object {
+      // No local network either: messages wait in the outbox.
     }
   }
 
   void _fail(MessengerFailure failure) {
     _failure = failure;
     _setPhase(MessengerPhase.failed);
+  }
+}
+
+/// What devices nearby get from this one, and what it takes from them
+/// (ADR-0020).
+class _Nearby implements LanHost {
+  const new(this._messenger);
+
+  final LiveMessenger _messenger;
+
+  @override
+  Future<List<LanParcel>> offer(Uint8List nonce) =>
+      _messenger._ready.lanOffer(nonce: nonce);
+
+  @override
+  Uint8List ownTag(Uint8List nonce) =>
+      Uint8List.fromList(_messenger._ready.lanTag(nonce: nonce));
+
+  @override
+  Future<void> receive(Uint8List envelope) async {
+    final event = await _messenger._ready.openEnvelope(bytes: envelope);
+    await _messenger._handle(event);
   }
 }
 

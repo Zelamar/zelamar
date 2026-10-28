@@ -25,5 +25,6 @@ decision gets a new ADR that supersedes the old one.
 | [0017](0017-push-wake-ups.md) | Push: an empty wake-up through Firebase, sent only when a device is away | Accepted |
 | [0018](0018-account-recovery.md) | Account recovery: a key only the user holds, and chats that heal across accounts | Accepted |
 | [0019](0019-calls.md) | Calls: WebRTC between two devices, set up inside the encrypted chat | Accepted |
+| [0020](0020-drift-local-network.md) | Drift D1: messages over the local network when the internet is gone | Accepted |
 
 New ADRs copy [`template.md`](template.md) and take the next number.

@@ -70,6 +70,10 @@ abstract class Messenger extends ChangeNotifier {
 
   Link get link;
 
+  /// How many Zelamar devices nearby take messages while the service is
+  /// out of reach (ADR-0020); 0 while connected.
+  int get nearby;
+
   /// Every chat, most recently active first.
   List<ChatPreview> get chats;
 

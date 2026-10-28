@@ -267,6 +267,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LabSide dco_decode_lab_side(dynamic raw);
 
   @protected
+  LanParcel dco_decode_lan_parcel(dynamic raw);
+
+  @protected
   LinkApplicant dco_decode_link_applicant(dynamic raw);
 
   @protected
@@ -301,6 +304,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<LabParticipant> dco_decode_list_lab_participant(dynamic raw);
+
+  @protected
+  List<LanParcel> dco_decode_list_lan_parcel(dynamic raw);
 
   @protected
   List<MemberGap> dco_decode_list_member_gap(dynamic raw);
@@ -656,6 +662,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LabSide sse_decode_lab_side(SseDeserializer deserializer);
 
   @protected
+  LanParcel sse_decode_lan_parcel(SseDeserializer deserializer);
+
+  @protected
   LinkApplicant sse_decode_link_applicant(SseDeserializer deserializer);
 
   @protected
@@ -696,6 +705,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<LabParticipant> sse_decode_list_lab_participant(
     SseDeserializer deserializer,
   );
+
+  @protected
+  List<LanParcel> sse_decode_list_lan_parcel(SseDeserializer deserializer);
 
   @protected
   List<MemberGap> sse_decode_list_member_gap(SseDeserializer deserializer);
@@ -1117,6 +1129,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_lab_side(LabSide self, SseSerializer serializer);
 
   @protected
+  void sse_encode_lan_parcel(LanParcel self, SseSerializer serializer);
+
+  @protected
   void sse_encode_link_applicant(LinkApplicant self, SseSerializer serializer);
 
   @protected
@@ -1173,6 +1188,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_lab_participant(
     List<LabParticipant> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_lan_parcel(
+    List<LanParcel> self,
     SseSerializer serializer,
   );
 
