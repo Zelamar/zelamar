@@ -87,6 +87,11 @@ Rules:
 - When an envelope is queued and no connection is open, the mailbox owes a
   wake-up. It sends one at most every 30 seconds, and only if the envelope
   is still unread when the wake-up goes out.
+- An open connection does not prove the app is awake: Android freezes apps
+  in the background, and the phone keeps their connections open. A
+  connection that has had an envelope for 20 seconds without acknowledging
+  it is closed as asleep, and the wake-up owed goes out. An
+  acknowledgement of everything queued cancels any wake-up owed.
 - A wake-up carries the same fixed words every time ("Zelamar", "New
   message"), never anything about the message.
 - An urgent envelope owes a **call wake-up** instead: at most one every 5

@@ -68,6 +68,14 @@ Constraints:
   (ADR-0005), and it is confined to Android push.
 - Windows does not use Firebase at all.
 
+**An open connection is not proof of life** (2026-11-02).
+- A message once reached a tester a day late. The phone app was frozen in
+  the background with its connection still open, so the mailbox saw a
+  connection and sent no push.
+- Now a connection that leaves an envelope unacknowledged for 20 seconds
+  is closed as asleep, and the owed wake-up goes out. The fix is on the
+  service alone, so every app version gets it.
+
 ## Consequences
 
 - A closed Android app learns of new messages within seconds, and Google

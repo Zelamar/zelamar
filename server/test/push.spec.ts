@@ -3,6 +3,7 @@ import { env, exports } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 
 import { fromBase64Url, utf8 } from '../src/bytes';
+import { ACK_WAIT_MS } from '../src/mailbox';
 import { assertion, serviceAccount, wakeUp } from '../src/push';
 import { address, b64, BASE, deliver, type Device, inbox, random, registered } from './helpers';
 
@@ -22,14 +23,15 @@ function skipped(wake: 'message' | 'call' = 'message'): Promise<number> {
 /**
  * Lets the mailbox's alarm send an owed wake-up. An alarm due now may
  * already be running on its own; it is done once it has rescheduled
- * itself for the envelopes' expiry.
+ * itself for later: the envelopes' expiry, or the next acknowledgement
+ * check.
  */
 async function tick(device: Device): Promise<void> {
   const stub = env.MAILBOX.getByName(b64(device.mailbox));
   await runDurableObjectAlarm(stub);
   for (let attempt = 0; attempt < 200; attempt++) {
     const alarm = await runInDurableObject(stub, (_, state) => state.storage.getAlarm());
-    if (alarm === null || alarm > Date.now() + 60_000) {
+    if (alarm === null || alarm > Date.now() + 5_000) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -128,6 +130,64 @@ describe('push wake-ups', () => {
     await live.next();
     await tick(phone);
     expect(await skipped('call')).toBe(calls);
+    live.close();
+  });
+
+  it('wake a phone whose app holds the connection but no longer answers', async () => {
+    // Android froze the app: the connection stays open, nothing is
+    // acknowledged.
+    const { device: phone } = await registered();
+    await setPush(phone, { platform: 'fcm', token: 'device-token' });
+    const before = await skipped();
+    const frozen = await inbox(phone);
+    await deliver(random(16), [phone.mailbox], utf8('waits'));
+    await frozen.next();
+    await tick(phone);
+    // Not yet: it may still answer.
+    expect(await skipped()).toBe(before);
+
+    // ACK_WAIT_MS later, still nothing: closed, and the phone is woken.
+    const stub = env.MAILBOX.getByName(b64(phone.mailbox));
+    await runInDurableObject(stub, (_, state) => {
+      for (const socket of state.getWebSockets()) {
+        const cursor = socket.deserializeAttachment() as { last: number; waiting?: number };
+        socket.serializeAttachment({ ...cursor, waiting: Date.now() - ACK_WAIT_MS });
+      }
+    });
+    await tick(phone);
+    expect(await skipped()).toBe(before + 1);
+    const closed = await runInDurableObject(stub, (_, state) =>
+      state.getWebSockets().every((socket) => socket.readyState !== WebSocket.OPEN),
+    );
+    expect(closed).toBe(true);
+  });
+
+  it('leave a phone alone whose app answers', async () => {
+    const { device: phone } = await registered();
+    await setPush(phone, { platform: 'fcm', token: 'device-token' });
+    const before = await skipped();
+    const live = await inbox(phone);
+    const id = random(16);
+    await deliver(id, [phone.mailbox], utf8('read'));
+    await live.next();
+    live.ack(id);
+    // The acknowledgement crosses over in its own time.
+    const stub = env.MAILBOX.getByName(b64(phone.mailbox));
+    let waiting: number[] = [];
+    for (let attempt = 0; attempt < 100; attempt++) {
+      waiting = await runInDurableObject(stub, (_, state) =>
+        state
+          .getWebSockets()
+          .map((socket) => (socket.deserializeAttachment() as { waiting?: number }).waiting ?? 0),
+      );
+      if (waiting.every((since) => since === 0)) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(waiting).toEqual([0]);
+    await tick(phone);
+    expect(await skipped()).toBe(before);
     live.close();
   });
 

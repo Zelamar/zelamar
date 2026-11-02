@@ -24,6 +24,14 @@ export const UPLOAD_QUOTA = 512 * 1024 * 1024;
 export const PUSH_INTERVAL_MS = 30_000;
 
 /**
+ * A connection that has had an envelope this long without acknowledging
+ * it is asleep: Android froze the app behind it, and the phone's network
+ * stack still holds the connection open. It is closed, and the device is
+ * woken by push instead.
+ */
+export const ACK_WAIT_MS = 20_000;
+
+/**
  * At most one call wake-up per mailbox in this long (ADR-0019): a phone
  * that is away has a few seconds to fetch the offer and decide to ring.
  */
@@ -51,6 +59,11 @@ export type Wake = 'message' | 'call';
 interface Cursor {
   /** Highest `seq` sent on this connection. */
   last: number;
+  /**
+   * Since when it has had an envelope it did not acknowledge; 0 when it
+   * has acknowledged everything sent.
+   */
+  waiting?: number;
 }
 
 export class Mailbox extends DurableObject<Env> {
@@ -179,15 +192,20 @@ export class Mailbox extends DurableObject<Env> {
       return 'duplicate';
     }
     this.queued = queued + 1;
-    const sockets = this.ctx.getWebSockets();
+    const sockets = this.open();
     for (const socket of sockets) {
       this.pump(socket);
     }
+    // Owed whether or not a connection is open: if the connection turns
+    // out to be asleep, the wake-up goes once it is closed.
     const due = wake === 'call' ? this.callWakeDue() : this.wakeUpDue();
     if (sockets.length === 0 && due) {
       // The wake-up goes out from the alarm, so the sender does not wait
       // for Google.
       await this.ctx.storage.setAlarm(Date.now());
+    } else if (sockets.length > 0) {
+      // Checks that the connection acknowledges what it was sent.
+      await this.alarmBy(Date.now() + ACK_WAIT_MS);
     } else if ((await this.ctx.storage.getAlarm()) === null) {
       await this.ctx.storage.setAlarm(expires);
     }
@@ -229,7 +247,18 @@ export class Mailbox extends DurableObject<Env> {
       );
     }
     this.queued = null;
-    for (const other of this.ctx.getWebSockets()) {
+    // It answered: it is awake. Whatever it still has is counted from now.
+    const cursor = socket.deserializeAttachment() as Cursor | null;
+    if (cursor !== null) {
+      socket.serializeAttachment({
+        last: cursor.last,
+        waiting: this.inFlight(cursor) > 0 ? Date.now() : 0,
+      } satisfies Cursor);
+    }
+    if (this.count() === 0) {
+      this.forgetOwed();
+    }
+    for (const other of this.open()) {
       this.pump(other);
     }
   }
@@ -251,13 +280,56 @@ export class Mailbox extends DurableObject<Env> {
     }
     this.ctx.storage.sql.exec('DELETE FROM envelopes WHERE expires <= ?', Date.now());
     this.queued = null;
+    this.closeAsleep();
     await this.sendWakeUp();
     const next = this.ctx.storage.sql
       .exec<{ expires: number }>('SELECT MIN(expires) AS expires FROM envelopes')
       .one().expires;
+    const waiting = this.open().some(
+      (socket) => ((socket.deserializeAttachment() as Cursor | null)?.waiting ?? 0) > 0,
+    );
     if (typeof next === 'number') {
-      await this.ctx.storage.setAlarm(next);
+      await this.ctx.storage.setAlarm(waiting ? Math.min(next, Date.now() + ACK_WAIT_MS) : next);
     }
+  }
+
+  /** Connections that are open, as far as this object can tell. */
+  private open(): WebSocket[] {
+    return this.ctx.getWebSockets().filter((socket) => socket.readyState === WebSocket.OPEN);
+  }
+
+  /**
+   * Closes every connection that has had an envelope for [ACK_WAIT_MS]
+   * without acknowledging it. Its envelopes stay queued; the app fetches
+   * them when it wakes, and push wakes it.
+   */
+  private closeAsleep(): void {
+    const now = Date.now();
+    for (const socket of this.open()) {
+      const waiting = (socket.deserializeAttachment() as Cursor | null)?.waiting ?? 0;
+      if (waiting > 0 && now - waiting >= ACK_WAIT_MS) {
+        try {
+          socket.close(1001, 'no acknowledgement');
+        } catch {
+          // Already closing.
+        }
+      }
+    }
+  }
+
+  /** Makes sure the alarm fires by `time`. */
+  private async alarmBy(time: number): Promise<void> {
+    const current = await this.ctx.storage.getAlarm();
+    if (current === null || current > time) {
+      await this.ctx.storage.setAlarm(time);
+    }
+  }
+
+  /** How many envelopes sent on a connection it has not acknowledged. */
+  private inFlight(cursor: Cursor): number {
+    return this.ctx.storage.sql
+      .exec<{ n: number }>('SELECT COUNT(*) AS n FROM envelopes WHERE seq <= ?', cursor.last)
+      .one().n;
   }
 
   /** Sends queued envelopes to `socket` until its window is full. */
@@ -267,9 +339,7 @@ export class Mailbox extends DurableObject<Env> {
       return;
     }
     const sql = this.ctx.storage.sql;
-    const inFlight = sql
-      .exec<{ n: number }>('SELECT COUNT(*) AS n FROM envelopes WHERE seq <= ?', cursor.last)
-      .one().n;
+    const inFlight = this.inFlight(cursor);
     const room = WINDOW - inFlight;
     if (room <= 0) {
       return;
@@ -290,7 +360,9 @@ export class Mailbox extends DurableObject<Env> {
       last = row.seq;
     }
     if (last !== cursor.last) {
-      socket.serializeAttachment({ last } satisfies Cursor);
+      // The wait starts with the first envelope it has not acknowledged.
+      const waiting = inFlight > 0 && (cursor.waiting ?? 0) > 0 ? cursor.waiting : Date.now();
+      socket.serializeAttachment({ last, waiting } satisfies Cursor);
     }
   }
 
@@ -315,13 +387,22 @@ export class Mailbox extends DurableObject<Env> {
     `);
   }
 
-  /** Marks a wake-up as owed, if the device has a token and was not woken lately. */
+  /**
+   * Marks a wake-up as owed, if the device has a token and was not woken
+   * lately; returns whether one is owed now.
+   */
   private wakeUpDue(): boolean {
     this.pushSchema();
     const row = this.ctx.storage.sql
       .exec<{ last: number; pending: number }>('SELECT last, pending FROM push WHERE id = 1')
       .toArray()[0];
-    if (row === undefined || row.pending === 1 || Date.now() - row.last < PUSH_INTERVAL_MS) {
+    if (row === undefined) {
+      return false;
+    }
+    if (row.pending === 1) {
+      return true;
+    }
+    if (Date.now() - row.last < PUSH_INTERVAL_MS) {
       return false;
     }
     this.ctx.storage.sql.exec('UPDATE push SET pending = 1 WHERE id = 1');
@@ -341,9 +422,13 @@ export class Mailbox extends DurableObject<Env> {
     sql.exec(
       'CREATE TABLE IF NOT EXISTS call_wake (id INTEGER PRIMARY KEY CHECK (id = 1), last INTEGER NOT NULL, pending INTEGER NOT NULL)',
     );
-    const last =
-      sql.exec<{ last: number }>('SELECT last FROM call_wake WHERE id = 1').toArray()[0]?.last ?? 0;
-    if (Date.now() - last < CALL_WAKE_INTERVAL_MS) {
+    const row = sql
+      .exec<{ last: number; pending: number }>('SELECT last, pending FROM call_wake WHERE id = 1')
+      .toArray()[0];
+    if (row?.pending === 1) {
+      return true;
+    }
+    if (Date.now() - (row?.last ?? 0) < CALL_WAKE_INTERVAL_MS) {
       return false;
     }
     sql.exec(
@@ -354,8 +439,31 @@ export class Mailbox extends DurableObject<Env> {
     return true;
   }
 
-  /** Sends an owed wake-up, unless the device has meanwhile read its mail. */
+  /**
+   * The device read everything: no wake-up is owed any more, even one
+   * that waited for its connection to prove asleep.
+   */
+  private forgetOwed(): void {
+    this.pushSchema();
+    const sql = this.ctx.storage.sql;
+    sql.exec('UPDATE push SET pending = 0 WHERE id = 1');
+    if (
+      sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'call_wake'").toArray()
+        .length > 0
+    ) {
+      sql.exec('UPDATE call_wake SET pending = 0 WHERE id = 1');
+    }
+  }
+
+  /**
+   * Sends an owed wake-up, unless the device has meanwhile read its mail.
+   * While a connection is open, it waits: the connection either answers
+   * or is closed as asleep (ACK_WAIT_MS).
+   */
   private async sendWakeUp(): Promise<void> {
+    if (this.open().length > 0) {
+      return;
+    }
     this.pushSchema();
     const sql = this.ctx.storage.sql;
     const call =
@@ -367,7 +475,7 @@ export class Mailbox extends DurableObject<Env> {
       const token = sql
         .exec<{ token: string }>('SELECT token FROM push WHERE id = 1')
         .toArray()[0]?.token;
-      if (token !== undefined && this.count() > 0 && this.ctx.getWebSockets().length === 0) {
+      if (token !== undefined && this.count() > 0 && this.open().length === 0) {
         const outcome = await this.env.PUSH.getByName('fcm').send(token, 'call');
         if (outcome === 'gone') {
           sql.exec('DELETE FROM push WHERE token = ?', token);
@@ -382,7 +490,7 @@ export class Mailbox extends DurableObject<Env> {
       return;
     }
     sql.exec('UPDATE push SET pending = 0, last = ? WHERE id = 1', Date.now());
-    if (this.count() === 0 || this.ctx.getWebSockets().length > 0) {
+    if (this.count() === 0 || this.open().length > 0) {
       return;
     }
     const outcome = await this.env.PUSH.getByName('fcm').send(row.token);
