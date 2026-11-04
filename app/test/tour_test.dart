@@ -341,6 +341,11 @@ void main() {
       await _capture(tester, '19-recovery-key-none');
     });
 
+    testWidgets('notifications off', (tester) async {
+      await _pump(tester, _lived()..notificationsOffValue = true);
+      await _capture(tester, '32-notifications-off');
+    });
+
     testWidgets('safety code', (tester) async {
       await _pump(tester, _lived());
       await _tap(tester, find.text('@bob'));

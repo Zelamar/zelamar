@@ -664,6 +664,32 @@ void main() {
       expect(find.text('Start with Windows'), findsNothing);
     });
 
+    testWidgets('with notifications off the chats say so first, and the '
+        'line opens where they turn on', (tester) async {
+      final messenger = FakeMessenger(
+        phaseValue: MessengerPhase.ready,
+        usernameValue: 'ada',
+      )..notificationsOffValue = true;
+      await pumpApp(tester, messenger: messenger);
+      expect(find.text('Notifications are off'), findsOneWidget);
+      expect(
+        find.byKey(const Key('chats.recovery')),
+        findsNothing,
+        reason: 'one reminder at a time',
+      );
+
+      await tester.tap(find.byKey(const Key('chats.notificationsOff')));
+      await tester.pumpAndSettle();
+      expect(messenger.notificationSettingsOpened, 1);
+
+      messenger
+        ..notificationsOffValue = false
+        ..notifyListeners();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('chats.notificationsOff')), findsNothing);
+      expect(find.byKey(const Key('chats.recovery')), findsOneWidget);
+    });
+
     testWidgets('until there is a recovery key the chats remind; then it '
         'shows, copies and is replaced', (tester) async {
       // The key goes to the platform as a secret, never as ordinary text.

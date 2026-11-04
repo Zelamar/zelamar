@@ -106,8 +106,22 @@ class ChatsScreen extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (messenger.canLinkDevices && messenger.recoveryKey == null)
-                  _RecoveryReminder(
+                if (messenger.notificationsOff)
+                  _Reminder(
+                    key: const Key('chats.notificationsOff'),
+                    icon: Icons.notifications_off_outlined,
+                    title: 'Notifications are off',
+                    detail:
+                        'Turn them on to know when someone writes or calls.',
+                    onTap: messenger.turnOnNotifications,
+                  )
+                else if (messenger.canLinkDevices &&
+                    messenger.recoveryKey == null)
+                  _Reminder(
+                    key: const Key('chats.recovery'),
+                    icon: Icons.key_outlined,
+                    title: 'Save your recovery key',
+                    detail: 'In case you lose this device.',
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(
                         builder: (_) => RecoveryKeyScreen(messenger: messenger),
@@ -181,11 +195,21 @@ extension on ChatsScreen {
   }
 }
 
-/// A quiet reminder, until there is a recovery key, that losing this device
-/// would lose the account (ADR-0018).
-class _RecoveryReminder extends StatelessWidget {
-  const new({required this.onTap});
+/// A quiet reminder above the chats: that notifications are off, or, until
+/// there is a recovery key, that losing this device would lose the account
+/// (ADR-0018). One at a time, the more urgent first.
+class _Reminder extends StatelessWidget {
+  const new({
+    required super.key,
+    required this.icon,
+    required this.title,
+    required this.detail,
+    required this.onTap,
+  });
 
+  final IconData icon;
+  final String title;
+  final String detail;
   final VoidCallback onTap;
 
   @override
@@ -207,7 +231,6 @@ class _RecoveryReminder extends StatelessWidget {
         ),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
-          key: const Key('chats.recovery'),
           onTap: onTap,
           child: Padding(
             padding: const EdgeInsets.symmetric(
@@ -216,18 +239,15 @@ class _RecoveryReminder extends StatelessWidget {
             ),
             child: Row(
               children: [
-                Icon(Icons.key_outlined, color: colors.accent),
+                Icon(icon, color: colors.accent),
                 const SizedBox(width: ZSpace.md),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Save your recovery key', style: text.titleSmall),
+                      Text(title, style: text.titleSmall),
                       const SizedBox(height: ZSpace.xxs),
-                      Text(
-                        'In case you lose this device.',
-                        style: text.bodySmall,
-                      ),
+                      Text(detail, style: text.bodySmall),
                     ],
                   ),
                 ),

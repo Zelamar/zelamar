@@ -10,6 +10,7 @@ import 'package:zelamar/src/calls/media_link.dart';
 import 'package:zelamar/src/calls/tone_ringer.dart';
 import 'package:zelamar/src/calls/webrtc_link.dart';
 import 'package:zelamar/src/drift/lan.dart';
+import 'package:zelamar/src/messenger/heartbeat.dart';
 import 'package:zelamar/src/messenger/key_vault.dart';
 import 'package:zelamar/src/messenger/messenger.dart';
 import 'package:zelamar/src/messenger/notifier.dart';
@@ -58,6 +59,7 @@ class LiveMessenger extends Messenger {
     this.linkPoll = const Duration(seconds: 2),
     this.memberHealing = const Duration(minutes: 5),
     this.nearbyAfter = const Duration(seconds: 10),
+    this.heartbeat = const Duration(seconds: 20),
     LanNode Function(LanHost host)? lan,
   }) : notifier = notifier ?? Notifier.forPlatform(),
        _makeLan = lan ?? LanNode.new {
@@ -101,6 +103,12 @@ class LiveMessenger extends Messenger {
   /// (ADR-0020).
   final Duration nearbyAfter;
 
+  /// How often the mailbox connection is asked whether it still works. A
+  /// connection that died quietly (the computer slept, the phone changed
+  /// networks) shows no error; silent for two beats, it is dropped and
+  /// made again.
+  final Duration heartbeat;
+
   final LanNode Function(LanHost host) _makeLan;
 
   /// Nearby delivery, while the service is out of reach (ADR-0020).
@@ -109,6 +117,26 @@ class LiveMessenger extends Messenger {
 
   @override
   int get nearby => (_lan?.running ?? false) ? _lan!.neighbours : 0;
+
+  bool _notificationsOff = false;
+
+  /// Checks notifications again each time Zelamar comes back to the front,
+  /// as after a visit to the system settings.
+  AppLifecycleListener? _lifecycle;
+
+  @override
+  bool get notificationsOff => _notificationsOff;
+
+  @override
+  Future<void> turnOnNotifications() => notifier.openNotificationSettings();
+
+  Future<void> _checkNotifications() async {
+    final off = await notifier.notificationsAllowed() == false;
+    if (off != _notificationsOff && !_closed) {
+      _notificationsOff = off;
+      notifyListeners();
+    }
+  }
 
   /// How long a gap another member should fill may last before this
   /// device fills it instead (ADR-0018).
@@ -880,6 +908,7 @@ class LiveMessenger extends Messenger {
   void dispose() {
     _closed = true;
     unawaited(_callActions.cancel());
+    _lifecycle?.dispose();
     _offlineFor?.cancel();
     unawaited(_lan?.stop());
     _calls.dispose();
@@ -909,7 +938,14 @@ class LiveMessenger extends Messenger {
       // Only a name for the devices screen.
     }
     _setPhase(MessengerPhase.ready);
-    unawaited(notifier.requestPermission());
+    unawaited(
+      notifier.requestPermission().whenComplete(() {
+        unawaited(_checkNotifications());
+      }),
+    );
+    _lifecycle ??= AppLifecycleListener(
+      onResume: () => unawaited(_checkNotifications()),
+    );
     unawaited(_registerPush());
     await _refreshChats(null);
     unawaited(_runMailbox());
@@ -941,13 +977,7 @@ class LiveMessenger extends Messenger {
         unawaited(_flush());
         unawaited(_heal());
         unawaited(_seeOff());
-        // `await for` opens envelopes strictly one after another, in the
-        // order the mailbox sends them.
-        await for (final data in socket) {
-          if (data is List<int>) {
-            await _open(socket, data);
-          }
-        }
+        await _read(socket);
       } on Object {
         // Reconnect below.
       }
@@ -959,6 +989,23 @@ class LiveMessenger extends Messenger {
       await Future<void>.delayed(delay);
       delay = Duration(seconds: min(delay.inSeconds * 2, 30));
     }
+  }
+
+  /// Opens envelopes from [socket] strictly one after another, in the
+  /// order the mailbox sends them, until the connection ends or stops
+  /// answering.
+  Future<void> _read(WebSocket socket) async {
+    var opening = Future<void>.value();
+    await readWhileAlive(
+      socket,
+      every: heartbeat,
+      onData: (data) {
+        opening = opening.then((_) => _open(socket, data)).catchError((_) {
+          // The envelope stays queued at the mailbox for the next try.
+        });
+      },
+    );
+    await opening;
   }
 
   Future<void> _open(WebSocket socket, List<int> data) async {

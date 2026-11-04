@@ -19,6 +19,15 @@ class FakeMessenger extends Messenger {
 
   @override
   int get nearby => nearbyValue;
+
+  bool notificationsOffValue = false;
+  int notificationSettingsOpened = 0;
+
+  @override
+  bool get notificationsOff => notificationsOffValue;
+
+  @override
+  Future<void> turnOnNotifications() async => notificationSettingsOpened++;
   final Map<String, ChatPreview> _chats = {};
   final Map<String, List<MessageView>> conversations = {};
   final _changes = StreamController<String?>.broadcast();

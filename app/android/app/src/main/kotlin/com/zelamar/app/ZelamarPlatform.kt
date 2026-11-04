@@ -18,6 +18,7 @@ import android.net.wifi.WifiManager
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.PersistableBundle
+import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import com.google.firebase.FirebaseApp
@@ -100,6 +101,11 @@ class ZelamarPlatform(private val context: Context) {
                     holdLocalNetwork(call.arguments as? Boolean ?: false)
                     result.success(null)
                 }
+                "notificationsAllowed" -> result.success(notificationsAllowed())
+                "openNotificationSettings" -> {
+                    openNotificationSettings()
+                    result.success(null)
+                }
                 "callOngoing" -> {
                     callOngoing(
                         call.argument<Boolean>("on") ?: false,
@@ -118,6 +124,36 @@ class ZelamarPlatform(private val context: Context) {
 
     private fun manager() =
         context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+    /**
+     * Whether new messages and calls can show: notifications on for the app,
+     * and neither of their channels turned off.
+     */
+    private fun notificationsAllowed(): Boolean {
+        val manager = manager()
+        if (!manager.areNotificationsEnabled()) {
+            return false
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return true
+        }
+        return listOf(MESSAGES, CALLS).all {
+            (manager.getNotificationChannel(it)?.importance
+                ?: NotificationManager.IMPORTANCE_DEFAULT) !=
+                NotificationManager.IMPORTANCE_NONE
+        }
+    }
+
+    private fun openNotificationSettings() {
+        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+        } else {
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setData(android.net.Uri.fromParts("package", context.packageName, null))
+        }
+        context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
 
     private fun requestNotificationPermission(activity: Activity) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&

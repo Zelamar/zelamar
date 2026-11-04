@@ -67,6 +67,12 @@ Errors: `400 malformed`, `413 too_large`, `429 rate_limited`.
   drop duplicates by envelope id.
 - One device may hold several connections. Each new envelope goes to all
   of them.
+- **Heartbeat.** A connection can die without either end hearing of it: a
+  computer sleeps, a phone changes networks. The device sends the text
+  message `ping` every 20 seconds; the service answers `pong` without
+  waking the mailbox. A device that has heard nothing on a connection for
+  40 seconds closes it and connects again. The service, in turn, sees a
+  closed connection and sends push wake-ups again.
 
 ## Push wake-ups
 

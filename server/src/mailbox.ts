@@ -70,6 +70,14 @@ export class Mailbox extends DurableObject<Env> {
   /** Cached number of queued envelopes; `null` when unknown. */
   private queued: number | null = null;
 
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    // The app asks every 20 seconds whether its connection still works
+    // (`protocol/delivery.md`); the runtime answers without waking this
+    // object.
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
+  }
+
   /** Takes ownership of the mailbox for whoever knows the secret behind `secretHash`. */
   claim(secretHash: ArrayBuffer): ClaimOutcome {
     if (secretHash.byteLength !== 32) {

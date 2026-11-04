@@ -149,6 +149,19 @@ describe('reading a mailbox', () => {
     live.socket.send('hello');
     expect(await closed).toBe(1008);
   });
+
+  it('answers the app asking whether the connection still works', async () => {
+    const { device: phone } = await registered();
+    const live = await inbox(phone);
+    const answer = new Promise<unknown>((resolve) => {
+      live.socket.addEventListener('message', (event) => {
+        resolve(event.data);
+      });
+    });
+    live.socket.send('ping');
+    expect(await answer).toBe('pong');
+    live.close();
+  });
 });
 
 describe('malformed deliveries', () => {
