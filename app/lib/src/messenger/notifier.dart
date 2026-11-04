@@ -59,6 +59,14 @@ abstract interface class Notifier {
   /// Lets nearby devices' beacons in, or stops (Android's Wi-Fi drops
   /// multicast to save power otherwise, ADR-0020).
   Future<void> holdLocalNetwork({required bool on});
+
+  /// Whether the system lets Zelamar show notifications; `null` where it
+  /// cannot say.
+  Future<bool?> notificationsAllowed();
+
+  /// Opens the system settings where Zelamar's notifications are turned
+  /// on.
+  Future<void> openNotificationSettings();
 }
 
 /// The native notifier, over the `zelamar/notify` channel. A notification
@@ -101,6 +109,25 @@ class PlatformNotifier implements Notifier {
   @override
   Future<void> holdLocalNetwork({required bool on}) => Platform.isAndroid
       ? _quietly('holdLocalNetwork', on)
+      : Future<void>.value();
+
+  @override
+  Future<bool?> notificationsAllowed() async {
+    if (!Platform.isAndroid) {
+      return null;
+    }
+    try {
+      return await _channel.invokeMethod<bool>('notificationsAllowed');
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
+  @override
+  Future<void> openNotificationSettings() => Platform.isAndroid
+      ? _quietly('openNotificationSettings')
       : Future<void>.value();
 
   /// Calls [method] on the native side; a failure only means the platform
@@ -234,4 +261,10 @@ class SilentNotifier implements Notifier {
 
   @override
   Future<void> holdLocalNetwork({required bool on}) async {}
+
+  @override
+  Future<bool?> notificationsAllowed() async => null;
+
+  @override
+  Future<void> openNotificationSettings() async {}
 }

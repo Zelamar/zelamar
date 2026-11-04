@@ -38,7 +38,23 @@ class KeyVault {
     final sealed = await _sealer.seal(key);
     final temporary = File('${_sealedKey.path}.new');
     await temporary.writeAsBytes(sealed, flush: true);
-    await temporary.rename(_sealedKey.path);
+    await _replace(temporary, _sealedKey.path);
+  }
+
+  /// Moves [file] to [path]. On Windows an antivirus may hold a file it
+  /// just saw written for a moment, so a refused move is tried again.
+  static Future<void> _replace(File file, String path) async {
+    for (var wait = 50; ; wait *= 2) {
+      try {
+        await file.rename(path);
+        return;
+      } on FileSystemException {
+        if (wait > 1600) {
+          rethrow;
+        }
+        await Future<void>.delayed(Duration(milliseconds: wait));
+      }
+    }
   }
 
   /// Whether this device finished registering with the service.

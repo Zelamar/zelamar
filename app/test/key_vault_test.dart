@@ -23,7 +23,13 @@ class _MirrorSealer implements Sealer {
 void main() {
   late Directory directory;
   setUp(() async => directory = await Directory.systemTemp.createTemp('kv-'));
-  tearDown(() => directory.delete(recursive: true));
+  tearDown(() async {
+    try {
+      await directory.delete(recursive: true);
+    } on FileSystemException {
+      // An antivirus still looking at it; the system cleans its temp.
+    }
+  });
 
   test('stores only the sealed key, and gives the plain key back', () async {
     final sealer = _MirrorSealer();

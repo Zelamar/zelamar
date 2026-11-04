@@ -74,6 +74,14 @@ abstract class Messenger extends ChangeNotifier {
   /// out of reach (ADR-0020); 0 while connected.
   int get nearby;
 
+  /// Whether the system keeps Zelamar from showing notifications: new
+  /// messages and calls would go unnoticed while it is out of sight.
+  bool get notificationsOff;
+
+  /// Opens the system settings where Zelamar's notifications are turned
+  /// on.
+  Future<void> turnOnNotifications();
+
   /// Every chat, most recently active first.
   List<ChatPreview> get chats;
 
